@@ -1,0 +1,17 @@
+.idea
+.claude/
+.env
+.env*.local
+.next
+.npm-cache
+node_modules
+coverage
+dist
+*.log
+*.tsbuildinfo
+
+# large local artifacts — never belong in version control
+/reports-output/
+/backups/
+/data/
+/.update-channel

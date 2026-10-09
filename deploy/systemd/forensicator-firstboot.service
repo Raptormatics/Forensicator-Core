@@ -1,0 +1,23 @@
+[Unit]
+Description=Forensicator Enterprise — first-boot instance setup (secrets, DB, migrations)
+After=postgresql.service redis-server.service network.target
+Requires=postgresql.service redis-server.service
+Before=forensicator.service forensicator-workers.service
+# Belt-and-suspenders ordering — the real mechanism, in appliance mode, is
+# that provision.sh disables getty@tty1.service outright and first-boot.sh
+# restarts it itself once done (see FIRSTBOOT_STDIO below and first-boot.sh)
+# rather than relying on ordering against a getty that might already be
+# starting. Deliberately NOT Conflicts=: with RemainAfterExit=yes this unit
+# stays "active (exited)" for the rest of the boot (and re-marks itself so
+# on every later boot too, via the marker-file check), so Conflicts= would
+# permanently prevent tty1's getty from ever starting again.
+Before=getty@tty1.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash {{APP_DIR}}/deploy/first-boot.sh
+{{FIRSTBOOT_STDIO}}
+
+[Install]
+WantedBy=multi-user.target

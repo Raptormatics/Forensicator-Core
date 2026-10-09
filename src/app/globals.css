@@ -1,0 +1,41 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: 240 10% 3.9%;
+  --foreground: 0 0% 96%;
+  --card: 240 10% 6.8%;
+  --card-foreground: 0 0% 96%;
+  --border: 240 5% 18%;
+  --muted: 240 5% 12%;
+  --muted-foreground: 240 5% 63%;
+  --accent: 180 68% 42%;
+  --accent-foreground: 0 0% 7%;
+}
+
+* {
+  border-color: hsl(var(--border));
+}
+
+html {
+  background: hsl(var(--background));
+}
+
+body {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 20% 0%, rgba(45, 212, 191, 0.08), transparent 32rem),
+    linear-gradient(180deg, rgba(18, 18, 22, 0.98), hsl(var(--background)) 28rem);
+  color: hsl(var(--foreground));
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+}
+
+::selection {
+  background: rgba(45, 212, 191, 0.32);
+}
+
+.analyst-scrollbar {
+  scrollbar-color: rgba(113, 113, 122, 0.7) rgba(39, 39, 42, 0.8);
+  scrollbar-width: thin;
+}

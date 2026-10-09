@@ -1,0 +1,204 @@
+// Forensicator Core — the 5 models the Enterprise overlay must REPLACE
+// wholesale (not just add files alongside) to unlock Pro features, because
+// they carry relation fields and/or columns the Pro feature set needs added
+// to the SAME model Core already defines. Prisma doesn't support splitting
+// one model's fields/relations across multiple schema files, so this file
+// is the one place in the schema split where "additive overlay" doesn't
+// apply — the overlay's version of this exact file (same path) replaces
+// it outright. Keep this file's own fields/relations identical to what the
+// overlay's version keeps for the Core-only parts, so a diff between the
+// two stays limited to genuinely-new Pro additions.
+
+model User {
+  id                     String          @id @default(uuid()) @db.Uuid
+  email                  String          @unique
+  name                   String?
+  firstName              String?         @map("first_name")
+  lastName               String?         @map("last_name")
+  passwordHash           String?         @map("password_hash")
+  role                   String          @default("analyst") // platform_admin | org_admin | analyst | read_only | auditor
+  isActive               Boolean         @default(true) @map("is_active")
+  lastLogin              DateTime?       @map("last_login")
+  failedLoginAttempts    Int             @default(0) @map("failed_login_attempts")
+  lockedUntil            DateTime?       @map("locked_until")
+  createdAt              DateTime        @default(now()) @map("created_at")
+  updatedAt              DateTime        @updatedAt @map("updated_at")
+
+  investigations         Investigation[] @relation("uploadedBy")
+  assignedInvestigations Investigation[] @relation("assignedTo")
+  assignedFindings       Finding[]       @relation("findingAssignee")
+  reports                Report[]
+  notes                  Note[]
+  bookmarks              Bookmark[]
+  activityLogs           ActivityLog[]
+  createdCases           Case[]          @relation("caseCreatedBy")
+  assignedCases          Case[]          @relation("caseAssignee")
+  caseNotes              CaseNote[]      @relation("caseNoteAuthor")
+  caseTasksOwned         CaseTask[]      @relation("caseTaskOwner")
+  caseTasksCreated       CaseTask[]      @relation("caseTaskCreatedBy")
+  orgMemberships         OrganizationMember[]
+  apiKeys                ApiKey[]
+  auditLogs              AuditLog[]
+  hostIsolationUpdates   HostProfile[]
+
+  @@map("users")
+}
+
+model Investigation {
+  id                    String    @id @default(uuid()) @db.Uuid
+  title                 String
+  description           String?
+  hostname              String?
+  status                String    @default("uploaded")
+  metadata              Json      @default("{}")
+  aiStatus              String    @default("not_queued") @map("ai_status")
+  aiSummary             String?   @map("ai_summary") @db.Text
+  aiConfidence          Float?    @map("ai_confidence")
+  findingCount          Int       @default(0) @map("finding_count")
+  uploadedById          String    @map("uploaded_by_id") @db.Uuid
+  uploadedBy            User      @relation("uploadedBy", fields: [uploadedById], references: [id])
+  assigneeId            String?   @map("assignee_id") @db.Uuid
+  assignee              User?     @relation("assignedTo", fields: [assigneeId], references: [id])
+  findings              Finding[]
+  evidence              Evidence[]
+  timelineEvents        TimelineEvent[]
+  reports               Report[]
+  notes                 Note[]
+  bookmarks              Bookmark[]
+  activityLogs          ActivityLog[]
+  attackPaths           AttackPath[]
+
+  // Each investigation belongs to at most one case (nullable only for
+  // legacy pre-Case investigations); enforced at the API layer too.
+  caseId                String?   @map("case_id") @db.Uuid
+  case                  Case?     @relation(fields: [caseId], references: [id], onDelete: SetNull)
+
+  organizationId        String?   @map("organization_id") @db.Uuid
+  organization          Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  // ── Metadata-derived enrichment fields ──────────────────────────────────
+  investigationSourceId String?   @map("investigation_source_id")
+  username              String?
+  osInfo                Json?     @map("os_info") @db.JsonB
+  tags                  String[]  @default([])
+  detectionStats        Json?     @map("detection_stats") @db.JsonB
+  archiveSha256         String?   @map("archive_sha256")
+  // ────────────────────────────────────────────────────────────────────────
+
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  @@index([uploadedById])
+  @@index([assigneeId])
+  @@index([hostname])
+  @@index([status])
+  @@index([organizationId])
+  @@index([createdAt])
+  @@index([archiveSha256])
+  @@index([caseId])
+  @@map("investigations")
+}
+
+model Case {
+  id          String   @id @default(uuid()) @db.Uuid
+  caseSeq     Int      @unique @default(autoincrement()) @map("case_seq")
+  title       String
+  description String?  @db.Text
+  status      String   @default("open")   // open | active | monitoring | resolved | closed
+  severity    String   @default("medium") // critical | high | medium | low
+  tags        String[] @default([])
+
+  createdById String   @map("created_by_id") @db.Uuid
+  createdBy   User     @relation("caseCreatedBy", fields: [createdById], references: [id])
+  assigneeId  String?  @map("assignee_id") @db.Uuid
+  assignee    User?    @relation("caseAssignee", fields: [assigneeId], references: [id])
+
+  investigations     Investigation[]
+  notes              CaseNote[]
+  reports            Report[]
+  tasks              CaseTask[]
+
+  organizationId String?  @map("organization_id") @db.Uuid
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([status])
+  @@index([createdById])
+  @@index([assigneeId])
+  @@index([organizationId])
+  @@index([createdAt])
+  @@map("cases")
+}
+
+model Organization {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String
+  slug        String   @unique  // URL-safe identifier
+  description String?  @db.Text
+  logoUrl     String?  @map("logo_url")
+  website     String?
+  plan        String   @default("free")  // free | professional | enterprise
+  settings    Json     @default("{}") @db.JsonB  // branding, notifications, etc.
+
+  // Quotas
+  maxUsers           Int @default(10)    @map("max_users")
+  maxInvestigations  Int @default(100)   @map("max_investigations")
+  maxStorageGb       Int @default(10)    @map("max_storage_gb")
+
+  members        OrganizationMember[]
+  investigations Investigation[]
+  cases          Case[]
+  hostProfiles   HostProfile[]
+  apiKeys        ApiKey[]
+  auditLogs      AuditLog[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([slug])
+  @@index([plan])
+  @@map("organizations")
+}
+
+model SystemSettings {
+  id String @id @default("singleton")
+
+  // The instance's own canonical public URL, e.g. https://forensicator.tesco.com
+  // or http://tescoserver.local — set once DNS/a hostname points at this
+  // instance's IP. Used to show a real, stable base URL in the API docs
+  // instead of guessing from whatever address a given visitor happens to
+  // be browsing from. Null means "not configured" — callers fall back to
+  // the request's own origin.
+  appDomain String? @map("app_domain")
+
+  // Overrides REPORTS_DIR when set — read fresh per report job, so unlike
+  // Redis this is safe to change without a restart.
+  reportsDir String? @map("reports_dir")
+
+  // Forensicator AI — analyst-assist finding analysis. Read fresh per job
+  // (like reportsDir), so all of this is changeable without a restart. Off
+  // by default: no LLM binary or model is bundled with the app (a local
+  // model alone can be several GB) — enabling this from Settings > AI
+  // Analysis is what actually installs/points at one, post-deployment.
+  aiEnabled  Boolean @default(false) @map("ai_enabled")
+  aiProvider String  @default("ollama") @map("ai_provider")
+  aiHost     String  @default("http://localhost:11434") @map("ai_host")
+  aiModel    String  @default("mistral:7b-instruct") @map("ai_model")
+  aiApiKeyEncrypted String? @map("ai_api_key_encrypted") @db.Text
+  aiApiKeyLast4     String? @map("ai_api_key_last4")
+  // true = Forensicator installs and manages a local Ollama systemd service
+  // on THIS host (see deploy/forensicator-ollama-ctl.sh) — only meaningful
+  // when aiProvider="ollama".
+  ollamaManaged Boolean @default(false) @map("ollama_managed")
+
+  // pcapDir/tsharkPath/ramDir/volatilityPath/volatilitySymbolsDir/
+  // ramChunkSizeBytes deliberately omitted — those columns belong to the
+  // Enterprise overlay's version of this exact model (PCAP/RAM Analysis
+  // config), added back when the overlay replaces this file.
+
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("system_settings")
+}

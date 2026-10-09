@@ -1,0 +1,414 @@
+// Forensicator Core — pure-core models (no overlap with the Enterprise overlay).
+// Unlike shared-models.prisma, the overlay never touches this file.
+
+model Finding {
+  id              String        @id @default(uuid()) @db.Uuid
+  investigationId String        @map("investigation_id") @db.Uuid
+  investigation   Investigation @relation(fields: [investigationId], references: [id], onDelete: Cascade)
+  findingId       String        @map("finding_id")
+  findingType     String        @map("finding_type")
+  category        String
+  severity        String
+  hostName        String?       @map("host_name")
+  riskScore       Int?          @map("risk_score")
+  evidenceCount   Int           @default(0) @map("evidence_count")
+  data            Json
+  searchText      String        @default("") @map("search_text") @db.Text
+  // "not_queued" until an analyst actually requests analysis (see
+  // /api/findings/[id]/analyze), matching Investigation.aiStatus's own
+  // convention above. Was previously defaulted to "pending", which is
+  // indistinguishable from "genuinely in the queue right now" — every
+  // finding-detail page showed a permanent, false "Queued for analysis…"
+  // for findings nobody had ever requested analysis on.
+  aiStatus        String        @default("not_queued") @map("ai_status")
+  aiSummary       String?       @map("ai_summary") @db.Text
+  aiConfidence    Float?        @map("ai_confidence")
+  aiModel         String?       @map("ai_model")
+  aiEnrichedAt    DateTime?     @map("ai_enriched_at")
+  sourcePath      String?       @map("source_path")
+  sourceCategory  String?       @map("source_category")
+  // Finding-level tags emitted by the collector (e.g. ["malware", "lateral-movement"])
+  tags            String[]      @default([])
+  // Analyst workflow
+  workflowStatus  String        @default("new") @map("workflow_status")
+  assigneeId      String?       @map("assignee_id") @db.Uuid
+  assignee        User?         @relation("findingAssignee", fields: [assigneeId], references: [id])
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+
+  evidenceRows    Evidence[]
+  timelineEvents  TimelineEvent[]
+  notes           Note[]
+  bookmarks       Bookmark[]
+
+  @@unique([investigationId, findingId])
+  @@index([investigationId])
+  @@index([investigationId, severity])
+  @@index([investigationId, category])
+  @@index([investigationId, findingType])
+  @@index([investigationId, sourceCategory])
+  @@index([investigationId, workflowStatus])
+  @@index([assigneeId])
+  @@index([hostName])
+  @@map("findings")
+}
+
+model Evidence {
+  id              String        @id @default(uuid()) @db.Uuid
+  investigationId String        @map("investigation_id") @db.Uuid
+  investigation   Investigation @relation(fields: [investigationId], references: [id], onDelete: Cascade)
+  findingId       String        @map("finding_id") @db.Uuid
+  finding         Finding       @relation(fields: [findingId], references: [id], onDelete: Cascade)
+
+  type            String
+  source          String?
+  timestamp       DateTime?
+  hostname        String?
+  username        String?
+  raw             Json
+  searchableText  String?       @map("searchable_text") @db.Text
+
+  hash            String?
+  ip              String?
+  domain          String?
+  url             String?
+  processName     String?       @map("process_name")
+  commandLine     String?       @map("command_line") @db.Text
+
+  createdAt       DateTime      @default(now()) @map("created_at")
+
+  @@index([investigationId])
+  @@index([findingId])
+  @@index([timestamp])
+  @@index([type])
+  @@index([hostname])
+  @@index([username])
+  @@index([hash])
+  @@index([ip])
+  @@index([domain])
+  @@index([url], type: Hash) // some URLs exceed the btree row-size limit; only ever equality-looked-up
+  @@index([processName])
+  @@map("evidence")
+}
+
+model TimelineEvent {
+  id              String        @id @default(uuid()) @db.Uuid
+  investigationId String        @map("investigation_id") @db.Uuid
+  investigation   Investigation @relation(fields: [investigationId], references: [id], onDelete: Cascade)
+  findingId       String?       @map("finding_id") @db.Uuid
+  finding         Finding?      @relation(fields: [findingId], references: [id], onDelete: SetNull)
+
+  timestamp       DateTime
+  title           String
+  description     String?       @db.Text
+  category        String
+  severity        String        @default("informational")
+  sourceType      String        @map("source_type")
+  evidenceId      String?       @map("evidence_id") @db.Uuid
+  metadata        Json?
+
+  createdAt       DateTime      @default(now()) @map("created_at")
+
+  bookmarks       Bookmark[]
+
+  @@index([investigationId, timestamp])
+  @@index([investigationId, category])
+  @@index([investigationId, severity])
+  @@map("timeline_events")
+}
+
+model Report {
+  id              String        @id @default(uuid()) @db.Uuid
+  // Legacy per-investigation reports (nullable — new reports are case-scoped).
+  investigationId String?       @map("investigation_id") @db.Uuid
+  investigation   Investigation? @relation(fields: [investigationId], references: [id], onDelete: Cascade)
+  // New reports are generated per-case, aggregating every investigation
+  // tied to that case (plus every Log/PCAP/RAM upload too, when the
+  // Enterprise overlay is installed) — see src/lib/jobs/report-worker.ts.
+  caseId          String?       @map("case_id") @db.Uuid
+  case            Case?         @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  generatedById   String        @map("generated_by_id") @db.Uuid
+  generatedBy     User          @relation(fields: [generatedById], references: [id])
+
+  type            String        // executive | technical
+  format          String        // pdf | csv | json | zip
+  status          String        @default("queued")  // queued | generating | ready | failed
+  jobId           String?       @map("job_id")       // BullMQ job id
+  filePath        String?       @map("file_path")    // server-local path once ready
+  fileSize        Int?          @map("file_size")
+  errorMessage    String?       @map("error_message") @db.Text
+
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+
+  @@index([investigationId])
+  @@index([caseId])
+  @@index([generatedById])
+  @@index([status])
+  @@map("reports")
+}
+
+model AttackPath {
+  id              String   @id @default(uuid()) @db.Uuid
+  investigationId String   @map("investigation_id") @db.Uuid
+  investigation   Investigation @relation(fields: [investigationId], references: [id], onDelete: Cascade)
+  jobId           String?  @map("job_id")
+  status          String   @default("pending") // pending | ready | failed
+  stages          Json     @db.JsonB  // ordered array of AttackStage objects
+  summary         String?  @db.Text
+  generatedAt     DateTime? @map("generated_at")
+  errorMessage    String?  @map("error_message") @db.Text
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([investigationId])
+  @@index([status])
+  @@map("attack_paths")
+}
+
+model Note {
+  id              String        @id @default(uuid()) @db.Uuid
+  content         String        @db.Text  // raw markdown
+  authorId        String        @map("author_id") @db.Uuid
+  author          User          @relation(fields: [authorId], references: [id])
+
+  investigationId String?       @map("investigation_id") @db.Uuid
+  investigation   Investigation? @relation(fields: [investigationId], references: [id], onDelete: Cascade)
+  findingId       String?       @map("finding_id") @db.Uuid
+  finding         Finding?      @relation(fields: [findingId], references: [id], onDelete: Cascade)
+  evidenceId      String?       @map("evidence_id") @db.Uuid
+
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+
+  @@index([investigationId])
+  @@index([findingId])
+  @@index([authorId])
+  @@map("notes")
+}
+
+model Bookmark {
+  id              String        @id @default(uuid()) @db.Uuid
+  userId          String        @map("user_id") @db.Uuid
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  entityType      String        @map("entity_type")  // investigation | finding | evidence | ioc | timeline
+  entityId        String        @map("entity_id")    // UUID or IOC value string
+  label           String?       // optional custom label
+
+  investigationId String?       @map("investigation_id") @db.Uuid
+  investigation   Investigation? @relation(fields: [investigationId], references: [id], onDelete: Cascade)
+  findingId       String?       @map("finding_id") @db.Uuid
+  finding         Finding?      @relation(fields: [findingId], references: [id], onDelete: Cascade)
+  timelineEventId String?       @map("timeline_event_id") @db.Uuid
+  timelineEvent   TimelineEvent? @relation(fields: [timelineEventId], references: [id], onDelete: Cascade)
+
+  createdAt       DateTime      @default(now()) @map("created_at")
+
+  @@unique([userId, entityType, entityId])
+  @@index([userId])
+  @@index([investigationId])
+  @@index([findingId])
+  @@map("bookmarks")
+}
+
+model ActivityLog {
+  id              String        @id @default(uuid()) @db.Uuid
+  userId          String        @map("user_id") @db.Uuid
+  user            User          @relation(fields: [userId], references: [id])
+  action          String        // status_change | assignment | note_created | report_generated | ioc_enriched | bookmark
+  entityType      String        @map("entity_type")
+  entityId        String        @map("entity_id")
+  metadata        Json?         @db.JsonB
+
+  investigationId String?       @map("investigation_id") @db.Uuid
+  investigation   Investigation? @relation(fields: [investigationId], references: [id], onDelete: SetNull)
+
+  createdAt       DateTime      @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@index([investigationId])
+  @@index([entityType, entityId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("activity_logs")
+}
+
+model CaseNote {
+  id        String   @id @default(uuid()) @db.Uuid
+  caseId    String   @map("case_id") @db.Uuid
+  case      Case     @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  authorId  String   @map("author_id") @db.Uuid
+  author    User     @relation("caseNoteAuthor", fields: [authorId], references: [id])
+  content   String   @db.Text
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([caseId])
+  @@index([authorId])
+  @@map("case_notes")
+}
+
+model CaseTask {
+  id          String    @id @default(uuid()) @db.Uuid
+  caseId      String    @map("case_id") @db.Uuid
+  case        Case      @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  title       String
+  notes       String?   @db.Text
+  status      String    @default("todo")     // todo | in_progress | done
+  priority    String    @default("medium")   // critical | high | medium | low
+  dueAt       DateTime? @map("due_at")
+
+  ownerId     String?   @map("owner_id") @db.Uuid
+  owner       User?     @relation("caseTaskOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  createdById String    @map("created_by_id") @db.Uuid
+  createdBy   User      @relation("caseTaskCreatedBy", fields: [createdById], references: [id])
+
+  // Soft references to investigation Finding rows this task relates to —
+  // same array-of-ids pattern already used by Correlation.investigationIds/
+  // evidenceIds, not an enforced FK (a task can point at findings across
+  // any of the case's investigations).
+  relatedFindingIds String[] @default([]) @map("related_finding_ids")
+
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  @@index([caseId])
+  @@index([ownerId])
+  @@index([status])
+  @@map("case_tasks")
+}
+
+model HostProfile {
+  id               String   @id @default(uuid()) @db.Uuid
+  hostname         String   @unique
+  firstSeen        DateTime @map("first_seen")
+  lastSeen         DateTime @map("last_seen")
+  investigationCount Int    @default(0) @map("investigation_count")
+  findingCount     Int      @default(0) @map("finding_count")
+  criticalCount    Int      @default(0) @map("critical_count")
+  highCount        Int      @default(0) @map("high_count")
+  iocMatchCount    Int      @default(0) @map("ioc_match_count")
+  malwareHits      Int      @default(0) @map("malware_hits")
+  usbActivity      Int      @default(0) @map("usb_activity")
+  persistenceEvents Int     @default(0) @map("persistence_events")
+  riskScore        Int      @default(0) @map("risk_score")
+  osInfo           Json?    @map("os_info") @db.JsonB
+  tags             String[] @default([])
+
+  // Most frequent Investigation.username across this host's investigations
+  // (tie-broken by most recent) — derived at sync time, not live-tracked.
+  primaryUser      String?  @map("primary_user")
+  // Most recent Evidence.ip value seen across this host's investigations.
+  lastKnownIp      String?  @map("last_known_ip")
+  // Analyst-tracked containment state — this platform has no EDR/agent
+  // integration, so this is a manual record of action taken elsewhere
+  // (e.g. isolated via the EDR console), not a live isolation trigger.
+  isolationStatus  String   @default("active") @map("isolation_status") // active | quarantined | offline
+  isolationNote    String?  @db.Text @map("isolation_note")
+  isolationUpdatedAt DateTime? @map("isolation_updated_at")
+  isolationUpdatedById String? @map("isolation_updated_by_id") @db.Uuid
+  isolationUpdatedBy   User?  @relation(fields: [isolationUpdatedById], references: [id], onDelete: SetNull)
+
+  lastUpdated      DateTime @updatedAt @map("last_updated")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  organizationId   String?  @map("organization_id") @db.Uuid
+  organization     Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  @@index([riskScore])
+  @@index([lastSeen])
+  @@index([organizationId])
+  @@index([isolationStatus])
+  @@map("host_profiles")
+}
+
+model OrganizationMember {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @map("organization_id") @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userId         String       @map("user_id") @db.Uuid
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role           String       @default("analyst")  // org_admin | analyst | read_only | auditor
+  invitedAt      DateTime?    @map("invited_at")
+  joinedAt       DateTime?    @map("joined_at")
+  active         Boolean      @default(true)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([organizationId, userId])
+  @@index([organizationId])
+  @@index([userId])
+  @@index([role])
+  @@map("organization_members")
+}
+
+model ApiKey {
+  id             String       @id @default(uuid()) @db.Uuid
+  name           String
+  keyHash        String       @unique @map("key_hash")  // bcrypt hash of the key
+  keyPrefix      String       @map("key_prefix")         // first 8 chars for display
+  scopes         String[]     @default([])               // investigations:read, cases:write, etc.
+  active         Boolean      @default(true)
+  lastUsedAt     DateTime?    @map("last_used_at")
+  expiresAt      DateTime?    @map("expires_at")
+  usageCount     Int          @default(0) @map("usage_count")
+
+  userId         String       @map("user_id") @db.Uuid
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organizationId String?      @map("organization_id") @db.Uuid
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([userId])
+  @@index([organizationId])
+  @@index([active])
+  @@index([keyHash])
+  @@map("api_keys")
+}
+
+model AuditLog {
+  id             String       @id @default(uuid()) @db.Uuid
+  actorId        String?      @map("actor_id") @db.Uuid
+  actor          User?        @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  actorEmail     String?      @map("actor_email")   // denormalized for immutability
+  actorIp        String?      @map("actor_ip")
+  userAgent      String?      @map("user_agent") @db.Text
+
+  action         String       // upload | delete | export | login | permission_change | key_create | etc.
+  resourceType   String       @map("resource_type")  // investigation | case | user | api_key | etc.
+  resourceId     String?      @map("resource_id")
+  organizationId String?      @map("organization_id") @db.Uuid
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  metadata       Json?        @db.JsonB
+  result         String       @default("success")  // success | failure | denied
+  severity       String       @default("info")     // info | warning | critical
+
+  createdAt      DateTime     @default(now()) @map("created_at")
+
+  @@index([actorId])
+  @@index([organizationId])
+  @@index([action])
+  @@index([resourceType, resourceId])
+  @@index([result])
+  @@index([severity])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model PasswordResetToken {
+  id        String   @id @default(uuid()) @db.Uuid
+  email     String
+  tokenHash String   @unique @map("token_hash")
+  expiresAt DateTime @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([email])
+  @@map("password_reset_tokens")
+}

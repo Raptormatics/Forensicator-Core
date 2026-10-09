@@ -1,0 +1,27 @@
+[Unit]
+Description=Forensicator Enterprise — web app
+After=forensicator-firstboot.service network.target
+Requires=forensicator-firstboot.service
+
+[Service]
+Type=simple
+User={{SERVICE_USER}}
+WorkingDirectory={{APP_DIR}}
+EnvironmentFile=/etc/forensicator/forensicator.env
+ExecStart={{APP_DIR}}/node_modules/.bin/next start -p ${PORT}
+Restart=on-failure
+RestartSec=5
+# The Admin UI's update installer (deploy/forensicator-update.sh) is spawned
+# by this very process, detached, specifically so it survives this service
+# being stopped mid-update (it's the thing calling `systemctl stop` on us).
+# Node's `detached: true` only puts it in a new process group/session — it
+# stays in THIS unit's cgroup. The default KillMode (control-group) kills
+# everything in that cgroup on stop, including the installer, leaving the
+# app down with no update in flight to bring it back. KillMode=process
+# limits the kill to the tracked main PID only.
+KillMode=process
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

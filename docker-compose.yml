@@ -1,0 +1,91 @@
+# Forensicator Core via Docker — the easy path for Windows/macOS, or
+# anyone who'd rather not provision a whole Linux machine. See README.md
+# for the quickstart. deploy/provision.sh is the alternative for a
+# from-scratch Linux box (bare metal or VM) with systemd, the update
+# mechanism's sudoers rule, etc. — this compose file deliberately doesn't
+# try to replicate that; Docker's own container boundary replaces it.
+#
+# Usage:
+#   cp .env.docker.example .env
+#   # edit .env — set NEXTAUTH_SECRET at minimum
+#   docker compose up -d
+#   # then open http://localhost:3000 and complete the /setup wizard
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: forensicator
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-forensicator}
+      POSTGRES_DB: forensicator
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U forensicator"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  web:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment: &app-env
+      DATABASE_URL: postgresql://forensicator:${POSTGRES_PASSWORD:-forensicator}@postgres:5432/forensicator?schema=public
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      NEXTAUTH_URL: ${PUBLIC_URL:-http://localhost:3000}
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:?Set NEXTAUTH_SECRET in .env — see .env.docker.example}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
+      DEPLOYMENT_MODE: appliance
+      NEXT_PUBLIC_DEPLOYMENT_MODE: appliance
+      ORG_NAME: ${ORG_NAME:-Default Organization}
+      ORG_SLUG: ${ORG_SLUG:-default}
+      UPLOAD_DEFAULT_USER_EMAIL: analyst@forensicator.local
+      REPORTS_DIR: /app/reports-output
+      # Deliberately no default here, unlike deploy/provision.sh's bare-metal
+      # flow — "Check for Updates" would show a real update as available,
+      # but Install can't actually work inside a container (no sudo, no
+      # systemd to restart) — see .env.docker.example. Leave unset unless
+      # you've built your own tooling around that.
+      UPDATE_SERVER_URL: ${UPDATE_SERVER_URL:-}
+      PORT: "3000"
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    volumes:
+      - reports-data:/app/reports-output
+    command: ["web"]
+
+  workers:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment: *app-env
+    volumes:
+      - reports-data:/app/reports-output
+    command: ["workers"]
+
+volumes:
+  postgres-data:
+  redis-data:
+  reports-data:

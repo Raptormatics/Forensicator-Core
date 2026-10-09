@@ -1,0 +1,59 @@
+{
+  "name": "forensicator-core",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "dev:local": "next dev --hostname 127.0.0.1 --port 3000",
+    "build": "next build",
+    "start": "next build && next start",
+    "lint": "next lint",
+    "workers": "tsx src/lib/jobs/worker.ts",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:deploy": "prisma migrate deploy",
+    "seed-admin": "tsx scripts/seed-admin.ts"
+  },
+  "dependencies": {
+    "@auth/prisma-adapter": "^2.11.2",
+    "@prisma/client": "^5.22.0",
+    "@types/pdfmake": "^0.3.3",
+    "@xyflow/react": "^12.10.2",
+    "adm-zip": "^0.6.1",
+    "bcryptjs": "^3.0.3",
+    "bullmq": "^5.77.6",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "exceljs": "^4.4.0",
+    "lucide-react": "^0.468.0",
+    "next": "^15.5.24",
+    "next-auth": "^4.24.14",
+    "pdfmake": "^0.3.9",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-dropzone": "^15.0.0",
+    "tailwind-merge": "^2.5.4",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "aws4fetch": "^1.0.20",
+    "@types/bcryptjs": "^2.4.6",
+    "@types/node": "^22.10.2",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "autoprefixer": "^10.4.20",
+    "eslint": "^8.57.1",
+    "eslint-config-next": "^15.5.24",
+    "postcss": "^8.4.49",
+    "prisma": "^5.22.0",
+    "tailwindcss": "^3.4.15",
+    "tsx": "^4.22.3",
+    "typescript": "^5.6.3"
+  },
+  "prisma": {
+    "schema": "src/prisma/schema"
+  },
+  "overrides": {
+    "uuid": "^11.1.1"
+  }
+}

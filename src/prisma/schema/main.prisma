@@ -1,0 +1,13 @@
+generator client {
+  provider        = "prisma-client-js"
+  // Required for the multi-file prisma/schema/*.prisma layout on Prisma
+  // 5.x (this project is pinned to ^5.22.0) — multi-file schemas only
+  // went GA without this flag in 6.7.0+. Verified against Prisma's own
+  // docs before adding, not assumed.
+  previewFeatures = ["prismaSchemaFolder"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}

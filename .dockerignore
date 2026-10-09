@@ -1,0 +1,16 @@
+.git
+.idea
+.claude
+node_modules
+.next
+.npm-cache
+coverage
+dist
+*.log
+*.tsbuildinfo
+reports-output
+backups
+data
+.env
+.env.*.local
+docker-data
