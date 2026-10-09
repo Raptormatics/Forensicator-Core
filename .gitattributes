@@ -1,0 +1,8 @@
+# Shell scripts are executed directly — as a Docker ENTRYPOINT, and as
+# systemd ExecStart on a provisioned appliance. CRLF line endings break
+# their shebang line ("#!/bin/sh\r" makes the kernel look for an
+# interpreter that doesn't exist), surfacing as "no such file or
+# directory" even though the file is genuinely there. Without this, a
+# Windows checkout (core.autocrlf=true, the Git for Windows default)
+# silently converts every one of these to CRLF and breaks them all.
+*.sh text eol=lf
