@@ -22,6 +22,17 @@ RUN npm ci
 
 FROM node:20-slim AS builder
 WORKDIR /app
+# node:20-slim ships OpenSSL 3.x but not the `openssl` CLI itself — Prisma's
+# engine-selection heuristic at `prisma generate` time can't query it to
+# detect the real version, so it silently guesses "openssl-1.1.x" and
+# generates a client bound to the wrong engine binary. That mismatch is
+# invisible here (generate succeeds regardless) and only surfaces later,
+# at runtime, as an opaque "Schema engine error:" when migrate/the query
+# engine actually tries to run — see the runner stage below for the half
+# that matters more. Installed in both: generate needs to detect it
+# correctly, and whatever generate picks has to actually be present at
+# runtime too.
+RUN apt-get update -y && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 # NEXT_PUBLIC_* vars are inlined into the client bundle at build time, not
@@ -38,6 +49,10 @@ RUN npm run build
 FROM node:20-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
+# See the builder stage's comment — this is the half that actually bites:
+# `prisma migrate deploy` (docker-entrypoint.sh, at container start) runs
+# the schema engine for real here, not just generates types against it.
+RUN apt-get update -y && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
 RUN groupadd --system forensicator && useradd --system --gid forensicator --create-home forensicator
 
 COPY --from=builder /app/public ./public

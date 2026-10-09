@@ -12,9 +12,21 @@
 
 set -eu
 
+# Bounded, not infinite — an unbounded retry here can't tell "Postgres
+# isn't up yet" (expected, transient, worth retrying) apart from a
+# genuinely broken schema engine (permanent — retrying forever just hides
+# it behind a misleading "not ready yet" message on every attempt). 30
+# tries at 2s = 1 minute, generous for a normal compose-up race.
 echo "==> Running database migrations (retrying until Postgres is reachable)"
-until npx prisma migrate deploy; do
-  echo "    Postgres not ready yet, retrying in 2s..."
+attempt=0
+until migrate_output=$(npx prisma migrate deploy 2>&1); do
+  attempt=$((attempt + 1))
+  if [ "$attempt" -ge 30 ]; then
+    echo "Migration failed after ${attempt} attempts — not retrying further. Last output:" >&2
+    echo "$migrate_output" >&2
+    exit 1
+  fi
+  echo "    Not ready yet (attempt ${attempt}/30), retrying in 2s..."
   sleep 2
 done
 
