@@ -3,9 +3,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db/prisma";
 import { getUploadActor } from "@/lib/upload/actor";
 
-type Params = { params: { id: string } };
+type Params = { params: Promise<{ id: string }> };
 
-export async function DELETE(req: NextRequest, { params }: Params) {
+export async function DELETE(req: NextRequest, props: Params) {
+  const params = await props.params;
   const actor = await getUploadActor(req);
   await prisma.apiKey.update({ where: { id: params.id }, data: { active: false } });
   await prisma.auditLog.create({
