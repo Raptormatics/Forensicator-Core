@@ -29,7 +29,6 @@ Forensicator Core:
 * Includes AI-assisted finding analysis (Ollama, OpenAI, Anthropic, or any OpenAI-compatible endpoint)
 * Ships with a signed, offline-capable update mechanism — online, offline `.fpk` package, or CLI
 
-Always single-organization ("appliance mode") — there's no multi-tenant mode in Core.
 
 ---
 
@@ -70,7 +69,7 @@ sudo reboot
 
 `provision.sh` installs Node.js, PostgreSQL, Redis, builds the app, and sets up systemd units. On first boot, `deploy/first-boot.sh` runs automatically: generates per-instance secrets, runs migrations, seeds the one organization, and prints a one-time OS admin login to the console. Then visit the machine's address in a browser and complete the setup wizard.
 
-Optional environment variables for `provision.sh` (all have sensible defaults — see the script's own header comment for the full list):
+Optional environment variables for `provision.sh` (see documentation for full list):
 
 ```bash
 ORG_NAME="Acme Corp" ORG_SLUG=acme PUBLIC_URL="https://forensicator.acme.internal" sudo ./deploy/provision.sh
@@ -100,7 +99,7 @@ Three ways to update an existing install, covered in more detail in-app (Setting
 
 ---
 
-## 🧑‍💻 Development
+## 🧑‍💻 Development - Manual Options
 
 ```bash
 npm install
@@ -122,12 +121,6 @@ npm run dev
 | `npm run lint` | Lint the codebase |
 
 **Stack**: Next.js 15 (App Router), PostgreSQL via Prisma, Redis + BullMQ for background jobs.
-
----
-
-## ⭐ Forensicator Enterprise
-
-Need Log/PCAP/RAM Analysis, threat intelligence, SIEM integrations, SSO, webhooks, or retention policies? [Forensicator Enterprise](https://forensicator.io/enterprise) adds the full Pro feature set **in place**, on top of an existing Core install — no reinstall, no data migration. Activate a license under **Settings → Enterprise** to unlock it.
 
 ---
 
