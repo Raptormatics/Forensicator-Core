@@ -53,6 +53,17 @@
 # Admin UI) and a permanent result to <backup-dir>/result.json.
 
 set -euo pipefail
+# Without this, `x="$(some_function)"` silently swallows any failure
+# *inside* some_function except whatever its very last command happens to
+# return — `set -e` does not propagate into a command substitution's own
+# subshell by default (this isn't the `{ } || flag` pitfall documented
+# further down near do_install()/do_overlay(); it's a separate, older
+# bash quirk, fixed by this shopt since 4.4). This is what let
+# create_backup()'s pg_dump failure go completely unnoticed before its
+# own fix: the function's last line is `echo "$id"`, always exit 0, so
+# `backup_id="$(create_backup ...)"` reported success regardless of what
+# happened earlier inside it.
+shopt -s inherit_errexit
 
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIG_DIR="/etc/forensicator"
@@ -226,6 +237,24 @@ current_deployment_mode() {
   echo "${mode:-appliance}"
 }
 
+# .next is gitignored (never part of the release package this script
+# extracts — see tar -xzf above each call site) and this script's own
+# extraction never clears it either, so Next.js's persistent webpack
+# build cache under .next/cache survives untouched across every update,
+# reused by default on every `npm run build` from here on. A stale or
+# version-mismatched cache is a well-known source of spurious "Module not
+# found" errors on an otherwise-correct source tree — exactly what broke
+# the 1.2.4 install despite every file genuinely being present and
+# correctly committed. Clearing it first trades a slightly slower build
+# for a deterministic one, the right tradeoff for an update installer
+# whose whole job is to be reliable. Used by every rebuild site: the
+# forward install, the overlay apply/replay, and restore_backup()'s own
+# post-rollback rebuild.
+rebuild_app() {
+  rm -rf "${APP_DIR}/.next"
+  runuser -u "$SERVICE_USER" -- bash -lc "cd '${APP_DIR}' && npm ci && NEXT_PUBLIC_DEPLOYMENT_MODE='$(current_deployment_mode)' npm run build"
+}
+
 # Merges enterprise.deps.json (shipped by the overlay, extracted alongside
 # everything else) into package.json's dependencies/devDependencies. The
 # overlay never ships a package.json of its own — see the header comment
@@ -259,6 +288,16 @@ apply_delta_files() {
   chown -R "${SERVICE_USER}:${SERVICE_USER}" "$APP_DIR"
 }
 
+# DATABASE_URL carries Prisma's own "schema" query param (see setup.sh),
+# which isn't valid libpq URI syntax — pg_dump/psql reject the whole URL
+# outright with "invalid URI query parameter" if passed as-is. sslmode
+# IS valid libpq syntax and is left alone; only schema is stripped, from
+# either position in the query string. Shared by create_backup() and
+# restore_backup() so the two don't drift if this ever needs changing.
+pg_client_url() {
+  printf '%s' "$DATABASE_URL" | sed -E 's/([?&])schema=[^&]*&?/\1/; s/[?&]$//'
+}
+
 # Backs up DB + app dir + config into $BACKUPS_DIR/<id>/, writes
 # backup-manifest.json. Echoes the backup id.
 create_backup() {
@@ -270,15 +309,7 @@ create_backup() {
   mkdir -p "$dir"
 
   set_progress "backup" "Backing up database"
-  # DATABASE_URL carries Prisma's own "schema" query param (see
-  # setup.sh), which isn't valid libpq URI syntax — pg_dump rejects the
-  # whole URL outright with "invalid URI query parameter" if passed as-is,
-  # silently producing an empty/missing backup. sslmode IS valid libpq
-  # syntax and is left alone; only schema is stripped, from either
-  # position in the query string.
-  local pgdump_url
-  pgdump_url="$(printf '%s' "$DATABASE_URL" | sed -E 's/([?&])schema=[^&]*&?/\1/; s/[?&]$//')"
-  pg_dump "$pgdump_url" | gzip > "${dir}/db.sql.gz"
+  pg_dump "$(pg_client_url)" | gzip > "${dir}/db.sql.gz"
 
   set_progress "backup" "Backing up application files"
   tar -C "$APP_DIR" \
@@ -321,14 +352,36 @@ restore_backup() {
   tar -C "$APP_DIR" -xzf "${dir}/app-snapshot.tar.gz"
 
   set_progress "restore" "Restoring database"
-  # psql shares pg_dump's libpq URI parser — same "schema" stripping
-  # needed here as create_backup(), see its own comment for why.
-  gunzip -c "${dir}/db.sql.gz" | psql "$(printf '%s' "$DATABASE_URL" | sed -E 's/([?&])schema=[^&]*&?/\1/; s/[?&]$//')" >/dev/null
+  local restore_url
+  restore_url="$(pg_client_url)"
+  # The dump is a plain pg_dump (CREATEs only, no DROPs) — restoring it
+  # straight into a database that still has its own schema (the common
+  # case: rolling back a failed build/health-check, not a dropped DB)
+  # conflicts with every single object already there. Wipe the schema
+  # first so the restore always lands in a clean target, same state
+  # pg_dump originally captured it from. ON_ERROR_STOP=1 on both calls is
+  # just as essential: without it, psql prints each error and keeps
+  # going, reporting success regardless of whether anything actually
+  # restored — which is exactly what made a completely-failed restore
+  # look like it had succeeded.
+  psql "$restore_url" -v ON_ERROR_STOP=1 -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;' >/dev/null
+  gunzip -c "${dir}/db.sql.gz" | psql "$restore_url" -v ON_ERROR_STOP=1 >/dev/null
 
   set_progress "restore" "Restoring configuration"
   cp "${dir}/forensicator.env.bak" "$ENV_FILE"
 
   chown -R "${SERVICE_USER}:${SERVICE_USER}" "$APP_DIR" "$CONFIG_DIR"
+
+  set_progress "restore" "Rebuilding"
+  # app-snapshot.tar.gz deliberately excludes node_modules/.next (keeps
+  # backups small; both always regenerate) — which also means whatever
+  # .next currently holds does NOT match the source just restored above.
+  # Without this, `next start` serves stale output at best — or, if the
+  # update being rolled back had gotten as far as a failed `next build`
+  # (which can leave .next cleared/mid-write), no valid build at all,
+  # meaning the app stays down even though every file was correctly
+  # restored. Same build invocation as do_install()'s forward path.
+  rebuild_app
 
   set_progress "restore" "Starting services"
   start_services
@@ -430,7 +483,7 @@ do_install() {
     # itself, at request time) stays correct regardless. See
     # provision.sh's own version of this same export for the original
     # fix this mirrors.
-    runuser -u "$SERVICE_USER" -- bash -lc "cd '${APP_DIR}' && npm ci && NEXT_PUBLIC_DEPLOYMENT_MODE='$(current_deployment_mode)' npm run build"
+    rebuild_app
 
     set_progress "install" "Running database migrations"
     runuser -u "$SERVICE_USER" -- bash -lc "cd '${APP_DIR}' && npx prisma migrate deploy"
@@ -458,7 +511,7 @@ do_install() {
       # to plain Core, even though delta-state still reports the overlay
       # as applied.
       set_progress "install" "Rebuilding with the Enterprise overlay included"
-      runuser -u "$SERVICE_USER" -- bash -lc "cd '${APP_DIR}' && npm ci && NEXT_PUBLIC_DEPLOYMENT_MODE='$(current_deployment_mode)' npm run build"
+      rebuild_app
 
       set_progress "install" "Running Enterprise overlay migrations"
       runuser -u "$SERVICE_USER" -- bash -lc "cd '${APP_DIR}' && npx prisma migrate deploy"
@@ -555,7 +608,7 @@ do_overlay() {
     # were before — nothing changes until an unrelated future Core update
     # finally triggers do_install()'s own rebuild.
     set_progress "overlay" "Rebuilding with the Enterprise overlay included"
-    runuser -u "$SERVICE_USER" -- bash -lc "cd '${APP_DIR}' && npm ci && NEXT_PUBLIC_DEPLOYMENT_MODE='$(current_deployment_mode)' npm run build"
+    rebuild_app
 
     # Core's own provision.sh never installs tshark or sets up a
     # Volatility3 venv — it has no PCAP/RAM Analysis to need them. The
