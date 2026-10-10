@@ -81,11 +81,21 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
 apt-get install -y ca-certificates curl gnupg build-essential postgresql postgresql-contrib redis-server sudo
 
-echo "==> Installing Node.js 20.x"
-if ! command -v node >/dev/null || [[ "$(node -v)" != v20.* ]]; then
-  curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+echo "==> Installing Node.js 26.x (current LTS)"
+if ! command -v node >/dev/null || [[ "$(node -v)" != v26.* ]]; then
+  curl -fsSL https://deb.nodesource.com/setup_26.x | bash -
   apt-get install -y nodejs
 fi
+# The NodeSource package bundles whatever npm shipped with that Node
+# build at release time, which drifts behind as patch releases land —
+# pull the latest npm release compatible with the installed Node major
+# right now rather than letting it go stale from day one.
+npm install -g npm@latest
+# Quiets npm's own "new major version available" nag on every npm
+# invocation from here on (migrations, seeding, future updates/overlay
+# applies) — written to npm's global config so it applies regardless of
+# which user runs npm, not just root.
+npm config set update-notifier false --location=global
 echo "    node $(node -v), npm $(npm -v)"
 
 echo "==> Creating service user '${SERVICE_USER}'"

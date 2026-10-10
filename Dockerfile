@@ -15,14 +15,14 @@
 # into .next, so they need the real source present at runtime, not just
 # build time.
 
-FROM node:20-slim AS deps
+FROM node:26-slim AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 
-FROM node:20-slim AS builder
+FROM node:26-slim AS builder
 WORKDIR /app
-# node:20-slim ships OpenSSL 3.x but not the `openssl` CLI itself — Prisma's
+# node:26-slim ships OpenSSL 3.x but not the `openssl` CLI itself — Prisma's
 # engine-selection heuristic at `prisma generate` time can't query it to
 # detect the real version, so it silently guesses "openssl-1.1.x" and
 # generates a client bound to the wrong engine binary. That mismatch is
@@ -51,7 +51,7 @@ ENV DATABASE_URL="postgresql://user:pass@localhost:5432/db"
 RUN npx prisma generate
 RUN npm run build
 
-FROM node:20-slim AS runner
+FROM node:26-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 # Server-side counterpart to the builder stage's NEXT_PUBLIC_ variant —
