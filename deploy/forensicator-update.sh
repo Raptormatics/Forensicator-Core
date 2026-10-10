@@ -237,22 +237,27 @@ current_deployment_mode() {
   echo "${mode:-appliance}"
 }
 
-# .next is gitignored (never part of the release package this script
-# extracts — see tar -xzf above each call site) and this script's own
-# extraction never clears it either, so Next.js's persistent webpack
-# build cache under .next/cache survives untouched across every update,
-# reused by default on every `npm run build` from here on. A stale or
-# version-mismatched cache is a well-known source of spurious "Module not
-# found" errors on an otherwise-correct source tree — exactly what broke
-# the 1.2.4 install despite every file genuinely being present and
-# correctly committed. Clearing it first trades a slightly slower build
-# for a deterministic one, the right tradeoff for an update installer
-# whose whole job is to be reliable. Used by every rebuild site: the
-# forward install, the overlay apply/replay, and restore_backup()'s own
-# post-rollback rebuild.
+# .next is gitignored and this script's own extraction never clears it
+# either, so clearing it first keeps every build deterministic rather
+# than reusing a stale cache across versions — cheap insurance, kept even
+# though it turned out not to be what actually broke the 1.2.4/1.2.5/1.2.6
+# installs.
+#
+# `npm run prisma:generate` is the real fix, and the actual root cause:
+# `npm ci` alone used to be enough because @prisma/client's own
+# postinstall script auto-ran `prisma generate` — but a newer npm's
+# script-allowlisting security feature blocks postinstall scripts it
+# doesn't recognize by default (confirmed in update.log: "4 packages had
+# install scripts blocked ... @prisma/client@5.22.0 (postinstall)"), so
+# that auto-generation silently stopped happening, every single time,
+# on every single rebuild through this script. provision.sh was never
+# affected because it's always called this explicitly, never relying on
+# the postinstall hook — see its own "Installing dependencies and
+# building" step. Used by every rebuild site: the forward install, the
+# overlay apply/replay, and restore_backup()'s own post-rollback rebuild.
 rebuild_app() {
   rm -rf "${APP_DIR}/.next"
-  runuser -u "$SERVICE_USER" -- bash -lc "cd '${APP_DIR}' && npm ci && NEXT_PUBLIC_DEPLOYMENT_MODE='$(current_deployment_mode)' npm run build"
+  runuser -u "$SERVICE_USER" -- bash -lc "cd '${APP_DIR}' && npm ci && npm run prisma:generate && NEXT_PUBLIC_DEPLOYMENT_MODE='$(current_deployment_mode)' npm run build"
 }
 
 # Merges enterprise.deps.json (shipped by the overlay, extracted alongside
