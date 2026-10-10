@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
 import {
-  Sparkles,
   KeyRound,
   Mail,
   ExternalLink,
@@ -80,26 +79,15 @@ export default function EnterprisePage() {
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-8 space-y-8">
-      <div className="flex items-center gap-3">
-        <Sparkles className="h-5 w-5 text-teal-400" />
-        <div>
-          <h1 className="text-xl font-bold text-zinc-100">Forensicator Enterprise</h1>
-          <p className="text-sm text-zinc-500">
-            Everything in Forensicator Core, plus Log/PCAP/RAM Analysis, threat intelligence, SIEM
-            integrations, and more — for teams that need the full platform.
-          </p>
-        </div>
-      </div>
-
       <div className="rounded-xl border border-teal-900/50 bg-teal-950/20 p-5 space-y-4">
         <div className="flex items-center gap-2">
           <ArrowUpCircle className="h-4 w-4 text-teal-400" />
           <h2 className="text-sm font-semibold text-zinc-200">Upgrading from Core</h2>
         </div>
         <p className="text-sm text-zinc-400">
-          Forensicator Enterprise is a signed, in-place overlay on top of Core — upgrading doesn&apos;t
-          require tearing down or rebuilding your existing instance. Your data, users, and
-          investigations all carry over as-is.
+          Enterprise extends your existing Forensicator Core installation. Apply the Enterprise
+          package to unlock additional capabilities without rebuilding your instance. Your existing
+          data, users, and investigations are preserved.
         </p>
         <div className="flex flex-wrap items-center gap-3 pt-1">
           <a

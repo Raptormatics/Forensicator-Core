@@ -227,7 +227,13 @@ export default function UpdatesPage() {
     );
   }
 
-  const inProgress = Boolean(status?.progress) || restarting;
+  // Includes `busy` deliberately — without it, there's a real gap between
+  // clicking Install and the first successful poll of /status landing:
+  // the button says "Starting…" but nothing else visible happens until
+  // the backend installer has actually written its first progress entry
+  // (or, worse, until the connection drops for the restart). Matches the
+  // polling useEffect's own inProgress above, which already includes it.
+  const inProgress = Boolean(status?.progress) || restarting || busy;
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-8 space-y-8">
@@ -262,7 +268,9 @@ export default function UpdatesPage() {
           {inProgress && (
             <div className="rounded-lg border border-teal-700/40 bg-teal-900/20 p-4 space-y-1">
               <p className="text-sm font-medium text-teal-200">
-                {restarting ? "Update in progress — waiting for services to restart…" : status?.progress?.message}
+                {restarting
+                  ? "Update in progress — waiting for services to restart…"
+                  : status?.progress?.message ?? "Starting update…"}
               </p>
               {status?.progress && <p className="text-xs text-teal-400/70">stage: {status.progress.stage}</p>}
             </div>
@@ -373,7 +381,7 @@ export default function UpdatesPage() {
 
               <div className="rounded-lg border border-teal-900/50 bg-teal-950/20 p-4 space-y-3">
                 <h2 className="flex items-center gap-1.5 text-sm font-semibold text-teal-300">
-                  <Sparkles className="h-4 w-4" /> {status?.delta.applied ? "Enterprise Overlay Updates" : "Upgrade to Enterprise"}
+                  <Sparkles className="h-4 w-4" /> {status?.delta.applied ? "Enterprise Overlay Updates" : "Enterprise Updates"}
                 </h2>
 
                 {IS_CONTAINERIZED ? (
@@ -387,7 +395,7 @@ export default function UpdatesPage() {
                     <p className="text-xs text-zinc-400">
                       {status?.delta.applied
                         ? "License no longer valid — reactivate to continue receiving overlay updates."
-                        : "Activate an Enterprise license to unlock Log/PCAP/RAM Analysis, threat intelligence, SIEM integrations, and more — applied in place, no rebuild needed."}
+                        : "Activate an Enterprise license to access Enterprise-specific update channels and packages here."}
                     </p>
                     <Link
                       href="/enterprise"

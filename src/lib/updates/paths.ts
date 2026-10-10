@@ -81,8 +81,17 @@ function isAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (err) {
+    // The kernel checks existence before permission, so ESRCH ("no such
+    // process") is the only error that actually proves the pid is gone.
+    // Anything else — notably EPERM, which is what we get checking on
+    // forensicator-update.sh (it runs as root via sudo, this app runs as
+    // the unprivileged service user) — proves the opposite: the process
+    // exists, we just can't signal it. Treating that as "dead" was the
+    // bug: it falsely reaped every install the moment the freshly
+    // restarted app polled while the still-running installer was still
+    // on its last few cleanup lines.
+    return (err as NodeJS.ErrnoException)?.code !== "ESRCH";
   }
 }
 

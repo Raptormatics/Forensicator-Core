@@ -1,8 +1,20 @@
-# Shell scripts are executed directly — as a Docker ENTRYPOINT, and as
-# systemd ExecStart on a provisioned appliance. CRLF line endings break
-# their shebang line ("#!/bin/sh\r" makes the kernel look for an
-# interpreter that doesn't exist), surfacing as "no such file or
-# directory" even though the file is genuinely there. Without this, a
-# Windows checkout (core.autocrlf=true, the Git for Windows default)
-# silently converts every one of these to CRLF and breaks them all.
-*.sh text eol=lf
+# Normalize every text file to LF, regardless of checkout platform —
+# `* text=auto` keeps Git's own binary-vs-text autodetection (so real
+# binaries aren't touched), `eol=lf` is what actually forces the LF
+# normalization once a file's been classified as text.
+#
+# Without this, a Windows checkout (core.autocrlf=true, the Git for
+# Windows default) silently converts text files to CRLF — every line of
+# every touched file then shows as "changed" in git diff/status even
+# with zero real content changes, and `git archive` (what
+# scripts/build-update-package.sh signs and ships) would include
+# whatever line endings happen to be committed, not necessarily LF.
+*            text=auto eol=lf
+
+# Shell scripts specifically, called out beyond the general rule above
+# for why it actually matters here, not just for clean diffs: they're
+# executed directly — as a Docker ENTRYPOINT, and as systemd ExecStart
+# on a provisioned appliance. A CRLF shebang line ("#!/bin/sh\r") makes
+# the kernel look for an interpreter that doesn't exist, surfacing as
+# "no such file or directory" even though the file is genuinely there.
+*.sh         text eol=lf
