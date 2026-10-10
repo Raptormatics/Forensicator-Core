@@ -8,6 +8,7 @@ import { getActorOrThrow, AuthError } from "@/lib/auth/api-guard";
 import { isInstanceAdmin } from "@/lib/auth/session";
 import { UPDATE_SCRIPT, currentProgress, listBackups } from "@/lib/updates/paths";
 import { actorIp } from "@/lib/updates/install";
+import { containerUpdateBlockedResponse } from "@/lib/updates/container-guard";
 
 const bodySchema = z.object({ backupId: z.string().min(1) });
 
@@ -23,6 +24,9 @@ export async function POST(req: NextRequest) {
   if (!isInstanceAdmin(actor.role)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
+
+  const blocked = containerUpdateBlockedResponse();
+  if (blocked) return blocked;
 
   if (currentProgress()) {
     return NextResponse.json({ error: "An update is already in progress." }, { status: 409 });

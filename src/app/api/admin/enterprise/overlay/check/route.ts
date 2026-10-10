@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getActorOrThrow, AuthError } from "@/lib/auth/api-guard";
 import { isInstanceAdmin } from "@/lib/auth/session";
 import { checkForOverlay } from "@/lib/updates/overlay";
+import { containerUpdateBlockedResponse } from "@/lib/updates/container-guard";
 
 // POST — platform_admin, or org_admin in appliance mode (see
 // isInstanceAdmin). Live query against the Enterprise overlay channel,
@@ -19,6 +20,9 @@ export async function POST(req: NextRequest) {
   if (!isInstanceAdmin(actor.role)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
+
+  const blocked = containerUpdateBlockedResponse();
+  if (blocked) return blocked;
 
   const result = await checkForOverlay();
   return NextResponse.json(result);

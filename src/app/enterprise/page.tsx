@@ -4,36 +4,25 @@ import { useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
 import {
   Sparkles,
-  ScrollText,
-  Network,
-  MemoryStick,
-  Radar,
-  Webhook,
   KeyRound,
-  ShieldCheck,
-  Archive,
   Mail,
   ExternalLink,
   ArrowUpCircle,
   CheckCircle2,
   AlertCircle,
   Loader2,
+  Container,
 } from "lucide-react";
-
-const FEATURES = [
-  { label: "Log Analysis",      icon: ScrollText,  description: "Upload and triage raw log sources with custom decoders and detection rules." },
-  { label: "PCAP Analysis",     icon: Network,     description: "Full packet capture analysis via tshark, with rule-based detections." },
-  { label: "RAM Analysis",      icon: MemoryStick,  description: "Memory image triage via Volatility3, with custom symbol tables and rules." },
-  { label: "Intelligence",      icon: Radar,       description: "IOC enrichment, threat-intel provider lookups, correlation, and Sigma detections." },
-  { label: "SIEM Integrations", icon: Webhook,      description: "Export findings to your SIEM in real time via syslog or HTTP." },
-  { label: "Single Sign-On",    icon: ShieldCheck,  description: "SSO for your organization, plus org-level retention policies." },
-  { label: "API Keys & Webhooks", icon: KeyRound,   description: "Programmatic access for integrations and automation." },
-  { label: "Retention Policies", icon: Archive,     description: "Automatic case/investigation retention and cleanup rules." },
-];
 
 // Mirrors isInstanceAdmin() (src/lib/auth/session.ts) — Core is always
 // appliance mode, so org_admin manages this too, same tier as Updates.
 const ADMIN_ROLES = ["platform_admin", "org_admin"];
+// A valid license only ever unlocks installing the overlay under
+// Settings -> Updates — which is unconditionally blocked in Docker (no
+// sudo/systemd for the installer). Activating one here anyway would be
+// a dead end, so the whole form is replaced with an explanation instead.
+// Matching server-side guard: src/lib/updates/container-guard.ts.
+const IS_CONTAINERIZED = process.env.NEXT_PUBLIC_DEPLOYMENT_CONTAINER === "docker";
 
 type ActivationState = {
   valid: boolean;
@@ -102,18 +91,6 @@ export default function EnterprisePage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        {FEATURES.map(({ label, icon: Icon, description }) => (
-          <div key={label} className="rounded-xl border border-zinc-800 bg-zinc-900 p-4 space-y-1.5">
-            <div className="flex items-center gap-2">
-              <Icon className="h-4 w-4 text-teal-400" />
-              <h2 className="text-sm font-semibold text-zinc-200">{label}</h2>
-            </div>
-            <p className="text-xs text-zinc-500">{description}</p>
-          </div>
-        ))}
-      </div>
-
       <div className="rounded-xl border border-teal-900/50 bg-teal-950/20 p-5 space-y-4">
         <div className="flex items-center gap-2">
           <ArrowUpCircle className="h-4 w-4 text-teal-400" />
@@ -144,7 +121,23 @@ export default function EnterprisePage() {
         </div>
       </div>
 
-      {isAdmin && !loading && (
+      {isAdmin && !loading && IS_CONTAINERIZED && (
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-5 space-y-3">
+          <div className="flex items-center gap-2">
+            <Container className="h-4 w-4 text-zinc-400" />
+            <h2 className="text-sm font-semibold text-zinc-200">Not available in Docker</h2>
+          </div>
+          <p className="text-sm text-zinc-500">
+            Enterprise isn&apos;t available in the Docker deployment — applying the overlay needs
+            sudo/systemd this container doesn&apos;t have, so license activation is disabled here
+            too (it would only ever unlock a feature this instance can&apos;t use). Enterprise on
+            Docker requires its own Enterprise Docker image, built separately from Core&apos;s —
+            contact <a href="mailto:hello@forensicator.io" className="text-teal-400 hover:text-teal-300">hello@forensicator.io</a> if that&apos;s what you need.
+          </p>
+        </div>
+      )}
+
+      {isAdmin && !loading && !IS_CONTAINERIZED && (
         <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-5 space-y-4">
           <div className="flex items-center gap-2">
             <KeyRound className="h-4 w-4 text-teal-400" />

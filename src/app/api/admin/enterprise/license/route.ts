@@ -7,6 +7,7 @@ import { getActorOrThrow, AuthError } from "@/lib/auth/api-guard";
 import { isInstanceAdmin } from "@/lib/auth/session";
 import { getActivationState, activateLicense } from "@/lib/license/activation";
 import { InvalidLicenseError } from "@/lib/license/verify";
+import { containerEnterpriseBlockedResponse } from "@/lib/updates/container-guard";
 
 // GET — platform_admin, or org_admin in appliance mode (see
 // isInstanceAdmin). Current Enterprise-overlay entitlement state.
@@ -36,6 +37,9 @@ export async function POST(req: NextRequest) {
   if (!isInstanceAdmin(actor.role)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
+
+  const blocked = containerEnterpriseBlockedResponse();
+  if (blocked) return blocked;
 
   let body;
   try {

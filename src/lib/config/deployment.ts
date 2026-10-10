@@ -26,3 +26,20 @@ export function getDeploymentMode(): DeploymentMode {
 export function isAppliance(): boolean {
   return true;
 }
+
+/**
+ * True when running as the Docker image (baked in via the Dockerfile's
+ * own ENV, not left to docker-compose.yml or a .env file to set
+ * correctly — this has to be true no matter how the image actually gets
+ * run: compose, a bare `docker run`, Kubernetes, whatever).
+ *
+ * The update mechanism (Settings → Updates) needs this: installing an
+ * update means replacing the running app's files and restarting its
+ * systemd unit, via `sudo deploy/forensicator-update.sh` — neither sudo
+ * nor systemd exist inside this container, so the whole flow is
+ * structurally impossible here, not just unconfigured. See
+ * src/lib/updates/container-guard.ts.
+ */
+export function isContainerized(): boolean {
+  return process.env.DEPLOYMENT_CONTAINER === "docker";
+}

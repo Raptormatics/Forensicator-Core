@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useSession } from "next-auth/react";
 import Link from "next/link";
-import { CloudDownload, PackageCheck, RefreshCw, ShieldOff, Undo2, UploadCloud, Sparkles, ArrowRight } from "lucide-react";
+import { CloudDownload, PackageCheck, RefreshCw, ShieldOff, Undo2, UploadCloud, Sparkles, ArrowRight, Container } from "lucide-react";
 
 type BackupManifest = {
   id: string;
@@ -58,6 +58,11 @@ type OverlayCheckResult =
 const IS_APPLIANCE = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "appliance";
 const ADMIN_ROLES = IS_APPLIANCE ? ["platform_admin", "org_admin"] : ["platform_admin"];
 const CHANNELS = ["stable", "beta", "preview"] as const;
+// The update mechanism replaces running files and restarts a systemd
+// unit via `sudo deploy/forensicator-update.sh` — structurally impossible
+// inside this container (no sudo, no systemd), not just unconfigured.
+// Matching server-side guard: src/lib/updates/container-guard.ts.
+const IS_CONTAINERIZED = process.env.NEXT_PUBLIC_DEPLOYMENT_CONTAINER === "docker";
 
 function formatBytes(bytes?: number): string {
   if (!bytes) return "";
@@ -265,6 +270,24 @@ export default function UpdatesPage() {
 
           {!inProgress && (
             <>
+              {IS_CONTAINERIZED && (
+                <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-4 space-y-2">
+                  <h2 className="flex items-center gap-1.5 text-sm font-semibold text-zinc-300">
+                    <Container className="h-4 w-4" /> Updates aren&apos;t available in Docker
+                  </h2>
+                  <p className="text-xs text-zinc-500">
+                    This instance is running as the Docker image — there&apos;s no sudo or systemd
+                    inside the container for the installer to use. To update, pull the latest
+                    changes and run:
+                  </p>
+                  <code className="block rounded bg-zinc-950 px-2 py-1.5 text-xs text-teal-300">
+                    docker compose up -d --build
+                  </code>
+                </div>
+              )}
+
+              {!IS_CONTAINERIZED && (
+              <>
               <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-4 space-y-3">
                 <div className="flex items-center justify-between">
                   <h2 className="flex items-center gap-1.5 text-sm font-semibold text-zinc-300">
@@ -345,13 +368,21 @@ export default function UpdatesPage() {
                   {busy ? "Starting…" : "Install"}
                 </button>
               </div>
+              </>
+              )}
 
               <div className="rounded-lg border border-teal-900/50 bg-teal-950/20 p-4 space-y-3">
                 <h2 className="flex items-center gap-1.5 text-sm font-semibold text-teal-300">
                   <Sparkles className="h-4 w-4" /> {status?.delta.applied ? "Enterprise Overlay Updates" : "Upgrade to Enterprise"}
                 </h2>
 
-                {!status?.licensed ? (
+                {IS_CONTAINERIZED ? (
+                  <p className="text-xs text-zinc-500">
+                    Enterprise isn&apos;t available in the Docker deployment — applying the overlay
+                    needs sudo/systemd this container doesn&apos;t have. Enterprise on Docker
+                    requires its own Enterprise Docker image, built separately from Core&apos;s.
+                  </p>
+                ) : !status?.licensed ? (
                   <>
                     <p className="text-xs text-zinc-400">
                       {status?.delta.applied

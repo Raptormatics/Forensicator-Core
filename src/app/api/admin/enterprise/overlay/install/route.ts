@@ -10,6 +10,7 @@ import { isInstanceAdmin } from "@/lib/auth/session";
 import { currentProgress } from "@/lib/updates/paths";
 import { checkForOverlay } from "@/lib/updates/overlay";
 import { startOverlayInstall, actorIp } from "@/lib/updates/install";
+import { containerUpdateBlockedResponse } from "@/lib/updates/container-guard";
 
 const MAX_PACKAGE_BYTES = 500 * 1024 * 1024;
 
@@ -28,6 +29,9 @@ export async function POST(req: NextRequest) {
   if (!isInstanceAdmin(actor.role)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
+
+  const blocked = containerUpdateBlockedResponse();
+  if (blocked) return blocked;
 
   if (currentProgress()) {
     return NextResponse.json({ error: "An update is already in progress." }, { status: 409 });

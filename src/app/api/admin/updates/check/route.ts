@@ -6,6 +6,7 @@ import { isInstanceAdmin } from "@/lib/auth/session";
 import { checkForUpdate } from "@/lib/updates/online";
 import { installedVersion } from "@/lib/updates/paths";
 import { isNewerVersion } from "@/lib/updates/version";
+import { containerUpdateBlockedResponse } from "@/lib/updates/container-guard";
 
 // POST — platform_admin, or org_admin in appliance mode (see
 // isInstanceAdmin). Live query against UPDATE_SERVER_URL (if configured)
@@ -19,6 +20,9 @@ export async function POST(req: NextRequest) {
   if (!isInstanceAdmin(actor.role)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
+
+  const blocked = containerUpdateBlockedResponse();
+  if (blocked) return blocked;
 
   const result = await checkForUpdate();
   if (!result.configured || !result.ok) {

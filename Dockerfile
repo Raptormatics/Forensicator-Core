@@ -38,6 +38,11 @@ COPY . .
 # NEXT_PUBLIC_* vars are inlined into the client bundle at build time, not
 # read at runtime — same reasoning as deploy/provision.sh's own build step.
 ENV NEXT_PUBLIC_DEPLOYMENT_MODE=appliance
+# Lets the Settings -> Updates UI and its API routes tell "genuinely
+# unconfigured" apart from "structurally impossible here" (no sudo/systemd
+# in this container) and explain the difference instead of a misleading
+# generic error — see src/lib/config/deployment.ts's isContainerized().
+ENV NEXT_PUBLIC_DEPLOYMENT_CONTAINER=docker
 # `prisma generate` parses the schema's datasource block, which requires
 # DATABASE_URL to just be *present* — it never connects at generate time.
 # The real one is supplied at container run time by docker-compose.yml;
@@ -49,6 +54,10 @@ RUN npm run build
 FROM node:20-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
+# Server-side counterpart to the builder stage's NEXT_PUBLIC_ variant —
+# this one's read at request time by the Updates API routes, not baked
+# into the client bundle.
+ENV DEPLOYMENT_CONTAINER=docker
 # See the builder stage's comment — this is the half that actually bites:
 # `prisma migrate deploy` (docker-entrypoint.sh, at container start) runs
 # the schema engine for real here, not just generates types against it.
