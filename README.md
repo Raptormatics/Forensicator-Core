@@ -74,6 +74,15 @@ Optional environment variables for `provision.sh` (see documentation for full li
 ORG_NAME="Acme Corp" ORG_SLUG=acme PUBLIC_URL="https://forensicator.acme.internal" sudo ./deploy/provision.sh
 ```
 
+To remove a bare-metal install — services, config, the database (backed up first), the service account:
+
+```bash
+sudo ./deploy/uninstall.sh --dry-run   # preview first
+sudo ./deploy/uninstall.sh
+```
+
+See `sudo ./deploy/uninstall.sh --help` for options (keeping the database, also removing this checkout, etc.). Docker installs don't need this — `docker compose down -v` instead.
+
 ---
 
 ## 🔍 Key Features
