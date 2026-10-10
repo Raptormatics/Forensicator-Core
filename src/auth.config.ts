@@ -97,6 +97,23 @@ export const authOptions: NextAuthOptions = {
           data: { lastLogin: new Date(), failedLoginAttempts: 0, lockedUntil: null },
         });
 
+        // No organizationId here, same as the login_failed/login_locked
+        // writes above — orgWhere() (src/lib/auth/api-guard.ts) treats
+        // org_admin in appliance mode the same as platform_admin for
+        // exactly this reason, so it's still visible in the Audit Log.
+        await prisma.auditLog.create({
+          data: {
+            actorId: user.id,
+            actorEmail: user.email,
+            actorIp,
+            action: "login_success",
+            resourceType: "user",
+            resourceId: user.id,
+            result: "success",
+            severity: "info",
+          },
+        });
+
         return {
           id:             user.id,
           email:          user.email,

@@ -91,6 +91,15 @@ export function Sidebar() {
   const [expandedGroups, setExpandedGroups] = useState<string[]>(["Investigations"]);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // Logs the audit entry while the session is still valid, then signs out
+  // — see src/app/api/auth/logout/route.ts for why this can't just be a
+  // NextAuth events.signOut hook. Best-effort: a logging failure
+  // shouldn't block someone from actually signing out.
+  async function handleSignOut() {
+    try { await fetch("/api/auth/logout", { method: "POST" }); } catch { /* sign out regardless */ }
+    signOut({ callbackUrl: "/login" });
+  }
+
   // Hide sidebar on auth pages — AFTER all hooks
   if (AUTH_PATHS.includes(pathname)) return null;
 
@@ -246,7 +255,7 @@ export function Sidebar() {
               <Link href="/settings/profile" className="rounded p-1 text-zinc-600 hover:text-zinc-300" title="Profile">
                 <UserCircle className="h-4 w-4" />
               </Link>
-              <button onClick={() => signOut({ callbackUrl: "/login" })} className="rounded p-1 text-zinc-600 hover:text-red-400" title="Sign out">
+              <button onClick={handleSignOut} className="rounded p-1 text-zinc-600 hover:text-red-400" title="Sign out">
                 <LogOut className="h-4 w-4" />
               </button>
             </div>
