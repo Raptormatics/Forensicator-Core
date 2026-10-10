@@ -6,15 +6,29 @@
 # run the app: system packages, Node.js, the built application, and systemd
 # units. This script requires network access (apt + npm registry).
 #
-# Unlike the Enterprise overlay, there's no disk-image/appliance-build path
-# here at all, and no DEPLOYMENT_MODE choice — Forensicator Core is always
-# installed by running this script directly on a real, already-provisioned
-# machine (git clone + run), so there's no "built on one hypervisor, booted
-# on another" problem to work around, and only ever one mode to support.
+# Two distinct ways this gets run, and they need genuinely different
+# endings — not just a flag tweak:
 #
-# It deliberately does NOT generate secrets or touch the database — that
-# happens in first-boot.sh, on first real run, same separation of concerns
-# as the Enterprise overlay.
+#   Bare metal / VM, run by hand (the default — IMAGE_BUILD unset):
+#     Someone already logged into their own machine, running this
+#     directly (the documented git-clone quickstart). deploy/setup.sh
+#     runs automatically at the end: generates secrets, migrates, seeds
+#     the org, starts services — all synchronously, right now, in this
+#     same shell. No separate OS account, no console takeover, nothing
+#     deferred to a later boot.
+#
+#   Building a shared golden image (IMAGE_BUILD=1 — the Enterprise
+#   overlay's Packer template sets this):
+#     An unknown FUTURE user will clone this image and boot it fresh,
+#     with only console access and no OS login of their own yet.
+#     Secrets can't be generated now — baking them into the image would
+#     mean every clone shares the same DATABASE_URL password and
+#     NEXTAUTH_SECRET. deploy/first-boot.sh handles that case instead,
+#     at the real first boot of each individual clone, which is also
+#     where it creates a fresh OS admin account and shows credentials
+#     on the console — none of which makes sense for the bare-metal
+#     case above, where the person running this already has their own
+#     login.
 #
 # Usage (as root):
 #   ORG_NAME="Acme Corp" ORG_SLUG=acme ./deploy/provision.sh
@@ -25,6 +39,7 @@
 #   PUBLIC_URL         externally reachable URL, used as NEXTAUTH_URL (default: http://localhost:3000)
 #   APP_PORT           port next start binds to (default: 3000)
 #   SERVICE_USER       system user the app runs as (default: forensicator)
+#   IMAGE_BUILD        "1" if building a shared image for later cloning (default: unset — see above)
 #   UPDATE_SERVER_URL  update server "Check for Updates" queries (default:
 #                      https://updates.forensicator.io/core — same public URL for every
 #                      install, not a secret). Set to an empty string to disable the
@@ -42,6 +57,7 @@ APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PUBLIC_URL="${PUBLIC_URL:-http://localhost:3000}"
 APP_PORT="${APP_PORT:-3000}"
 SERVICE_USER="${SERVICE_USER:-forensicator}"
+IMAGE_BUILD="${IMAGE_BUILD:-0}"
 UPDATE_SERVER_URL="${UPDATE_SERVER_URL-https://updates.forensicator.io/core}"
 CONFIG_DIR="/etc/forensicator"
 ENV_FILE="${CONFIG_DIR}/forensicator.env"
@@ -77,16 +93,21 @@ if ! id "$SERVICE_USER" >/dev/null 2>&1; then
   useradd --system --create-home --shell /usr/sbin/nologin "$SERVICE_USER"
 fi
 
-# A separate, real (sudo, login-shell) OS account for actually managing the
-# box — deliberately NOT the same account as SERVICE_USER above, which stays
-# locked down (nologin) since it only ever needs to run the app. Created
-# with no password here (locked, unusable) — first-boot.sh generates and
-# sets the actual per-instance password, same split as every other secret
-# in this project, so a shared base image (if you make one yourself) never
-# carries a shared credential.
-echo "==> Creating OS admin account 'forensicator-admin' (password set on first boot)"
-if ! id forensicator-admin >/dev/null 2>&1; then
-  useradd --create-home --shell /bin/bash --groups sudo forensicator-admin
+if [[ "$IMAGE_BUILD" == "1" ]]; then
+  # A separate, real (sudo, login-shell) OS account for actually managing
+  # the box — deliberately NOT the same account as SERVICE_USER above,
+  # which stays locked down (nologin) since it only ever needs to run the
+  # app. Created with no password here (locked, unusable) —
+  # first-boot.sh generates and sets the actual per-instance password at
+  # the real first boot of each clone, so a shared base image never
+  # carries a shared credential. Skipped entirely for a direct bare-metal
+  # install (the default) — whoever ran `sudo` to get here already has
+  # their own OS login; a second generated account would just be an
+  # unused credential sitting around.
+  echo "==> Creating OS admin account 'forensicator-admin' (password set on first boot)"
+  if ! id forensicator-admin >/dev/null 2>&1; then
+    useradd --create-home --shell /bin/bash --groups sudo forensicator-admin
+  fi
 fi
 
 echo "==> Enabling PostgreSQL and Redis"
@@ -132,34 +153,48 @@ fi
 chmod 600 "$ENV_FILE"
 chown -R "${SERVICE_USER}:${SERVICE_USER}" "$APP_DIR" "$CONFIG_DIR"
 
-# forensicator-firstboot.service takes exclusive ownership of tty1 (see
-# FIRSTBOOT_STDIO below) to reliably show the generated credentials on
-# whatever console you're watching — disabled here so it can't race to
-# grab tty1 first; first-boot.sh explicitly starts it back up once done.
-systemctl disable getty@tty1.service 2>/dev/null || true
-
 echo "==> Installing systemd units"
-# Deliberately NOT TTYReset=/TTYVHangup=yes — those are for kicking an
-# existing session off a tty before taking it over, which doesn't apply
-# here (getty@tty1 is already disabled, above, so nothing else is ever
-# attached to tty1 in the first place) and were the direct cause of a
-# real, reproducible bug in the Enterprise overlay this was split from:
-# restarting this unit killed its own process instantly with signal=HUP,
-# because TTYVHangup's hangup-before-exec step was hanging up the very
-# tty this same unit had just taken over moments before. Minimal config
-# only.
-FIRSTBOOT_STDIO='StandardInput=tty\nStandardOutput=tty\nStandardError=tty\nTTYPath=/dev/tty1'
-sed "s#{{APP_DIR}}#${APP_DIR}#g; s#{{SERVICE_USER}}#${SERVICE_USER}#g; s#{{FIRSTBOOT_STDIO}}#${FIRSTBOOT_STDIO}#" \
-  "${APP_DIR}/deploy/systemd/forensicator-firstboot.service" > /etc/systemd/system/forensicator-firstboot.service
 sed "s#{{APP_DIR}}#${APP_DIR}#g; s#{{SERVICE_USER}}#${SERVICE_USER}#g" \
   "${APP_DIR}/deploy/systemd/forensicator.service" > /etc/systemd/system/forensicator.service
 sed "s#{{APP_DIR}}#${APP_DIR}#g; s#{{SERVICE_USER}}#${SERVICE_USER}#g" \
   "${APP_DIR}/deploy/systemd/forensicator-workers.service" > /etc/systemd/system/forensicator-workers.service
 
-systemctl daemon-reload
-systemctl enable forensicator-firstboot.service
-systemctl enable forensicator.service
-systemctl enable forensicator-workers.service
+if [[ "$IMAGE_BUILD" == "1" ]]; then
+  # forensicator-firstboot.service takes exclusive ownership of tty1 (see
+  # FIRSTBOOT_STDIO below) to reliably show the generated credentials on
+  # whatever console you're watching — disabled here so it can't race to
+  # grab tty1 first; first-boot.sh explicitly starts it back up once done.
+  systemctl disable getty@tty1.service 2>/dev/null || true
+
+  # Deliberately NOT TTYReset=/TTYVHangup=yes — those are for kicking an
+  # existing session off a tty before taking it over, which doesn't apply
+  # here (getty@tty1 is already disabled, above, so nothing else is ever
+  # attached to tty1 in the first place) and were the direct cause of a
+  # real, reproducible bug in the Enterprise overlay this was split from:
+  # restarting this unit killed its own process instantly with signal=HUP,
+  # because TTYVHangup's hangup-before-exec step was hanging up the very
+  # tty this same unit had just taken over moments before. Minimal config
+  # only.
+  FIRSTBOOT_STDIO='StandardInput=tty\nStandardOutput=tty\nStandardError=tty\nTTYPath=/dev/tty1'
+  sed "s#{{APP_DIR}}#${APP_DIR}#g; s#{{SERVICE_USER}}#${SERVICE_USER}#g; s#{{FIRSTBOOT_STDIO}}#${FIRSTBOOT_STDIO}#" \
+    "${APP_DIR}/deploy/systemd/forensicator-firstboot.service" > /etc/systemd/system/forensicator-firstboot.service
+  systemctl daemon-reload
+  systemctl enable forensicator-firstboot.service
+  systemctl enable forensicator.service
+  systemctl enable forensicator-workers.service
+else
+  # No forensicator-firstboot.service at all in this mode — deploy/setup.sh
+  # (called directly, below) does its job synchronously instead. Strip the
+  # dependency from the two real services so starting them doesn't pull in
+  # a unit that was never installed — a surgical edit, not a wholesale
+  # rewrite, so "After=... network.target" keeps that ordering.
+  sed -i -e 's/^After=forensicator-firstboot\.service /After=/' \
+         -e '/^Requires=forensicator-firstboot\.service$/d' \
+    /etc/systemd/system/forensicator.service /etc/systemd/system/forensicator-workers.service
+  systemctl daemon-reload
+  systemctl enable forensicator.service
+  systemctl enable forensicator-workers.service
+fi
 
 echo "==> Installing update CLI and scoped sudoers rule"
 chmod +x "${APP_DIR}/deploy/forensicator-update.sh"
@@ -186,11 +221,19 @@ SUDOERS
 chmod 440 /etc/sudoers.d/forensicator-ollama
 visudo -cf /etc/sudoers.d/forensicator-ollama
 
-cat <<'EOF'
+echo ""
+echo "==> Provisioning complete."
+echo ""
 
-==> Provisioning complete.
-
-Reboot now, or start services manually:
-  systemctl start forensicator-firstboot forensicator forensicator-workers
-First-boot credentials will be written to /etc/forensicator/initial-credentials.txt
+if [[ "$IMAGE_BUILD" == "1" ]]; then
+  cat <<'EOF'
+Image build — nothing further happens now. forensicator-firstboot.service
+is enabled and will run automatically on each clone's real first boot,
+generating that instance's own secrets and OS admin credentials
+(written to /etc/forensicator/initial-credentials.txt) before
+forensicator/forensicator-workers start.
 EOF
+else
+  chmod +x "${APP_DIR}/deploy/setup.sh"
+  "${APP_DIR}/deploy/setup.sh"
+fi

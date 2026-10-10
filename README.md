@@ -58,16 +58,15 @@ To stop: `docker compose down` (add `-v` to also delete all data — cases, inve
 
 ### 🐧 Bare metal / VM (Linux)
 
-For a real appliance install (a dedicated machine or VM you're provisioning from scratch), skip Docker and provision the box directly. Requires a fresh Debian/Ubuntu machine.
+For a real install on a machine you're already logged into — a dedicated box or a VM — skip Docker and provision it directly. Requires a fresh Debian/Ubuntu machine.
 
 ```bash
 git clone https://github.com/Raptormatics/Forensicator-Core /opt/forensicator-core
 cd /opt/forensicator-core
-sudo ./deploy/provision.sh
-sudo reboot
+sudo bash ./deploy/provision.sh
 ```
 
-`provision.sh` installs Node.js, PostgreSQL, Redis, builds the app, and sets up systemd units. On first boot, `deploy/first-boot.sh` runs automatically: generates per-instance secrets, runs migrations, seeds the one organization, and prints a one-time OS admin login to the console. Then visit the machine's address in a browser and complete the setup wizard.
+No reboot needed — `provision.sh` installs Node.js, PostgreSQL, Redis, builds the app, sets up systemd units, then generates secrets, runs migrations, and starts the services itself, right there in the same command. Visit the machine's address in a browser once it prints "Setup complete" and complete the setup wizard.
 
 Optional environment variables for `provision.sh` (see documentation for full list):
 
