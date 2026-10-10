@@ -64,6 +64,7 @@ DELTA_STATE_FILE="${CONFIG_DIR}/enterprise-delta.json"
 DELTA_CACHE_FPK="${CONFIG_DIR}/current-enterprise-delta.fpk"
 BACKUPS_DIR="${APP_DIR}/backups"
 PROGRESS_FILE="${BACKUPS_DIR}/.current-progress.json"
+LOG_FILE="${BACKUPS_DIR}/update.log"
 
 if [[ $EUID -ne 0 ]]; then
   echo "Must be run as root." >&2
@@ -74,12 +75,30 @@ if [[ ! -f "$ENV_FILE" ]]; then
   exit 1
 fi
 
+# set -a exports everything source picks up (DATABASE_URL, NEXTAUTH_SECRET,
+# etc.) so the runuser/bash -lc child processes below — prisma migrate
+# deploy, npm run build — can actually see them. Without this, DATABASE_URL
+# only exists as a local shell variable in this script's own process; every
+# "npx prisma migrate deploy" call fails with "Environment variable not
+# found: DATABASE_URL", silently, see do_install()'s own error-handling
+# note on why that silence is possible. Mirrors setup.sh's existing
+# (correct) version of this same source.
+set -a
 # shellcheck disable=SC1090
 source "$ENV_FILE"
+set +a
 SERVICE_USER="${SERVICE_USER:-forensicator}"
 PORT="${PORT:-3000}"
 
 mkdir -p "$BACKUPS_DIR"
+# The Admin UI spawns this script with stdio discarded entirely (it has to
+# — the process has to survive the very server that spawned it being
+# stopped mid-update), so without this, any failure that doesn't make it
+# into result.json is gone with no way to diagnose it after the fact. Tee
+# everything from here on to a persistent log, in addition to wherever
+# stdout/stderr were already going (the terminal, for a CLI-invoked run).
+exec > >(tee -a "$LOG_FILE") 2>&1
+echo "=== $(date -u +%FT%TZ) — forensicator-update.sh $* ==="
 
 MODE=""
 PACKAGE_PATH=""
@@ -105,8 +124,16 @@ fi
 # abandoned update (process gone, e.g. killed/crashed/rebooted mid-install)
 # apart from one that's still actually running — see currentProgress() in
 # src/lib/updates/paths.ts.
+#
+# The human-readable line goes to stderr, not stdout, deliberately —
+# create_backup() (and anything else that returns a value via a trailing
+# `echo` and gets called as `x="$(fn)"`) calls this internally. Had this
+# gone to stdout, every one of those progress lines would get captured
+# into the caller's variable right alongside the real return value,
+# corrupting it with embedded "==> [stage] message" text. That's exactly
+# what was corrupting backup_id — see create_backup() below.
 set_progress() {
-  echo "==> [$1] $2"
+  echo "==> [$1] $2" >&2
   PROGRESS_FILE="$PROGRESS_FILE" STAGE="$1" MSG="$2" PID="$$" node -e '
     const fs = require("fs");
     fs.writeFileSync(process.env.PROGRESS_FILE, JSON.stringify({
@@ -243,7 +270,15 @@ create_backup() {
   mkdir -p "$dir"
 
   set_progress "backup" "Backing up database"
-  pg_dump "$DATABASE_URL" | gzip > "${dir}/db.sql.gz"
+  # DATABASE_URL carries Prisma's own "schema" query param (see
+  # setup.sh), which isn't valid libpq URI syntax — pg_dump rejects the
+  # whole URL outright with "invalid URI query parameter" if passed as-is,
+  # silently producing an empty/missing backup. sslmode IS valid libpq
+  # syntax and is left alone; only schema is stripped, from either
+  # position in the query string.
+  local pgdump_url
+  pgdump_url="$(printf '%s' "$DATABASE_URL" | sed -E 's/([?&])schema=[^&]*&?/\1/; s/[?&]$//')"
+  pg_dump "$pgdump_url" | gzip > "${dir}/db.sql.gz"
 
   set_progress "backup" "Backing up application files"
   tar -C "$APP_DIR" \
@@ -286,7 +321,9 @@ restore_backup() {
   tar -C "$APP_DIR" -xzf "${dir}/app-snapshot.tar.gz"
 
   set_progress "restore" "Restoring database"
-  gunzip -c "${dir}/db.sql.gz" | psql "$DATABASE_URL" >/dev/null
+  # psql shares pg_dump's libpq URI parser — same "schema" stripping
+  # needed here as create_backup(), see its own comment for why.
+  gunzip -c "${dir}/db.sql.gz" | psql "$(printf '%s' "$DATABASE_URL" | sed -E 's/([?&])schema=[^&]*&?/\1/; s/[?&]$//')" >/dev/null
 
   set_progress "restore" "Restoring configuration"
   cp "${dir}/forensicator.env.bak" "$ENV_FILE"
@@ -339,7 +376,7 @@ do_install() {
 
   local work
   work="$(mktemp -d)"
-  trap 'rm -rf "$work"' EXIT
+  trap 'rm -rf "${work:-}"' EXIT
 
   verify_package "$pkg" "$work"
 
@@ -357,8 +394,25 @@ do_install() {
   echo "Backup created: ${backup_id}"
 
   # From here on, any failure triggers an automatic rollback to this backup.
+  #
+  # This is an explicit `( set -e; ... )` subshell, not a `{ ... }` group —
+  # a deliberate, non-obvious choice. Bash suspends `errexit` for every
+  # command inside a `{ ... }` group whose own failure is "being tested"
+  # (which is exactly what `{ ... } || install_failed=1` does to the whole
+  # group) — not just for the group as a unit, but for every individual
+  # line inside it too. That meant a failure in the MIDDLE of this
+  # sequence (migrations, the overlay replay, anything but literally the
+  # last line) was silently ignored; only whichever command happened to be
+  # last determined install_failed. A subshell doesn't inherit that
+  # exemption for its own internal commands, so `set -e` inside it behaves
+  # normally — the first failing step inside aborts the subshell
+  # immediately, and its non-zero exit is what the outer `) ||` below
+  # actually catches. (This is what silently broke the database backup
+  # and the migration step both — see create_backup() and this function's
+  # own source $ENV_FILE above.)
   local install_failed=0
-  {
+  (
+    set -e
     set_progress "install" "Stopping services"
     stop_services
 
@@ -416,9 +470,9 @@ do_install() {
     set_progress "install" "Waiting for the app to come back healthy"
     if ! health_check; then
       echo "Health check failed after install." >&2
-      install_failed=1
+      exit 1
     fi
-  } || install_failed=1
+  ) || install_failed=1
 
   if [[ "$install_failed" -eq 1 ]]; then
     set_progress "rollback" "Install failed — automatically rolling back to ${backup_id}"
@@ -450,7 +504,7 @@ do_overlay() {
 
   local work
   work="$(mktemp -d)"
-  trap 'rm -rf "$work"' EXIT
+  trap 'rm -rf "${work:-}"' EXIT
 
   verify_package "$pkg" "$work" "$OVERLAY_PUBLIC_KEY"
 
@@ -481,8 +535,11 @@ do_overlay() {
   backup_id="$(create_backup "pre-overlay" "$overlay_version")"
   echo "Backup created: ${backup_id}"
 
+  # Explicit subshell, not a `{ ... }` group — same reasoning as
+  # do_install()'s own version of this, see the comment there.
   local install_failed=0
-  {
+  (
+    set -e
     set_progress "overlay" "Stopping services"
     stop_services
 
@@ -565,9 +622,9 @@ do_overlay() {
     set_progress "overlay" "Waiting for the app to come back healthy"
     if ! health_check; then
       echo "Health check failed after applying the overlay." >&2
-      install_failed=1
+      exit 1
     fi
-  } || install_failed=1
+  ) || install_failed=1
 
   if [[ "$install_failed" -eq 1 ]]; then
     set_progress "rollback" "Overlay apply failed — automatically rolling back to ${backup_id}"
@@ -607,7 +664,18 @@ do_overlay() {
 write_result() {
   local success="$1" to_version="$2" from_version="$3" backup_id="$4" rolled_back="$5" error="$6"
   local dir="${BACKUPS_DIR}/${backup_id}"
-  SUCCESS="$success" TO_VERSION="$to_version" FROM_VERSION="$from_version" BACKUP_ID="$backup_id" \
+  # Deliberately tolerant, same reasoning as set_progress() — this is the
+  # very last step on every path through do_install()/do_overlay(), with
+  # clear_progress() right after it. Under `set -e`, letting this one
+  # command's exit code propagate meant any transient failure here (this
+  # runs the instant a brand-new Next.js process has just come up, the
+  # single most resource-contended moment in the whole install) killed the
+  # script before clear_progress() ever ran — leaving a progress file that
+  # looked abandoned despite the actual update (files, build, migrations,
+  # services, health check) having already fully succeeded by this point.
+  # The Admin UI's reaper would then report a misleading "interrupted"
+  # failure for an update that had, in every way that matters, succeeded.
+  if ! SUCCESS="$success" TO_VERSION="$to_version" FROM_VERSION="$from_version" BACKUP_ID="$backup_id" \
     ROLLED_BACK="$rolled_back" ERROR="$error" RESULT_PATH="${dir}/result.json" \
     node -e '
       const fs = require("fs");
@@ -620,7 +688,9 @@ write_result() {
         error: process.env.ERROR || null,
         completedAt: new Date().toISOString(),
       }, null, 2));
-    '
+    '; then
+    echo "WARNING: failed to write ${dir}/result.json — see above for the actual error. The update/rollback/overlay-apply itself already finished; only this permanent record of it failed to save. clear_progress still runs next so the Admin UI doesn't misreport this as an abandoned install." >&2
+  fi
 }
 
 do_rollback() {
