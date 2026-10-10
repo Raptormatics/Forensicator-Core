@@ -6,6 +6,7 @@ import { isInstanceAdmin } from "@/lib/auth/session";
 import { installedVersion, listBackups, currentProgress } from "@/lib/updates/paths";
 import { getDeltaState } from "@/lib/updates/overlay";
 import { getActivationState } from "@/lib/license/activation";
+import { recordCompletionAuditEvents } from "@/lib/updates/install";
 
 // GET — platform_admin, or org_admin in appliance mode (see
 // isInstanceAdmin). System-level (not per-org), same tier as /licenses.
@@ -17,6 +18,8 @@ export async function GET(req: NextRequest) {
   if (!isInstanceAdmin(actor.role)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
+
+  await recordCompletionAuditEvents();
 
   return NextResponse.json({
     // installedVersion is Core's own version, exactly as before — this

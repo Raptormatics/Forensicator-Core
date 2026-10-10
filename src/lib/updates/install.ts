@@ -7,8 +7,10 @@
  * request, so callers must not await anything after this.
  */
 import { spawn } from "child_process";
+import fs from "fs";
+import path from "path";
 import { prisma } from "@/lib/db/prisma";
-import { UPDATE_SCRIPT } from "./paths";
+import { UPDATE_SCRIPT, BACKUPS_DIR, listBackups } from "./paths";
 
 export type InstallSource = "offline" | "online";
 
@@ -78,4 +80,55 @@ export async function startOverlayInstall(opts: {
 
 export function actorIp(headers: Headers): string | null {
   return headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? headers.get("x-real-ip") ?? null;
+}
+
+/**
+ * The *_started audit rows above are the only part of an update's
+ * lifecycle this app can log synchronously — deploy/forensicator-update.sh
+ * runs out-of-process (spawned detached, specifically to survive this
+ * very process being restarted mid-install) and has no way to call back
+ * in; its actual outcome only ever lands in <backup-dir>/result.json,
+ * read by listBackups(). Without this, the Audit Log would show every
+ * update as perpetually "started" and never record whether it actually
+ * succeeded, failed, or was rolled back.
+ *
+ * Called from the status route, which the Admin UI polls every 2s while
+ * any install is in flight — picks up a newly-resolved backup within one
+ * poll of it finishing. Tracked via a small sentinel file next to
+ * result.json (not a DB query) so this only ever fires once per backup,
+ * consistent with how the rest of the update system already tracks state
+ * on disk rather than in the database (progress file, result.json,
+ * backup-manifest.json).
+ *
+ * No actorId — deliberately: this is the app noticing an outcome, not a
+ * new action by anyone currently signed in. metadata.backupId lets anyone
+ * cross-reference it against that update's own *_started row (which does
+ * have the real actor) if needed.
+ */
+export async function recordCompletionAuditEvents(): Promise<void> {
+  for (const { manifest, result } of listBackups()) {
+    if (!result) continue;
+    const sentinel = path.join(BACKUPS_DIR, manifest.id, ".audit-logged");
+    if (fs.existsSync(sentinel)) continue;
+
+    await prisma.auditLog.create({
+      data: {
+        action: result.success ? "update_completed" : "update_failed",
+        resourceType: "system",
+        result: result.success ? "success" : "failure",
+        severity: result.success ? "info" : "critical",
+        metadata: {
+          backupId: manifest.id,
+          reason: manifest.reason,
+          fromVersion: manifest.fromVersion,
+          toVersion: manifest.toVersion,
+          rolledBack: result.rolledBack,
+          error: result.error,
+        } as never,
+      },
+    });
+    // Best-effort — if this throws, the next poll just retries the write
+    // (harmless duplicate rows beat losing the event entirely).
+    try { fs.writeFileSync(sentinel, new Date().toISOString()); } catch { /* retried next poll */ }
+  }
 }

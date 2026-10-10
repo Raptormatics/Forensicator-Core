@@ -18,6 +18,7 @@ import { NextResponse } from "next/server";
 import { getToken } from "next-auth/jwt";
 import { prisma } from "@/lib/db/prisma";
 import bcrypt from "bcryptjs";
+import { isAppliance } from "@/lib/config/deployment";
 
 export type AuthActor = {
   id:              string;
@@ -45,14 +46,30 @@ export class AuthError extends Error {
 /**
  * Returns a Prisma `where` fragment that restricts records to the actor's orgs.
  *
- * - platform_admin → no restriction (sees everything)
- * - everyone else  → { organizationId: { in: [...actor.organizationIds] } }
- *                    (empty array → matches nothing → sees nothing)
+ * - platform_admin           → no restriction (sees everything)
+ * - org_admin, in appliance  → no restriction either — see below
+ * - everyone else            → { organizationId: { in: [...actor.organizationIds] } }
+ *                              (empty array → matches nothing → sees nothing)
+ *
+ * The appliance case matters beyond investigations/cases/etc (where it's
+ * a no-op anyway — appliance has exactly one org, so "their org only" and
+ * "everything" are the same set): several system-level audit log writes
+ * (update_started, enterprise_overlay_started, enterprise_license_activated,
+ * system_settings_updated — see src/lib/updates/install.ts and friends)
+ * don't set organizationId at all, since they're instance-level events,
+ * not tied to one org. SQL `IN` never matches NULL, so without this, an
+ * org_admin's own audit log view would silently exclude their own
+ * update/license/settings activity — the only admin role an appliance
+ * instance ever has. isAppliance() is hardcoded true in Core (see
+ * deployment.ts) and reads the real DEPLOYMENT_MODE in the Enterprise
+ * overlay, so this stays a no-op for genuine multi-tenant SaaS, where
+ * org_admin must still only see their own org.
  *
  * Use as: `prisma.investigation.findMany({ where: { ...orgWhere(actor), ...rest } })`
  */
 export function orgWhere(actor: AuthActor): { organizationId?: { in: string[] } } {
   if (actor.role === "platform_admin") return {};
+  if (actor.role === "org_admin" && isAppliance()) return {};
   return { organizationId: { in: actor.organizationIds } };
 }
 
