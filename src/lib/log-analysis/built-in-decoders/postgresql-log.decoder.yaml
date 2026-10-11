@@ -1,0 +1,110 @@
+name: decoder/postgresql-log/0
+enabled: true
+
+metadata:
+  title: 'PostgreSQL Server Log Decoder'
+  author: 'Forensicator'
+  date: '2026-06-24'
+  description: >-
+    Decoder for PostgreSQL server logs (log_destination = stderr/syslog).
+    Captures log level, user, database, query statements, connection events,
+    and errors. Useful for detecting unauthorised access, SQL injection
+    attempts, privilege abuse, and lateral movement via database links.
+  references:
+    - 'https://www.postgresql.org/docs/current/runtime-config-logging.html'
+
+source_type: postgresql
+priority: 40
+
+check: >-
+  regex_match($event.original, '\s(LOG|FATAL|ERROR|WARNING|NOTICE|HINT|DETAIL|DEBUG|INFO|PANIC|STATEMENT):[ \t]')
+  AND regex_match($event.original, '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}')
+
+normalize:
+  - map:
+      - event.kind: event
+      - event.category: array_append(host)
+      - event.dataset: postgresql.log
+      - event.outcome: unknown
+      - observer.vendor: PostgreSQL
+      - observer.type: database
+
+  # Timestamp
+  - map:
+      - event.start: regex_extract($event.original, '^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?)')
+
+  # Log level
+  - map:
+      - log.level: downcase(regex_extract($event.original, '\s(LOG|FATAL|ERROR|WARNING|NOTICE|HINT|DETAIL|DEBUG|INFO|PANIC):\s'))
+
+  # PID
+  - map:
+      - process.pid: parse_long(regex_extract($event.original, '\[(\d+)(?:-\d+)?\]'))
+
+  # User and database — format: user@db
+  - map:
+      - user.name: regex_extract($event.original, '(?<!\[)([\w.\-$]+)@([\w.\-$]+)\s+(?:LOG|FATAL|ERROR|WARNING|NOTICE|HINT|DETAIL|DEBUG|INFO|PANIC|STATEMENT):')
+      - db.name: regex_extract($event.original, '(?<!\[)[\w.\-$]+@([\w.\-$]+)\s+(?:LOG|FATAL|ERROR|WARNING|NOTICE|HINT|DETAIL|DEBUG|INFO|PANIC|STATEMENT):')
+
+  # User and database — CSV format: user=X,db=Y
+  - check: regex_match($event.original, 'user=[\w.\-$]+')
+    map:
+      - user.name: regex_extract($event.original, 'user=([\w.\-$]+)')
+      - db.name: regex_extract($event.original, 'db=([\w.\-$]+)')
+
+  # Message body
+  - map:
+      - message: regex_extract($event.original, '(?:LOG|FATAL|ERROR|WARNING|NOTICE|INFO|PANIC|DETAIL|HINT|STATEMENT):[ \t]+(.+)$')
+
+  # Level → outcome mapping
+  - check: string_equal($log.level, 'error') OR string_equal($log.level, 'fatal') OR string_equal($log.level, 'panic')
+    map:
+      - event.type: array_append(error)
+      - event.outcome: failure
+
+  - check: string_equal($log.level, 'log') OR string_equal($log.level, 'info') OR string_equal($log.level, 'notice')
+    map:
+      - event.type: array_append(info)
+
+  # Connection events
+  - check: contains($message, 'connection received')
+    map:
+      - event.action: connection-received
+      - event.type: array_append(start)
+      - source.ip: regex_extract($message, 'host=([\d\.a-fA-F:]+)\s')
+      - source.port: parse_long(regex_extract($message, 'port=(\d+)'))
+
+  - check: contains($message, 'connection authorized')
+    map:
+      - event.action: logged-in
+      - event.category: array_append(authentication)
+      - event.outcome: success
+
+  - check: contains($message, 'disconnection')
+    map:
+      - event.action: logged-out
+      - event.type: array_append(end)
+
+  # Auth failure
+  - check: contains($message, 'authentication failed') OR contains($message, 'password authentication failed')
+    map:
+      - event.action: authentication-failure
+      - event.category: array_append(authentication)
+      - event.outcome: failure
+
+  # SQL statement logging
+  - check: regex_match($event.original, '\sSTATEMENT:[ \t]')
+    map:
+      - event.action: db-query
+
+  - check: exists($user.name)
+    map:
+      - related.user: array_append_unique($user.name)
+
+  - check: exists($source.ip)
+    map:
+      - related.ip: array_append_unique($source.ip)
+
+  # Delete intermediate fields
+  - map:
+      - message: delete()

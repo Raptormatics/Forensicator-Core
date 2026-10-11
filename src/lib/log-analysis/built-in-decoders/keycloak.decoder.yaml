@@ -1,0 +1,92 @@
+name: decoder/keycloak/0
+enabled: true
+
+metadata:
+  title: 'Keycloak Identity Provider JSON Log Decoder'
+  author: 'Forensicator'
+  date: '2026-06-24'
+  description: >-
+    Decoder for Keycloak structured JSON application logs. Captures startup
+    events, user authentication, token issuance, session management, and
+    admin operations. Critical for detecting identity-based attacks: password
+    spraying, session hijacking, and admin privilege abuse.
+  references:
+    - 'https://www.keycloak.org/docs/latest/logging/'
+
+source_type: custom-json
+priority: 45
+
+check: >-
+   exists(service.name) AND exists(event.sequence)
+
+normalize:
+  - map:
+      - event.kind: event
+      - event.dataset: keycloak.log
+      - event.category: array_append(authentication)
+      - event.type: array_append(info)
+      - observer.vendor: Keycloak
+      - observer.product: Keycloak
+      - observer.type: application
+      - log.level: event.original.log.level
+      - log.logger: event.original.log.logger
+      - message: event.original.message
+      - service.name: event.original.service.name
+      - service.version: event.original.service.version
+      - service.environment: event.original.service.environment
+      - host.name: event.original.host.hostname
+      - process.name: event.original.process.name
+      - process.pid: parse_long(event.original.process.pid)
+      - process.thread.id: event.original.process.thread.id
+      - process.thread.name: event.original.process.thread.name
+      - event.sequence: event.original.event.sequence
+
+  # Authentication events
+  - check: contains($message, 'LOGIN') OR contains($message, 'login')
+    map:
+      - event.action: logged-in
+      - event.outcome: success
+
+  - check: contains($message, 'LOGIN_ERROR') OR contains($message, 'login error')
+    map:
+      - event.action: authentication-failure
+      - event.outcome: failure
+
+  - check: contains($message, 'LOGOUT') OR contains($message, 'logout')
+    map:
+      - event.action: logged-out
+      - event.type: array_append(end)
+
+  # Token events
+  - check: contains($message, 'CODE_TO_TOKEN')
+    map:
+      - event.action: token-issued
+
+  - check: contains($message, 'REFRESH_TOKEN')
+    map:
+      - event.action: token-refreshed
+
+  # Admin operations
+  - check: contains($message, 'admin') AND contains($message, 'CREATE')
+    map:
+      - event.category: array_append(iam)
+      - event.type: array_append(created)
+      - event.action: user-created
+
+  - check: contains($message, 'admin') AND contains($message, 'DELETE')
+    map:
+      - event.category: array_append(iam)
+      - event.type: array_append(deleted)
+
+  # Log level → outcome
+  - check: string_equal($log.level, 'ERROR')
+    map:
+      - event.outcome: failure
+
+  - check: string_equal($log.level, 'WARN')
+    map:
+      - event.type: array_append(error)
+
+  # Delete intermediate fields
+  - map:
+      - message: delete()

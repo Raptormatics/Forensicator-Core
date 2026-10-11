@@ -1,0 +1,82 @@
+name: decoder/apache-access/0
+enabled: true
+
+metadata:
+  title: 'Apache HTTP Server Access Log Decoder'
+  author: 'Forensicator'
+  date: '2026-06-24'
+  description: >-
+    Decoder for Apache HTTP Server access logs in Combined Log Format.
+    Extracts client IP, request method, URL, response code, bytes, referrer,
+    and user-agent. Useful for detecting web shells, directory traversal,
+    SQLi probing, and attacker reconnaissance.
+  references:
+    - 'https://httpd.apache.org/docs/2.4/logs.html'
+
+source_type: apache
+priority: 40
+
+check: >-
+  regex_match($event.original, '^\S+ .+ \[.+\] ".+" \d{3} ')
+
+normalize:
+  - map:
+      - event.kind: event
+      - event.category: array_append(web)
+      - event.type: array_append(access)
+      - event.action: http-request
+      - event.dataset: apache.access
+      - service.type: apache
+      - observer.vendor: Apache
+      - observer.type: web
+
+  # Combined Log Format: IP - user [date] "METHOD /path HTTP/1.x" status bytes "referrer" "ua"
+  - map:
+      - source.ip: regex_extract($event.original, '^([\d\.a-fA-F:]+)\s')
+      - user.name: regex_extract($event.original, '^\S+\s+\S+\s+(\S+)\s+\[')
+      - event.start: regex_extract($event.original, '\[([^\]]+)\]')
+      - http.request.method: regex_extract($event.original, '"(\w+)\s')
+      - url.original: regex_extract($event.original, '"\w+\s(\S+)\s')
+      - http.version: regex_extract($event.original, 'HTTP/([\d\.]+)"')
+      - http.response.status_code: parse_long(regex_extract($event.original, '"\s(\d{3})\s'))
+      - http.response.body.bytes: parse_long(regex_extract($event.original, '"\s\d{3}\s(\d+)'))
+      - http.request.referrer: regex_extract($event.original, '"\s\d{3}\s\S+\s"([^"]+)"')
+      - user_agent.original: regex_extract($event.original, '"([^"]+)"\s*$')
+
+  # URL path / query extraction
+  - check: exists($url.original)
+    map:
+      - url.path: regex_extract($url.original, '^([^?#]+)')
+      - url.query: regex_extract($url.original, '\?(.+)$')
+
+  # HTTP outcome
+  - check: regex_match($http.response.status_code, '^[123]\d{2}$')
+    map:
+      - event.outcome: success
+
+  - check: regex_match($http.response.status_code, '^[45]\d{2}$')
+    map:
+      - event.outcome: failure
+
+  # Auth failure
+  - check: string_equal($http.response.status_code, '401')
+    map:
+      - event.category: array_append(authentication)
+
+  # Access denied
+  - check: string_equal($http.response.status_code, '403')
+    map:
+      - event.type: array_append(denied)
+
+  # Drop anonymous user
+  - check: string_equal($user.name, '-')
+    map:
+      - user.name: delete()
+
+  - check: exists($source.ip)
+    map:
+      - related.ip: array_append_unique($source.ip)
+
+  - check: exists($user.name)
+    map:
+      - related.user: array_append_unique($user.name)

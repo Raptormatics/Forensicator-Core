@@ -1,0 +1,112 @@
+name: decoder/cisco-ftd/0
+enabled: true
+
+metadata:
+  title: 'Cisco Firepower Threat Defence (FTD) Decoder'
+  author: 'Forensicator'
+  date: '2026-06-24'
+  description: >-
+    Decoder for Cisco FTD syslog messages (%FTD-severity-code). Handles
+    authentication/VPN events, connection/NAT events, security control
+    access, and Firepower Management Center alerts. FTD combines ASA
+    firewall with next-generation Snort-based IPS.
+  references:
+    - 'https://www.cisco.com/c/en/us/td/docs/security/firepower/Syslogs/fptd_syslog_guide.html'
+
+source_type: firewall
+priority: 46
+
+check: >-
+  contains($event.original, '%FTD-')
+
+normalize:
+  - map:
+      - event.dataset: cisco.ftd
+      - event.kind: event
+      - event.category: array_append(network)
+      - observer.vendor: Cisco
+      - observer.product: FTD
+      - observer.type: firewall
+
+  # Extract severity and message code
+  - map:
+      - event.severity: regex_extract($event.original, '%FTD-(\d)-')
+      - event.code: regex_extract($event.original, '%FTD-\d+-(\d+):')
+      - message: regex_extract($event.original, '%FTD-\d+-\d+:\s+(.+)$')
+      - host.name: regex_extract($event.original, '^[^%]+\s(\S+)\s+%FTD')
+      - source.ip: regex_extract($message, 'SrcIP:\s+([\d\.]+)')
+      - source.port: regex_extract($message, 'SrcPort:\s+(\d+)')
+      - destination.ip: regex_extract($message, 'DstIP:\s+([\d\.]+)')
+      - destination.port: regex_extract($message, 'DstPort:\s+(\d+)')
+      - user.name: regex_extract($message, 'User:\s+([^,]+)')
+      - network.transport: regex_extract($message, 'Protocol:\s+(\w+)')
+      - url.full: regex_extract($message, 'URI:\s+(\S+)')
+
+  # Authentication success
+  - check: string_equal($event.code, '113012') OR string_equal($event.code, '113008') OR string_equal($event.code, '734001')
+    map:
+      - event.action: logged-in
+      - event.category: array_append(authentication)
+      - event.type: array_append(info)
+      - event.outcome: success
+      - user.name: regex_extract($message, 'User:\s+([^,]+)')
+
+  # Authentication failure
+  - check: string_equal($event.code, '113005') OR string_equal($event.code, '113015') OR string_equal($event.code, '611102')
+    map:
+      - event.action: authentication-failure
+      - event.category: array_append(authentication)
+      - event.type: array_append(info)
+      - event.outcome: failure
+      - user.name: regex_extract($message, 'User:\s+([^,]+)')
+
+  # Connection established
+  - check: string_equal($event.code, '302013') OR string_equal($event.code, '302015') OR string_equal($event.code, '750002')
+    map:
+      - event.action: connection-established
+      - event.type: array_append(start)
+      - event.outcome: success
+      - source.ip: regex_extract($message, 'SrcIP:\s+([\d\.]+)')
+      - source.port: regex_extract($message, 'SrcPort:\s+(\d+)')
+      - destination.ip: regex_extract($message, 'DstIP:\s+([\d\.]+)')
+      - destination.port: regex_extract($message, 'DstPort:\s+(\d+)')
+
+  # Connection denied
+  - check: string_equal($event.code, '106001') OR string_equal($event.code, '106023') OR string_equal($event.code, '710003')
+    map:
+      - event.action: connection-denied
+      - event.type: array_append(denied)
+      - event.outcome: failure
+
+  # VPN events
+  - check: string_equal($event.code, '602304') OR string_equal($event.code, '721018')
+    map:
+      - event.action: vpn-disconnected
+      - event.type: array_append(end)
+
+  - check: string_equal($event.code, '721016') OR string_equal($event.code, '113039')
+    map:
+      - event.action: vpn-connected
+      - event.type: array_append(start)
+
+  # IPS/Security alert
+  - check: string_equal($event.code, '430001') OR string_equal($event.code, '430002') OR string_equal($event.code, '430003')
+    map:
+      - event.kind: alert
+      - event.category: array_append(intrusion_detection)
+      - event.type: array_append(info)
+
+  - check: exists($source.ip)
+    map:
+      - related.ip: array_append_unique($source.ip)
+
+  - check: exists($destination.ip)
+    map:
+      - related.ip: array_append_unique($destination.ip)
+
+  - check: exists($user.name)
+    map:
+      - related.user: array_append_unique($user.name)
+
+  - map:
+      - message: delete()

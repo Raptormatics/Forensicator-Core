@@ -1,0 +1,131 @@
+name: decoder/windows-sysmon/0
+enabled: true
+
+metadata:
+  title: 'Windows Sysmon Event Decoder'
+  author: 'Forensicator'
+  date: '2026-06-24'
+  description: >-
+    Decoder for Windows Sysinternals Sysmon events. Covers process creation (1),
+    network connections (3), file creation (11), registry changes (12-14), DNS
+    queries (22), and more. Essential for endpoint forensics and threat hunting.
+  references:
+    - 'https://learn.microsoft.com/en-us/sysinternals/downloads/sysmon'
+
+source_type: windows-event
+priority: 55
+
+check: >-
+  contains($event.original, '<Event xmlns=')
+  AND contains($event.original, 'Microsoft-Windows-Sysmon')
+
+normalize:
+  - map:
+      - event.dataset: sysmon
+      - event.kind: event
+      - observer.vendor: Microsoft/Sysinternals
+      - observer.type: host
+      - host.name: regex_extract($event.original, '<Computer>([^<]+)</Computer>')
+      - event.code: regex_extract($event.original, '<EventID>(\d+)</EventID>')
+      - event.start: regex_extract($event.original, 'SystemTime=''([^'']+)''')
+
+  # Process fields (common across many event types)
+  - map:
+      - process.entity_id: regex_extract($event.original, '<Data Name=.ProcessGuid.>\{([^}]+)\}</Data>')
+      - process.pid: regex_extract($event.original, '<Data Name=.ProcessId.>(\d+)</Data>')
+      - process.executable: regex_extract($event.original, '<Data Name=.Image.>([^<]+)</Data>')
+      - process.command_line: regex_extract($event.original, '<Data Name=.CommandLine.>([^<]+)</Data>')
+      - process.working_directory: regex_extract($event.original, '<Data Name=.CurrentDirectory.>([^<]+)</Data>')
+      - process.parent.entity_id: regex_extract($event.original, '<Data Name=.ParentProcessGuid.>\{([^}]+)\}</Data>')
+      - process.parent.pid: regex_extract($event.original, '<Data Name=.ParentProcessId.>(\d+)</Data>')
+      - process.parent.executable: regex_extract($event.original, '<Data Name=.ParentImage.>([^<]+)</Data>')
+      - process.parent.command_line: regex_extract($event.original, '<Data Name=.ParentCommandLine.>([^<]+)</Data>')
+      - user.name: regex_extract($event.original, '<Data Name=.User.>([^\\<]+\\[^<]+)</Data>')
+
+  # EventID 1: Process Create
+  - check: string_equal($event.code, '1')
+    map:
+      - event.category: array_append(process)
+      - event.type: array_append(start)
+      - event.action: started
+      - process.pe.imphash: regex_extract($event.original, '<Data Name=.Imphash.>([^<]+)</Data>')
+      - file.code_signature.status: regex_extract($event.original, '<Data Name=.Signature.>([^<]+)</Data>')
+
+  # EventID 2: File creation time changed
+  - check: string_equal($event.code, '2')
+    map:
+      - event.category: array_append(file)
+      - event.type: array_append(change)
+      - file.path: regex_extract($event.original, '<Data Name=.TargetFilename.>([^<]+)</Data>')
+
+  # EventID 3: Network connection
+  - check: string_equal($event.code, '3')
+    map:
+      - event.category: array_append(network)
+      - event.type: array_append(start)
+      - event.action: connection-established
+      - destination.ip: regex_extract($event.original, '<Data Name=.DestinationIp.>([^<]+)</Data>')
+      - destination.port: regex_extract($event.original, '<Data Name=.DestinationPort.>(\d+)</Data>')
+      - destination.hostname: regex_extract($event.original, '<Data Name=.DestinationHostname.>([^<]+)</Data>')
+      - source.ip: regex_extract($event.original, '<Data Name=.SourceIp.>([^<]+)</Data>')
+      - source.port: regex_extract($event.original, '<Data Name=.SourcePort.>(\d+)</Data>')
+      - network.transport: regex_extract($event.original, '<Data Name=.Protocol.>([^<]+)</Data>')
+      - related.ip: array_append_unique($source.ip)
+      - related.ip: array_append_unique($destination.ip)
+
+  # EventID 5: Process terminated
+  - check: string_equal($event.code, '5')
+    map:
+      - event.category: array_append(process)
+      - event.type: array_append(end)
+      - event.action: stopped
+
+  # EventID 7: Image loaded (DLL)
+  - check: string_equal($event.code, '7')
+    map:
+      - event.category: array_append(process)
+      - event.type: array_append(change)
+      - file.path: regex_extract($event.original, '<Data Name=.ImageLoaded.>([^<]+)</Data>')
+      - file.code_signature.status: regex_extract($event.original, '<Data Name=.Signed.>([^<]+)</Data>')
+
+  # EventID 8: CreateRemoteThread
+  - check: string_equal($event.code, '8')
+    map:
+      - event.category: array_append(process)
+      - event.type: array_append(change)
+      - event.action: remote-thread-created
+
+  # EventID 10: ProcessAccess
+  - check: string_equal($event.code, '10')
+    map:
+      - event.category: array_append(process)
+      - event.type: array_append(access)
+      - event.action: process-accessed
+
+  # EventID 11: FileCreate
+  - check: string_equal($event.code, '11')
+    map:
+      - event.category: array_append(file)
+      - event.type: array_append(created)
+      - event.action: created
+      - file.path: regex_extract($event.original, '<Data Name=.TargetFilename.>([^<]+)</Data>')
+
+  # EventID 12/13/14: Registry
+  - check: string_equal($event.code, '12') OR string_equal($event.code, '13') OR string_equal($event.code, '14')
+    map:
+      - event.category: array_append(registry)
+      - event.type: array_append(change)
+      - registry.path: regex_extract($event.original, '<Data Name=.TargetObject.>([^<]+)</Data>')
+
+  # EventID 22: DNS query
+  - check: string_equal($event.code, '22')
+    map:
+      - event.category: array_append(network)
+      - event.type: array_append(info)
+      - dns.question.name: regex_extract($event.original, '<Data Name=.QueryName.>([^<]+)</Data>')
+      - dns.resolved_ip: regex_extract($event.original, '<Data Name=.QueryResults.>([^<]+)</Data>')
+
+  # Common related fields
+  - check: exists($user.name)
+    map:
+      - related.user: array_append_unique($user.name)

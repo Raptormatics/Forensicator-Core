@@ -1,0 +1,98 @@
+name: decoder/docker/0
+enabled: true
+
+metadata:
+  title: 'Docker Container Event Decoder'
+  author: 'Forensicator'
+  date: '2026-06-24'
+  description: >-
+    Decoder for Docker daemon event logs in JSON format. Tracks container
+    lifecycle (create/start/stop/kill/destroy), image pulls, and network
+    events. Useful for detecting container escape attempts, unexpected
+    container spawning, and image-level persistence mechanisms.
+  references:
+    - 'https://docs.docker.com/engine/reference/commandline/events/'
+
+source_type: custom-json
+priority: 40
+
+check: >-
+  exists($event.original.docker.Type) AND exists($event.original.docker.Action)
+
+normalize:
+  - map:
+      - event.kind: event
+      - event.dataset: docker.events
+      - event.action: $event.original.docker.Action
+      - event.code: $event.original.docker.Action
+      - orchestrator.resource.type: $event.original.docker.Type
+      - orchestrator.namespace: $event.original.docker.Actor.Attributes.name
+      - container.name: $event.original.docker.Actor.Attributes.name
+      - container.id: $event.original.docker.Actor.ID
+      - container.image.name: $event.original.docker.Actor.Attributes.image
+      - observer.vendor: Docker
+      - observer.type: endpoint
+
+  # Container events
+  - check: string_equal($event.original.docker.Type, 'container')
+    map:
+      - event.category: array_append(process)
+
+  # Image events
+  - check: string_equal($event.original.docker.Type, 'image')
+    map:
+      - event.category: array_append(host)
+
+  # Network events
+  - check: string_equal($event.original.docker.Type, 'network')
+    map:
+      - event.category: array_append(network)
+
+  # Action: pull (image download)
+  - check: string_equal($event.original.docker.Action, 'pull')
+    map:
+      - event.action: package-installed
+      - event.type: array_append(access)
+
+  # Action: create
+  - check: string_equal($event.original.docker.Action, 'create')
+    map:
+      - event.action: created
+      - event.type: array_append(created)
+
+  # Action: start
+  - check: string_equal($event.original.docker.Action, 'start')
+    map:
+      - event.action: started
+      - event.type: array_append(start)
+
+  # Action: stop / kill
+  - check: string_equal($event.original.docker.Action, 'stop') OR string_equal($event.original.docker.Action, 'kill')
+    map:
+      - event.action: stopped
+      - event.type: array_append(end)
+
+  # Action: die (exit, possibly non-zero)
+  - check: string_equal($event.original.docker.Action, 'die')
+    map:
+      - event.action: stopped
+      - event.type: array_append(end)
+
+  # Action: destroy / delete
+  - check: string_equal($event.original.docker.Action, 'destroy') OR string_equal($event.original.docker.Action, 'delete')
+    map:
+      - event.action: deleted
+      - event.type: array_append(deleted)
+
+  # Action: exec_create / exec_start (command execution inside container)
+  - check: starts_with($event.original.docker.Action, 'exec_')
+    map:
+      - event.action: exec-command
+      - event.category: array_append(process)
+      - event.type: array_append(info)
+      - process.command_line: $event.original.docker.Actor.Attributes.execID
+
+  # Privileged container started (security risk)
+  - check: string_equal($event.original.docker.Action, 'start') AND string_equal($event.original.docker.Actor.Attributes.privileged, 'true')
+    map:
+      - event.kind: alert

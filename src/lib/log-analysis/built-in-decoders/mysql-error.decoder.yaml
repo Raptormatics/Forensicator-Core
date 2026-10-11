@@ -1,0 +1,129 @@
+name: decoder/mysql-error/0
+enabled: true
+
+metadata:
+  title: 'MySQL Error Log Decoder'
+  author: 'Forensicator'
+  date: '2026-06-24'
+  description: >-
+    Decoder for MySQL server error log. Captures log level, thread ID,
+    and error messages. Useful for detecting unauthorised query attempts,
+    privilege escalation via UDF, database corruption, and unexpected
+    connection patterns during post-compromise analysis.
+  references:
+    - 'https://dev.mysql.com/doc/refman/8.0/en/error-log.html'
+
+source_type: custom-json
+priority: 40
+
+check: >-
+  regex_match($event.original, '^\d+-\d+-\d+T\S+\s\d+\s+\[') OR
+  regex_match($event.original, '^\d{6}\s+\d+:\d+:\d+\s+\[') OR
+  regex_match($event.original, '^\d{4}-\d{2}-\d{2}\s+\d+:\d+:\d+\s+\d+\s+\[')
+
+normalize:
+  - map:
+      - event.kind: event
+      - event.category: array_append(host)
+      - event.dataset: mysql.error
+      - event.outcome: unknown
+      - service.type: mysql
+      - observer.vendor: MySQL
+      - observer.type: database
+
+  # ISO8601 format: 2024-01-15T10:23:45.123456Z 42 [ERROR] [MY-012345] message
+  - map:
+      - event.start: regex_extract($event.original, '^(\d{4}-\d{2}-\d{2}T[\d:.]+Z?)')
+      - process.thread.id: parse_long(regex_extract($event.original, 'Z?\s+(\d+)\s+\['))
+      - log.level: downcase(regex_extract($event.original, '\[(\w+)\]\s+\['))
+      - event.code: regex_extract($event.original, '\[MY-(\d+)\]')
+      - message: regex_extract($event.original, '\[MY-\d+\]\s+\[?\w+\]?\s+(.+)$')
+
+  # ISO8601 without MY- code: 2016-12-09T12:08:33.335060Z 0 [Warning] message
+  - check: >-
+      regex_match($event.original, '^\d{4}-\d{2}-\d{2}T') AND
+      NOT regex_match($event.original, '\[MY-\d+\]')
+    map:
+      - log.level: downcase(regex_extract($event.original, '\[(\w+)\]'))
+      - message: regex_extract($event.original, '\[\w+\]\s+(.+)$')
+
+  # Legacy date format: 240115 10:23:45 [ERROR] message
+  - check: regex_match($event.original, '^\d{6}\s')
+    map:
+      - log.level: downcase(regex_extract($event.original, '\[(\w+)\]'))
+      - message: regex_extract($event.original, '\[\w+\]\s+(.+)$')
+
+  # Level -> outcome
+  - check: string_equal($log.level, 'error')
+    map:
+      - event.type: array_append(error)
+      - event.outcome: failure
+
+  - check: string_equal($log.level, 'warning')
+    map:
+      - event.type: array_append(info)
+
+  - check: string_equal($log.level, 'note') OR string_equal($log.level, 'system') OR string_equal($log.level, 'information')
+    map:
+      - event.type: array_append(info)
+      - event.outcome: unknown
+
+  # Detect specific high-value events
+  - check: contains($message, 'Access denied')
+    map:
+      - event.category: array_append(authentication)
+      - event.action: authentication-failure
+      - event.outcome: failure
+      - user.name: regex_extract($message, "for user '([^']+)'")
+      - source.ip: regex_extract($message, "from '([^']+)'")
+
+  - check: contains($message, 'Connect') AND contains($message, 'Access denied')
+    map:
+      - event.category: array_append(authentication)
+
+  - check: exists($user.name)
+    map:
+      - related.user: array_append_unique($user.name)
+
+normalize:
+  - map:
+      - event.dataset: mysql.error
+      - event.kind: event
+      - event.category: array_append(database)
+      - service.type: mysql
+      - _tmp.level: regex_extract($event.original, '\[(Warning|Note|Error|System)\]')
+      - process.thread.id: regex_extract($event.original, 'T[\d:.Z]+\s+(\d+)\s+\[')
+      - message: regex_extract($event.original, '\[(?:Warning|Note|Error|System)\]\s+(.*)')
+      - _tmp.user_host: regex_extract($event.original, "Access denied for user '([^']+)'@'([^']+)'")
+      - user.name: regex_extract($event.original, "Access denied for user '([^']+)'@")
+      - source.address: regex_extract($event.original, "@'([^']+)' ")
+      - rule.description: regex_extract($event.original, 'Host\s+\'([^\']+)\'\s+is blocked')
+
+  - check: string_equal($_tmp.level, 'Error')
+    map:
+      - log.level: error
+      - event.severity: 3
+      - event.outcome: failure
+
+  - check: string_equal($_tmp.level, 'Warning')
+    map:
+      - log.level: warning
+      - event.severity: 4
+
+  - check: string_equal($_tmp.level, 'Note') OR string_equal($_tmp.level, 'System')
+    map:
+      - log.level: informational
+      - event.severity: 6
+
+  - check: regex_match($message, 'Access denied')
+    map:
+      - event.category: array_append(authentication)
+      - event.type: array_append(start)
+      - event.outcome: failure
+
+  - check: exists($user.name)
+    map:
+      - related.user: array_append_unique($user.name)
+
+  - map:
+      - _tmp: delete()

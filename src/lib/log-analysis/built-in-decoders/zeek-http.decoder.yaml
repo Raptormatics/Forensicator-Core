@@ -1,0 +1,71 @@
+name: decoder/zeek-http/0
+enabled: true
+
+metadata:
+  title: 'Zeek HTTP Log Decoder'
+  author: 'Forensicator'
+  date: '2026-06-24'
+  description: >-
+    Decoder for Zeek http.log. Records every HTTP request/response observed
+    on the network including URI, method, status, user-agent, and payload
+    sizes. Essential for web-based attack detection and C2 traffic analysis.
+  references:
+    - 'https://docs.zeek.org/en/master/logs/http.html'
+
+source_type: custom-json
+priority: 42
+
+check: >-
+  exists(ts) AND exists(method) AND exists(uri) AND exists(status_code)
+
+normalize:
+  - map:
+      - event.kind: event
+      - event.category: array_append(network)
+      - event.category: array_append(web)
+      - event.type: array_append(access)
+      - event.dataset: zeek.http
+      - event.id: event.original.uid
+      - network.transport: tcp
+      - observer.vendor: Zeek
+      - observer.type: network
+      - source.ip: event.original.id.orig_h
+      - source.port: parse_long(event.original.id.orig_p)
+      - destination.ip: event.original.id.resp_h
+      - destination.port: parse_long(event.original.id.resp_p)
+      - destination.domain: event.original.host
+      - url.domain: event.original.host
+      - http.request.method: event.original.method
+      - http.version: event.original.version
+      - http.request.referrer: event.original.referrer
+      - http.request.body.bytes: parse_long(event.original.request_body_len)
+      - http.response.body.bytes: parse_long(event.original.response_body_len)
+      - http.response.status_code: parse_long(event.original.status_code)
+      - http.response.mime_type: event.original.resp_mime_types
+      - event.reason: event.original.status_msg
+      - url.original: event.original.uri
+      - url.path: event.original.uri
+      - user.name: event.original.username
+      - user_agent.original: event.original.user_agent
+      - related.ip: array_append_unique($source.ip)
+      - related.ip: array_append_unique($destination.ip)
+
+  # Successful response
+  - check: string_equal(event.original.status_code, '200') OR string_equal(event.original.status_code, '201') OR string_equal(event.original.status_code, '204')
+    map:
+      - event.outcome: success
+
+  # Client error / server error
+  - check: (parse_long(event.original.status_code) >= 400)
+    map:
+      - event.outcome: failure
+
+  # Proxy / tunnel detected
+  - check: string_equal(event.original.method, 'CONNECT')
+    map:
+      - event.action: http-tunnel
+      - event.type: array_append(info)
+
+  - check: exists($user.name)
+    map:
+      - related.user: array_append_unique($user.name)

@@ -1,0 +1,81 @@
+name: decoder/zeek-kerberos/0
+enabled: true
+
+metadata:
+  title: 'Zeek Kerberos Log Decoder'
+  author: 'Forensicator'
+  date: '2026-06-24'
+  description: >-
+    Decoder for Zeek kerberos.log. Captures Kerberos AS-REQ, TGS-REQ, and
+    their responses including success/failure and error codes. Critical for
+    detecting pass-the-ticket, AS-REP roasting, Kerberoasting, and golden
+    ticket attacks.
+  references:
+    - 'https://docs.zeek.org/en/master/logs/kerberos.html'
+
+source_type: custom-json
+priority: 42
+
+check: >-
+  exists(ts) AND exists(request_type)
+
+normalize:
+  - map:
+      - event.kind: event
+      - event.category: array_append(network)
+      - event.category: array_append(authentication)
+      - event.type: array_append(start)
+      - event.dataset: zeek.kerberos
+      - event.id: event.original.uid
+      - network.transport: tcp
+      - network.protocol: kerberos
+      - observer.vendor: Zeek
+      - observer.type: network
+      - source.ip: event.original.id.orig_h
+      - source.port: parse_long(event.original.id.orig_p)
+      - destination.ip: event.original.id.resp_h
+      - destination.port: parse_long(event.original.id.resp_p)
+      - event.code: event.original.request_type
+      - network.application: event.original.service
+      - related.ip: array_append_unique($source.ip)
+      - related.ip: array_append_unique($destination.ip)
+
+  - check: exists(event.original.error_code)
+    map:
+      - error.code: event.original.error_code
+      - error.message: event.original.error_msg
+
+  - check: exists(event.original.cipher)
+    map:
+      - event.reason: event.original.cipher
+
+  # Extract user and domain from client field (e.g. "admin/DOMAIN.LOCAL")
+  - check: exists(event.original.client)
+    map:
+      - user.name: regex_extract(event.original.client, '^([^/]+)')
+      - user.domain: regex_extract(event.original.client, '/(.+)$')
+
+  - check: exists($user.name)
+    map:
+      - related.user: array_append_unique($user.name)
+
+  # Auth success
+  - check: string_equal(event.original.success, 'true')
+    map:
+      - event.outcome: success
+      - event.action: kerberos-authenticated
+
+  # Auth failure
+  - check: string_equal(event.original.success, 'false')
+    map:
+      - event.outcome: failure
+      - event.action: kerberos-failed
+
+  - check: not_exists($event.outcome)
+    map:
+      - event.outcome: unknown
+
+  # AS-REP without pre-auth (AS-REP roasting indicator)
+  - check: string_equal(event.original.request_type, 'AS') AND string_equal(event.original.error_code, 'KDC_ERR_PREAUTH_REQUIRED')
+    map:
+      - event.action: kerberos-pre-auth-required

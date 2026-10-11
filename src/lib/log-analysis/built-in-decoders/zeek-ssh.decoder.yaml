@@ -1,0 +1,58 @@
+name: decoder/zeek-ssh/0
+enabled: true
+
+metadata:
+  title: 'Zeek SSH Log Decoder'
+  author: 'Forensicator'
+  date: '2026-06-24'
+  description: >-
+    Decoder for Zeek ssh.log. Records SSH connection attempts and outcomes
+    including auth success/failure, client/server versions, and cipher
+    algorithms. Critical for detecting brute-force attacks and unauthorized
+    remote access.
+  references:
+    - 'https://docs.zeek.org/en/master/logs/ssh.html'
+
+source_type: custom-json
+priority: 42
+
+check: >-
+  exists(ts) AND exists(auth_attempts)
+
+normalize:
+  - map:
+      - event.kind: event
+      - event.category: array_append(network)
+      - event.type: array_append(connection)
+      - event.dataset: zeek.ssh
+      - event.id: event.original.uid
+      - network.transport: tcp
+      - network.protocol: ssh
+      - source.ip: event.original.id.orig_h
+      - source.port: parse_long(event.original.id.orig_p)
+      - destination.ip: event.original.id.resp_h
+      - destination.port: parse_long(event.original.id.resp_p)
+      - user_agent.original: event.original.client
+      - observer.product: event.original.server
+      - network.protocol: event.original.version
+      - tls.cipher: event.original.cipher_alg
+      - related.hash: event.original.host_key
+      - related.ip: array_append_unique($source.ip)
+      - related.ip: array_append_unique($destination.ip)
+
+  # Auth outcome
+  - check: string_equal(event.original.auth_success, 'true')
+    map:
+      - event.action: logged-in
+      - event.outcome: success
+      - event.type: array_append(info)
+
+  - check: string_equal(event.original.auth_success, 'false')
+    map:
+      - event.action: authentication-failure
+      - event.outcome: failure
+      - event.type: array_append(info)
+
+  - check: not_exists($event.outcome)
+    map:
+      - event.outcome: unknown

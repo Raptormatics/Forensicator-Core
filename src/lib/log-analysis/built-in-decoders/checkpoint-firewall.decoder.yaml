@@ -1,0 +1,89 @@
+name: decoder/checkpoint-firewall/0
+enabled: true
+
+metadata:
+  title: 'Check Point Firewall Log Decoder'
+  author: 'Forensicator'
+  date: '2026-06-24'
+  description: >-
+    Decoder for Check Point firewall logs exported via the Log Exporter in
+    syslog format. Handles traffic, VPN, threat prevention, and audit logs.
+    Used in enterprise perimeter and data centre security architectures.
+  references:
+    - 'https://sc1.checkpoint.com/documents/R81/WebAdminGuides/EN/CP_R81_LoggingAndMonitoring_AdminGuide/'
+
+source_type: firewall
+priority: 45
+
+check: >-
+  contains($event.original, 'CheckPoint') AND contains($event.original, '[action:')
+
+normalize:
+  - map:
+      - event.dataset: checkpoint.firewall
+      - event.kind: event
+      - event.outcome: unknown
+      - observer.vendor: Check Point
+      - observer.type: firewall
+
+  # Extract the key=value payload
+  - map:
+      - _kv: parse_key_value($event.original, ':', ';')
+      - source.ip: get_key_in($_kv, 'src')
+      - source.port: parse_long(get_key_in($_kv, 's_port'))
+      - destination.ip: get_key_in($_kv, 'dst')
+      - destination.port: parse_long(get_key_in($_kv, 'service'))
+      - network.transport: downcase(get_key_in($_kv, 'proto'))
+      - event.code: get_key_in($_kv, 'action')
+      - event.code: get_key_in($_kv, 'rule_action')
+      - rule.id: get_key_in($_kv, 'rule_uid')
+      - rule.name: get_key_in($_kv, 'rule_name')
+      - rule.ruleset: get_key_in($_kv, 'policy_name')
+      - message: get_key_in($_kv, 'message')
+      - user.name: get_key_in($_kv, 'src_user_name')
+      - host.name: get_key_in($_kv, 'machine')
+      - observer.name: get_key_in($_kv, 'device_name')
+      - observer.product: get_key_in($_kv, 'product')
+      - event.id: get_key_in($_kv, 'loguid')
+      - event.reason: get_key_in($_kv, 'reason')
+      - http.request.method: get_key_in($_kv, 'methods')
+      - event.severity: parse_long(get_key_in($_kv, 'severity'))
+      - event.category: array_append(network)
+
+  # Action → outcome mapping
+  - check: string_equal($event.code, 'Accept') OR string_equal($event.code, 'allow')
+    map:
+      - event.type: array_append(allowed)
+      - event.outcome: success
+
+  - check: string_equal($event.code, 'Drop') OR string_equal($event.code, 'Reject') OR string_equal($event.code, 'deny')
+    map:
+      - event.action: connection-denied
+      - event.type: array_append(denied)
+      - event.outcome: failure
+
+  # VPN events
+  - check: contains($event.original, 'VPN') OR contains($event.original, 'vpn')
+    map:
+      - event.category: array_append(network)
+
+  # Audit events
+  - check: string_equal($event.code, 'Accept') AND exists(get_key_in($_kv, 'audit_status'))
+    map:
+      - event.category: array_append(iam)
+      - event.outcome: get_key_in($_kv, 'audit_status')
+
+  - check: exists($source.ip)
+    map:
+      - related.ip: array_append_unique($source.ip)
+
+  - check: exists($destination.ip)
+    map:
+      - related.ip: array_append_unique($destination.ip)
+
+  - check: exists($user.name)
+    map:
+      - related.user: array_append_unique($user.name)
+
+  - map:
+      - _kv: delete()

@@ -1,0 +1,112 @@
+name: decoder/suricata/0
+enabled: true
+
+metadata:
+  title: 'Suricata IDS/IPS EVE JSON Decoder'
+  author: 'Forensicator'
+  date: '2026-06-24'
+  description: >-
+    Decoder for Suricata's EVE JSON log format. Handles alert, flow, http,
+    dns, tls, and file events. Suricata is an open-source network threat
+    detection engine providing IDS, IPS, and NSM capabilities.
+  references:
+    - 'https://suricata.readthedocs.io/en/latest/output/eve/eve-json-format.html'
+
+source_type: custom-json
+priority: 45
+
+check: >-
+  exists(timestamp) AND exists(event_type) AND exists(flow_id)
+
+normalize:
+  - map:
+      - event.kind: event
+      - event.category: array_append(network)
+      - event.dataset: suricata
+      - observer.vendor: Suricata
+      - observer.type: ids
+      - event.id: event.original.flow_id
+      - event.severity: parse_long(event.original.alert.severity)
+      - message: event.original.alert.category
+      - destination.ip: event.original.dest_ip
+      - destination.port: parse_long(event.original.dest_port)
+      - destination.bytes: event.original.flow.bytes_toclient
+      - destination.packets: event.original.flow.pkts_toclient
+      - source.ip: event.original.src_ip
+      - source.port: parse_long(event.original.src_port)
+      - source.bytes: event.original.flow.bytes_toserver
+      - source.packets: event.original.flow.pkts_toserver
+      - network.transport: downcase(event.original.proto)
+      - http.request.method: event.original.http.http_method
+      - http.request.referrer: event.original.http.http_refer
+      - http.response.body.bytes: event.original.http.length
+      - http.response.status_code: parse_long(event.original.http.status)
+      - http.version: event.original.http.protocol
+      - user_agent.original: event.original.http.http_user_agent
+      - url.original: event.original.http.url
+      - file.name: event.original.alert.metadata.filename
+      - file.path: event.original.fileinfo.filename
+      - file.size: event.original.fileinfo.size
+      - tls.client.ja3: event.original.tls.client.ja3
+      - tls.server.ja3s: event.original.tls.server.ja3s
+      - related.ip: array_append_unique($source.ip)
+      - related.ip: array_append_unique($destination.ip)
+      - message: delete()
+
+  # Alert events
+  - check: string_equal(event.original.event_type, 'alert')
+    map:
+      - event.kind: alert
+      - event.category: array_append(intrusion_detection)
+      - event.action: alert-triggered
+      - event.type: array_append(info)
+      - rule.id: event.original.alert.signature_id
+      - rule.name: event.original.alert.signature
+      - event.severity: parse_long(event.original.alert.severity)
+
+  # HTTP events
+  - check: string_equal(event.original.event_type, 'http')
+    map:
+      - event.action: http-request
+      - event.type: array_append(info)
+      - event.category: array_append(web)
+      - destination.domain: event.original.http.hostname
+
+  # DNS query events
+  - check: string_equal(event.original.event_type, 'dns') AND string_equal(event.original.dns.type, 'query')
+    map:
+      - event.action: dns-query
+      - event.type: array_append(info)
+      - dns.question.name: event.original.dns.rrname
+      - dns.question.type: event.original.dns.rrtype
+
+  # DNS answer events
+  - check: string_equal(event.original.event_type, 'dns') AND string_equal(event.original.dns.type, 'answer')
+    map:
+      - event.action: dns-response
+      - event.type: array_append(info)
+      - dns.question.name: event.original.dns.rrname
+      - dns.answers: event.original.dns.rdata
+
+  # TLS events
+  - check: string_equal(event.original.event_type, 'tls')
+    map:
+      - event.action: tls-session
+      - event.type: array_append(info)
+      - tls.server.subject: event.original.tls.subject
+      - tls.version: event.original.tls.version
+
+  # Flow events
+  - check: string_equal(event.original.event_type, 'flow')
+    map:
+      - event.action: network-flow
+      - event.type: array_append(info)
+
+  # File events
+  - check: string_equal(event.original.event_type, 'fileinfo')
+    map:
+      - event.category: array_append(file)
+      - event.type: array_append(info)
+      - file.hash.sha256: event.original.fileinfo.sha256
+      - file.hash.md5: event.original.fileinfo.md5
+      - file.mime_type: event.original.fileinfo.magic

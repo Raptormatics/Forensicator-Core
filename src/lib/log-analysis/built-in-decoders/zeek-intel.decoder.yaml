@@ -1,0 +1,78 @@
+name: decoder/zeek-intel/0
+enabled: true
+
+metadata:
+  title: 'Zeek Threat Intelligence Match Decoder'
+  author: 'Forensicator'
+  date: '2026-06-24'
+  description: >-
+    Decoder for Zeek intel.log. Generated when an observed indicator matches
+    the Zeek Intelligence Framework feed. Provides enrichment data linking
+    network events to known malicious IPs, URLs, file hashes, domain names,
+    and email addresses.
+  references:
+    - 'https://docs.zeek.org/en/master/frameworks/intel.html'
+
+source_type: custom-json
+priority: 50
+
+check: >-
+  exists(ts) AND exists(matched)
+
+normalize:
+  - map:
+      - event.kind: enrichment
+      - event.category: array_append(threat)
+      - event.type: array_append(info)
+      - event.dataset: zeek.intel
+      - event.id: event.original.uid
+      - source.ip: event.original.id.orig_h
+      - source.port: parse_long(event.original.id.orig_p)
+      - destination.ip: event.original.id.resp_h
+      - destination.port: parse_long(event.original.id.resp_p)
+      - threat.indicator.name: event.original.seen.indicator
+      - threat.indicator.type: event.original.seen.indicator_type
+      - labels.threat.sources: event.original.sources
+      - threat.indicator.matched: event.original.matched[0]
+      - observer.name: event.original.seen.node
+      - observer.vendor: Zeek
+      - observer.type: network
+      - event.outcome: unknown
+      - related.ip: array_append_unique($source.ip)
+      - related.ip: array_append_unique($destination.ip)
+
+  # IP indicator
+  - check: string_equal(event.original.seen.indicator_type, 'Intel::ADDR')
+    map:
+      - threat.indicator.ip: event.original.seen.indicator
+      - threat.indicator.type: ipv4-addr
+
+  # URL indicator
+  - check: string_equal(event.original.seen.indicator_type, 'Intel::URL')
+    map:
+      - threat.indicator.type: url
+      - url.original: event.original.seen.indicator
+
+  # Domain indicator
+  - check: string_equal(event.original.seen.indicator_type, 'Intel::DOMAIN')
+    map:
+      - threat.indicator.type: domain-name
+      - threat.indicator.domain: event.original.seen.indicator
+
+  # Email indicator
+  - check: string_equal(event.original.seen.indicator_type, 'Intel::EMAIL')
+    map:
+      - threat.indicator.type: email-addr
+      - threat.indicator.email.address: event.original.seen.indicator
+
+  # File hash indicator
+  - check: string_equal(event.original.seen.indicator_type, 'Intel::FILE_HASH')
+    map:
+      - threat.indicator.type: file
+      - threat.indicator.file.hash.sha256: event.original.seen.indicator
+
+  # File name indicator
+  - check: string_equal(event.original.seen.indicator_type, 'Intel::FILE_NAME')
+    map:
+      - threat.indicator.type: file
+      - threat.indicator.file.name: event.original.seen.indicator

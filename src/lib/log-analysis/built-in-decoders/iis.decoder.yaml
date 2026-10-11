@@ -1,0 +1,75 @@
+name: decoder/iis/0
+enabled: true
+
+metadata:
+  title: 'Microsoft IIS W3C Access Log Decoder'
+  author: 'Forensicator'
+  date: '2026-06-24'
+  description: >-
+    Decoder for Microsoft IIS web server access logs in W3C Extended Log
+    Format. Extracts request method, URL, status, bytes, client IP, and
+    user-agent. Critical for detecting exploitation of IIS-hosted applications
+    and Windows web server compromise.
+  references:
+    - 'https://learn.microsoft.com/en-us/iis/application-frameworks/scenario-build-an-aspnet-website-on-iis/'
+
+source_type: iis
+priority: 40
+
+check: >-
+  regex_match($event.original, '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} ')
+  AND NOT starts_with($event.original, '#')
+
+normalize:
+  - map:
+      - event.kind: event
+      - event.category: array_append(web)
+      - event.type: array_append(access)
+      - event.action: http-request
+      - event.dataset: iis.access
+      - service.type: iis
+      - observer.vendor: Microsoft
+      - observer.type: web
+
+  - map:
+      - event.start: regex_extract($event.original, '^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})')
+      - http.request.method: upcase(regex_extract($event.original, '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\s+\S+){0,3}\s+(GET|POST|PUT|DELETE|HEAD|OPTIONS|PATCH|CONNECT|TRACE)\s'))
+      - url.original: regex_extract($event.original, '(?:GET|POST|PUT|DELETE|HEAD|OPTIONS|PATCH|CONNECT|TRACE)\s+(\S+)\s')
+      - source.port: regex_extract($event.original, '(?:GET|POST|PUT|DELETE|HEAD|OPTIONS|PATCH|CONNECT|TRACE)\s+\S+\s+\S+\s+(\d+)\s')
+      - source.ip: regex_extract($event.original, '(?:GET|POST|PUT|DELETE|HEAD|OPTIONS|PATCH|CONNECT|TRACE)\s+\S+\s+\S+\s+\d+\s+\S+\s+(\S+)\s')
+      - destination.ip: regex_extract($event.original, '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\s+\S+\s+\S+\s+([\d\.]+|::[\dA-Fa-f:]+|[0-9A-Fa-f:]+)\s+(?:GET|POST|PUT|DELETE|HEAD|OPTIONS|PATCH|CONNECT|TRACE)')
+      - http.response.status_code: regex_extract($event.original, '\s(\d{3})\s+\d+\s+\d+\s')
+      - event.duration: regex_extract($event.original, '\s(\d+)\s*$')
+
+  # URL path and query extraction
+  - check: exists($url.original)
+    map:
+      - url.path: regex_extract($url.original, '^([^?]+)')
+      - url.query: regex_extract($url.original, '\?(.+)$')
+
+  # HTTP outcome
+  - check: regex_match($http.response.status_code, '^[123]\d{2}$')
+    map:
+      - event.outcome: success
+
+  - check: regex_match($http.response.status_code, '^[45]\d{2}$')
+    map:
+      - event.outcome: failure
+
+  # Auth failure
+  - check: string_equal($http.response.status_code, '401')
+    map:
+      - event.category: array_append(authentication)
+      - event.action: authentication-failure
+
+  # Forbidden
+  - check: string_equal($http.response.status_code, '403')
+    map:
+      - event.type: array_append(denied)
+      - event.action: http-blocked
+
+  - check: exists($source.ip)
+    map:
+      - related.ip: array_append_unique($source.ip)
+      - event.category: array_append(network)
+      - event.type: array_append(info)

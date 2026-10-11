@@ -1,0 +1,40 @@
+name: decoder/pfsense/0
+enabled: true
+
+metadata:
+  title: pfSense Firewall
+  author: Forensicator
+  date: '2026-06-24'
+  description: >-
+    pfSense filterlog CSV format.
+    Example: Jun 24 10:00:00 pfsense filterlog[1234]: 41,,,1234567890,em0,match,block,in,4,...,tcp,10.0.0.5,192.168.1.1,1234,80,...
+
+check: >-
+  contains($event.original, 'filterlog')
+
+parse|event.original:
+  - '<~> filterlog[<~>]: <~>,<~>,<~>,<~>,<network.interface>,<~>,<_action>,<network.direction>,<~>,<~>,<~>,<~>,<~>,<network.transport>,<source.ip>,<destination.ip>'
+
+normalize:
+  - map:
+      - event.dataset: pfsense.firewall
+      - event.kind: event
+      - event.category: array_append(network)
+      - observer.product: pfSense
+      - observer.vendor: Netgate
+  - check: string_equal($_action, 'pass')
+    map:
+      - event.type: array_append(allowed)
+      - event.outcome: success
+  - check: string_equal($_action, 'block')
+    map:
+      - event.type: array_append(denied)
+      - event.outcome: failure
+  - check: exists($source.ip)
+    map:
+      - related.ip: array_append_unique($source.ip)
+  - check: exists($destination.ip)
+    map:
+      - related.ip: array_append_unique($destination.ip)
+  - map:
+      - _action: delete()

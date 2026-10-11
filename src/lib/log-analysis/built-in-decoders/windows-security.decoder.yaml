@@ -1,0 +1,125 @@
+name: decoder/windows-security/0
+enabled: true
+
+metadata:
+  title: 'Windows Security Event Log Decoder'
+  author: 'Forensicator'
+  date: '2026-06-24'
+  description: >-
+    Decoder for Windows Security channel events. Covers logon/logoff
+    (4624/4625/4634), privilege use (4672), account management (4720-4738),
+    object access, and policy changes. Critical for IR authentication triage.
+  references:
+    - 'https://learn.microsoft.com/en-us/windows/security/threat-protection/auditing/security-auditing-overview'
+
+source_type: windows-event
+priority: 50
+
+check: >-
+  contains($event.original, '<Event xmlns=')
+  AND contains($event.original, '<Channel>Security</Channel>')
+
+normalize:
+  - map:
+      - event.dataset: windows.security
+      - event.kind: event
+      - event.category: array_append(authentication)
+      - observer.vendor: Microsoft
+      - observer.type: host
+      - host.name: regex_extract($event.original, '<Computer>([^<]+)</Computer>')
+      - event.code: regex_extract($event.original, '<EventID>(\d+)</EventID>')
+      - event.start: regex_extract($event.original, 'SystemTime=''([^'']+)''')
+      - process.pid: regex_extract($event.original, '<Data Name=.ProcessId.>\S*?(\d+)\S*?</Data>')
+
+  # User fields
+  - map:
+      - user.name: regex_extract($event.original, '<Data Name=.TargetUserName.>([^<]+)</Data>')
+      - user.domain: regex_extract($event.original, '<Data Name=.TargetDomainName.>([^<]+)</Data>')
+      - user.id: regex_extract($event.original, '<Data Name=.TargetUserSid.>([^<]+)</Data>')
+
+  # Logon success
+  - check: string_equal($event.code, '4624')
+    map:
+      - event.action: logged-in
+      - event.type: array_append(start)
+      - event.outcome: success
+      - source.ip: regex_extract($event.original, '<Data Name=.IpAddress.>([^<]+)</Data>')
+      - source.port: regex_extract($event.original, '<Data Name=.IpPort.>(\d+)</Data>')
+      - labels.logon_type: regex_extract($event.original, '<Data Name=.LogonType.>(\d+)</Data>')
+
+  # Logon failure
+  - check: string_equal($event.code, '4625')
+    map:
+      - event.action: authentication-failure
+      - event.type: array_append(info)
+      - event.outcome: failure
+      - source.ip: regex_extract($event.original, '<Data Name=.IpAddress.>([^<]+)</Data>')
+
+  # Logoff
+  - check: string_equal($event.code, '4634') OR string_equal($event.code, '4647')
+    map:
+      - event.action: logged-out
+      - event.type: array_append(end)
+      - event.outcome: success
+
+  # Special privileges assigned
+  - check: string_equal($event.code, '4672')
+    map:
+      - event.action: logged-in
+      - event.category: array_append(iam)
+      - event.type: array_append(info)
+      - event.outcome: success
+
+  # Account created
+  - check: string_equal($event.code, '4720')
+    map:
+      - event.action: user-created
+      - event.category: array_append(iam)
+      - event.type: array_append(created)
+      - event.outcome: success
+
+  # Account deleted
+  - check: string_equal($event.code, '4726')
+    map:
+      - event.action: user-deleted
+      - event.category: array_append(iam)
+      - event.type: array_append(deleted)
+      - event.outcome: success
+
+  # Account enabled/disabled
+  - check: string_equal($event.code, '4722') OR string_equal($event.code, '4725')
+    map:
+      - event.category: array_append(iam)
+      - event.type: array_append(change)
+
+  # Password change
+  - check: string_equal($event.code, '4723') OR string_equal($event.code, '4724')
+    map:
+      - event.action: password-changed
+      - event.category: array_append(iam)
+      - event.type: array_append(change)
+
+  # Group membership change
+  - check: string_equal($event.code, '4728') OR string_equal($event.code, '4732') OR string_equal($event.code, '4756')
+    map:
+      - event.action: added-to-group
+      - event.category: array_append(iam)
+      - event.type: array_append(change)
+
+  # Process creation
+  - check: string_equal($event.code, '4688')
+    map:
+      - event.action: process-started
+      - event.category: array_append(process)
+      - event.type: array_append(start)
+      - process.executable: regex_extract($event.original, '<Data Name=.NewProcessName.>([^<]+)</Data>')
+      - process.command_line: regex_extract($event.original, '<Data Name=.CommandLine.>([^<]+)</Data>')
+      - process.parent.executable: regex_extract($event.original, '<Data Name=.ParentProcessName.>([^<]+)</Data>')
+
+  # Related fields
+  - check: exists($source.ip)
+    map:
+      - related.ip: array_append_unique($source.ip)
+  - check: exists($user.name)
+    map:
+      - related.user: array_append_unique($user.name)

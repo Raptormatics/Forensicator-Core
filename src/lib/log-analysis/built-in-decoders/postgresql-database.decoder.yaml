@@ -1,0 +1,22 @@
+name: decoder/postgresql-database/0
+label: PostgreSQL Database Activity
+description: >
+  Decodes PostgreSQL pg_stat_database JSON records. Expects a JSON log line
+  that contains the fields datid, blk_read_time, and xact_commit produced by
+  a SELECT row_to_json(s) FROM pg_stat_database s query.
+source_type: postgresql
+priority: 50
+
+# Presence of datid + blk_read_time + xact_commit uniquely identifies
+# pg_stat_database rows (versus other JSON sources).
+check: exists(datid) AND exists(blk_read_time) AND exists(xact_commit)
+
+normalize:
+  - map:
+      - rollback:          event.original.xact_rollback
+      - start.date:        event.original.stats_reset
+      - service.name:      event.original.datname
+      - write.time:        event.original.blk_write_time
+      - event.category:    array_append(database)
+      - event.type:        array_append(info)
+      - event.outcome:     unknown

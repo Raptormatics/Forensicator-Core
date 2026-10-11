@@ -1,0 +1,48 @@
+name: decoder/nginx-ingress-controller-error/0
+enabled: true
+
+metadata:
+  title: 'Nginx Ingress Controller Error Log'
+  author: 'Forensicator'
+  date: '2026-06-24'
+  description: >-
+    Decoder for Nginx Ingress Controller error/info logs in klog format.
+    Format: <level><MMDD> <HH:MM:SS.us>  <pid> <file>:<line>] <message>
+    Example: I1215 14:15:13.816598       8 round_trippers.go:423] curl -k ...
+
+check: >-
+  regex_match($event.original, '^[IWEF][0-9]{4} ')
+
+normalize:
+  - map:
+      - event.dataset: nginx-ingress-controller.error
+      - event.kind: event
+      - event.category: array_append(web)
+      - event.outcome: unknown
+      - observer.product: Nginx Ingress Controller
+      - observer.vendor: Kubernetes
+      - service.type: nginx
+      - data_stream.dataset: nginx-ingress-controller.error
+      - data_stream.type: logs
+      - _level: regex_extract($event.original, '^([IWEF])')
+      - log.origin.file.name: regex_extract($event.original, '[0-9]+ ([^ :]+):[0-9]+\]')
+      - log.origin.file.line: regex_extract($event.original, '[0-9]+ [^ :]+:([0-9]+)\]')
+      - message: regex_extract($event.original, '\] (.+)')
+  - check: string_equal($_level, 'I')
+    map:
+      - log.level: info
+      - event.type: array_append(info)
+  - check: string_equal($_level, 'W')
+    map:
+      - log.level: warning
+      - event.type: array_append(info)
+  - check: string_equal($_level, 'E')
+    map:
+      - log.level: error
+      - event.type: array_append(error)
+  - check: string_equal($_level, 'F')
+    map:
+      - log.level: critical
+      - event.type: array_append(error)
+  - map:
+      - _level: delete()

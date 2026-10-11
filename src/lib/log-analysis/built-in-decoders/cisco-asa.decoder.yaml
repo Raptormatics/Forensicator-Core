@@ -1,0 +1,153 @@
+name: decoder/cisco-asa/0
+enabled: true
+
+metadata:
+  title: 'Cisco ASA Syslog Decoder'
+  author: 'Forensicator'
+  date: '2026-06-24'
+  description: >-
+    Decoder for Cisco ASA (Adaptive Security Appliance) syslog messages.
+    Covers connection events (302013/302014/302015/302016), access list
+    denials (106001/106006/106023), authentication (113008/113015),
+    and VPN sessions (716002/716059).
+  references:
+    - 'https://www.cisco.com/c/en/us/td/docs/security/asa/syslog/b_syslog.html'
+
+source_type: firewall
+priority: 45
+
+check: >-
+  contains($event.original, '%ASA-')
+  AND NOT contains($event.original, '%FTD')
+
+normalize:
+  - map:
+      - event.dataset: cisco.asa
+      - event.kind: event
+      - event.category: array_append(network)
+      - observer.vendor: Cisco
+      - observer.product: ASA
+      - observer.type: firewall
+
+  # Extract severity and message code from %ASA-<severity>-<code>
+  - map:
+      - event.severity: regex_extract($event.original, '%ASA-(\d)-')
+      - event.code: regex_extract($event.original, '%ASA-\d-(\d+):')
+      - message: regex_extract($event.original, '%ASA-\d-\d+:\s+(.+)$')
+      - host.name: regex_extract($event.original, '^[^%]+\s(\S+)\s+%ASA')
+
+  # Connection established (302013, 302015)
+  - check: string_equal($event.code, '302013') OR string_equal($event.code, '302015')
+    map:
+      - event.action: connection-established
+      - event.type: array_append(start)
+      - event.outcome: success
+      - network.transport: regex_extract($message, 'Built\s+(\w+)\s+connection')
+      - source.ip: regex_extract($message, 'for\s+\S+:([\d\.]+)/\d+')
+      - source.port: regex_extract($message, 'for\s+\S+:[\d\.]+/(\d+)')
+      - destination.ip: regex_extract($message, 'to\s+\S+:([\d\.]+)/\d+')
+      - destination.port: regex_extract($message, 'to\s+\S+:[\d\.]+/(\d+)')
+
+  # Connection closed (302014, 302016)
+  - check: string_equal($event.code, '302014') OR string_equal($event.code, '302016')
+    map:
+      - event.action: connection-closed
+      - event.type: array_append(end)
+      - event.outcome: success
+
+  # Access list deny (106001, 106006, 106023)
+  - check: string_equal($event.code, '106001') OR string_equal($event.code, '106006') OR string_equal($event.code, '106023')
+    map:
+      - event.action: connection-denied
+      - event.type: array_append(denied)
+      - event.outcome: failure
+      - source.ip: regex_extract($message, 'src\s+(?:\S+:)*([\d\.]+)')
+      - source.port: regex_extract($message, 'src\s+(?:\S+:)*[\d\.]+/(\d+)')
+      - destination.ip: regex_extract($message, 'dst\s+(?:\S+:)*([\d\.]+)')
+      - destination.port: regex_extract($message, 'dst\s+(?:\S+:)*[\d\.]+/(\d+)')
+
+  # Access list permit/deny log (106100)
+  - check: string_equal($event.code, '106100')
+    map:
+      - event.action: access-list-logged
+      - event.type: array_append(info)
+      - network.transport: regex_extract($message, 'permitted|denied\s+(\w+)\s+')
+      - source.ip: regex_extract($message, '\s\S+/([\d\.]+)\(\d+\)\s+->')
+      - source.port: regex_extract($message, '\s\S+/[\d\.]+\((\d+)\)\s+->')
+      - destination.ip: regex_extract($message, '->\s+\S+/([\d\.]+)\(')
+      - destination.port: regex_extract($message, '->\s+\S+/[\d\.]+\((\d+)\)')
+
+  # Authentication success (113004, 113008, 113009, 113012, 611101)
+  - check: >-
+      string_equal($event.code, '113004') OR
+      string_equal($event.code, '113008') OR
+      string_equal($event.code, '113009') OR
+      string_equal($event.code, '113012') OR
+      string_equal($event.code, '611101')
+    map:
+      - event.action: logged-in
+      - event.category: array_append(authentication)
+      - event.type: array_append(info)
+      - event.outcome: success
+
+  - check: >-
+      string_equal($event.code, '113004') OR
+      string_equal($event.code, '113008') OR
+      string_equal($event.code, '113009') OR
+      string_equal($event.code, '113012')
+    map:
+      - user.name: regex_extract($message, '[Uu]ser\s*[=<]\s*([^:>,\s]+)')
+
+  - check: string_equal($event.code, '611101')
+    map:
+      - user.name: regex_extract($message, 'Uname:\s+(\S+)')
+
+  # Authentication failure (113005, 113015, 611102)
+  - check: >-
+      string_equal($event.code, '113005') OR
+      string_equal($event.code, '113015') OR
+      string_equal($event.code, '611102')
+    map:
+      - event.action: authentication-failure
+      - event.category: array_append(authentication)
+      - event.type: array_append(info)
+      - event.outcome: failure
+
+  - check: string_equal($event.code, '113005')
+    map:
+      - user.name: regex_extract($message, 'user\s*=\s*([^:]+):')
+
+  - check: string_equal($event.code, '113015')
+    map:
+      - user.name: regex_extract($message, 'User:\s+([^,]+)')
+
+  - check: string_equal($event.code, '611102')
+    map:
+      - user.name: regex_extract($message, 'Uname:\s+(\S+)')
+
+  # VPN connected (716059)
+  - check: string_equal($event.code, '716059')
+    map:
+      - event.action: vpn-connected
+      - event.type: array_append(start)
+
+  # VPN disconnected (716002)
+  - check: string_equal($event.code, '716002')
+    map:
+      - event.action: vpn-disconnected
+      - event.type: array_append(end)
+
+  - check: exists($source.ip)
+    map:
+      - related.ip: array_append_unique($source.ip)
+
+  - check: exists($destination.ip)
+    map:
+      - related.ip: array_append_unique($destination.ip)
+
+  - check: exists($user.name)
+    map:
+      - related.user: array_append_unique($user.name)
+
+  - map:
+      - message: delete()

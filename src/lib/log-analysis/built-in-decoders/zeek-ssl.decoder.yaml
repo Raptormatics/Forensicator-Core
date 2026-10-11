@@ -1,0 +1,65 @@
+name: decoder/zeek-ssl/0
+enabled: true
+
+metadata:
+  title: 'Zeek TLS/SSL Log Decoder'
+  author: 'Forensicator'
+  date: '2026-06-24'
+  description: >-
+    Decoder for Zeek ssl.log. Captures TLS handshake details including
+    certificate subjects, JA3/JA3S fingerprints, cipher suites, and
+    validation status. Critical for encrypted C2 detection and certificate-
+    based threat hunting.
+  references:
+    - 'https://docs.zeek.org/en/master/logs/ssl.html'
+
+source_type: custom-json
+priority: 42
+
+check: >-
+  exists(ts) AND exists(established) AND exists(cipher)
+
+normalize:
+  - map:
+      - event.kind: event
+      - event.category: array_append(network)
+      - event.type: array_append(start)
+      - observer.vendor: Zeek
+      - observer.type: network
+      - event.dataset: zeek.ssl
+      - event.id: event.original.uid
+      - network.transport: tcp
+      - source.ip: event.original.id.orig_h
+      - source.port: parse_long(event.original.id.orig_p)
+      - destination.ip: event.original.id.resp_h
+      - destination.port: parse_long(event.original.id.resp_p)
+      - tls.cipher: event.original.cipher
+      - tls.curve: event.original.curve
+      - tls.version: event.original.version
+      - tls.client.ja3: event.original.ja3
+      - tls.server.ja3s: event.original.ja3s
+      - tls.server.subject: event.original.subject
+      - tls.server.issuer: event.original.issuer
+      - tls.client.server_name: event.original.server_name
+      - tls.resumed: event.original.resumed
+      - error.code: event.original.validation_code
+      - related.ip: array_append_unique($source.ip)
+      - related.ip: array_append_unique($destination.ip)
+      - related.hash: array_append_unique($tls.client.ja3)
+      - related.hash: array_append_unique($tls.server.ja3s)
+
+  # TLS established successfully
+  - check: string_equal(event.original.established, 'true')
+    map:
+      - event.outcome: success
+      - event.action: tls-established
+
+  # TLS failed / rejected
+  - check: string_equal(event.original.established, 'false')
+    map:
+      - event.outcome: failure
+      - event.action: tls-failed
+
+  - check: not_exists($event.outcome)
+    map:
+      - event.outcome: unknown

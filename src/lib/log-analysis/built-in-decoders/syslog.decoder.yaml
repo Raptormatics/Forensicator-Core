@@ -1,0 +1,45 @@
+name: decoder/syslog/0
+enabled: true
+
+metadata:
+  title: Syslog / Linux Auth
+  author: Forensicator
+  date: '2026-06-24'
+  description: >-
+    Generic RFC 3164 syslog format. Also handles auth.log and kern.log.
+    Example: Jun 24 10:00:00 myhost sshd[1234]: Accepted password for john from 10.0.0.5 port 22 ssh2
+
+check: >-
+  regex_match($event.original, '^[A-Z][a-z]{2} ')
+
+parse|event.original:
+  - '<@timestamp/SYSLOG> <host.hostname> <process.name>[<process.pid/long>]: <message>'
+  - '<@timestamp/SYSLOG> <host.hostname> <process.name>: <message>'
+  - '<@timestamp/SYSLOG> <host.hostname> <message>'
+
+normalize:
+  - map:
+      - event.dataset: syslog
+      - event.kind: event
+      - observer.product: Syslog
+  - check: contains($message, 'Accepted password')
+    map:
+      - event.category: array_append(authentication)
+      - event.type: array_append(start)
+      - event.outcome: success
+  - check: contains($message, 'Failed password')
+    map:
+      - event.category: array_append(authentication)
+      - event.type: array_append(start)
+      - event.outcome: failure
+  - check: contains($message, 'Invalid user')
+    map:
+      - event.category: array_append(authentication)
+      - event.outcome: failure
+  - check: contains($message, 'sudo')
+    map:
+      - event.category: array_append(process)
+      - event.type: array_append(start)
+  - check: exists($host.hostname)
+    map:
+      - related.ip: array_append_unique($host.hostname)

@@ -1,0 +1,73 @@
+name: decoder/zeek-dns/0
+enabled: true
+
+metadata:
+  title: 'Zeek DNS Log Decoder'
+  author: 'Forensicator'
+  date: '2026-06-24'
+  description: >-
+    Decoder for Zeek dns.log. Captures all DNS queries and responses
+    observed on the network. Critical for C2 detection via DNS beaconing,
+    domain generation algorithm (DGA) detection, and data exfiltration
+    over DNS.
+  references:
+    - 'https://docs.zeek.org/en/master/logs/dns.html'
+
+source_type: custom-json
+priority: 42
+
+check: >-
+  exists(ts) AND exists(query) AND exists(qtype_name)
+
+normalize:
+  - map:
+      - event.kind: event
+      - event.category: array_append(network)
+      - event.type: array_append(info)
+      - event.dataset: zeek.dns
+      - event.id: event.original.uid
+      - network.transport: event.original.proto
+      - network.protocol: dns
+      - source.ip: event.original.id.orig_h
+      - source.port: parse_long(event.original.id.orig_p)
+      - destination.ip: event.original.id.resp_h
+      - destination.port: parse_long(event.original.id.resp_p)
+      - dns.id: event.original.trans_id
+      - dns.question.name: event.original.query
+      - dns.question.type: event.original.qtype_name
+      - dns.response_code: event.original.rcode_name
+      - dns.answers: event.original.answers
+      - related.ip: array_append_unique($source.ip)
+      - related.ip: array_append_unique($destination.ip)
+      - observer.vendor: Zeek
+      - observer.type: network
+
+  # DNS flags
+  - check: string_equal(event.original.AA, 'true')
+    map:
+      - dns.header_flags: array_append(AA)
+
+  - check: string_equal(event.original.TC, 'true')
+    map:
+      - dns.header_flags: array_append(TC)
+
+  - check: string_equal(event.original.RD, 'true')
+    map:
+      - dns.header_flags: array_append(RD)
+
+  - check: string_equal(event.original.RA, 'true')
+    map:
+      - dns.header_flags: array_append(RA)
+
+  # Query class mapping
+  - check: string_equal(event.original.qclass, '1')
+    map:
+      - dns.question.class: IN
+
+  - check: string_equal(event.original.qclass, '255')
+    map:
+      - dns.question.class: ANY
+
+  - check: exists($dns.question.name)
+    map:
+      - related.hosts: array_append($dns.question.name)

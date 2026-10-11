@@ -1,0 +1,63 @@
+name: decoder/nginx-error/0
+enabled: true
+
+metadata:
+  title: 'Nginx Error Log Decoder'
+  author: 'Forensicator'
+  date: '2026-06-24'
+  description: >-
+    Decoder for Nginx error logs (error.log). Captures log level, process
+    info, connection ID, and error message. Useful for detecting upstream
+    failures, permission errors from web shell attempts, and resource
+    exhaustion attacks.
+  references:
+    - 'https://nginx.org/en/docs/ngx_core_module.html#error_log'
+
+source_type: nginx
+priority: 40
+
+check: >-
+  regex_match($event.original, '^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2} \[(emerg|alert|crit|error|warn|notice|info|debug)\]')
+
+normalize:
+  - map:
+      - event.kind: event
+      - event.category: array_append(web)
+      - event.dataset: nginx.error
+      - service.type: nginx
+      - observer.vendor: nginx
+      - observer.type: web
+
+  # nginx error format: YYYY/MM/DD HH:MM:SS [level] PID#TID: *CID message
+  - map:
+      - event.start: regex_extract($event.original, '^(\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2})')
+      - log.level: regex_extract($event.original, '\[([\w]+)\]')
+      - process.pid: parse_long(regex_extract($event.original, '\]\s+(\d+)#'))
+      - process.thread.id: regex_extract($event.original, '#(\d+):')
+      - event.id: regex_extract($event.original, '\*(\d+)\s')
+      - message: regex_extract($event.original, '\*\d+\s+(.+)$')
+      - message: regex_extract($event.original, ':\s+(.+)$')
+
+  # Client IP from error context
+  - map:
+      - source.ip: regex_extract($event.original, 'client:\s+([\d\.a-fA-F:]+)')
+      - server.address: regex_extract($event.original, 'server:\s+(\S+),')
+      - url.original: regex_extract($event.original, 'request:\s+"[A-Z]+\s+(\S+)\s+HTTP')
+
+  # Level → outcome mapping
+  - check: regex_match($log.level, '^(emerg|alert|crit|error)$')
+    map:
+      - event.type: array_append(error)
+      - event.outcome: failure
+
+  - check: regex_match($log.level, '^(warn|notice|info|debug)$')
+    map:
+      - event.type: array_append(info)
+      - event.outcome: unknown
+
+  - check: exists($source.ip)
+    map:
+      - related.ip: array_append_unique($source.ip)
+
+  - map:
+      - message: delete()

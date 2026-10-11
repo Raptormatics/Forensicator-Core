@@ -1,0 +1,40 @@
+name: decoder/nginx-access/0
+enabled: true
+
+metadata:
+  title: Nginx Access Log
+  author: Forensicator
+  date: '2026-06-24'
+  description: >-
+    Nginx default combined log format.
+    Example: 192.168.1.1 - - [24/Jun/2026:10:00:00 +0000] "GET / HTTP/1.1" 200 612 "-" "Mozilla/5.0 ..."
+
+check: >-
+  regex_match($event.original, '^[0-9]')
+
+parse|event.original:
+  - '<source.ip> <~> <user.name> [<~>] "<http.request.method> <url.original> HTTP/<http.version>" <http.response.status_code/long> <http.response.bytes/long> "<http.request.referrer>" "<user_agent>"'
+  - '<source.ip> <~> <user.name> [<~>] "<http.request.method> <url.original> HTTP/<http.version>" <http.response.status_code/long> <http.response.bytes/long>'
+
+normalize:
+  - map:
+      - event.dataset: nginx.access
+      - event.kind: event
+      - event.category: array_append(web)
+      - event.type: array_append(access)
+      - observer.product: Nginx
+      - observer.vendor: Nginx Inc
+  - check: exists($source.ip)
+    map:
+      - related.ip: array_append_unique($source.ip)
+  - check: exists($user.name)
+    map:
+      - related.user: array_append_unique($user.name)
+  - check: >-
+      $http.response.status_code >= 400
+    map:
+      - event.outcome: failure
+  - check: >-
+      $http.response.status_code < 400
+    map:
+      - event.outcome: success

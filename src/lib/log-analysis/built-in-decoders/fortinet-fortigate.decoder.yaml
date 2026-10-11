@@ -1,0 +1,61 @@
+name: decoder/fortinet-fortigate/0
+enabled: true
+
+metadata:
+  title: Fortinet FortiGate Firewall
+  author: Forensicator
+  date: '2026-06-24'
+  description: >-
+    Fortinet FortiGate traffic and security logs in key=value format.
+    Example: date=2026-06-24 time=10:23:01 devname=FGT60E type=traffic action=accept srcip=10.0.0.5 dstip=8.8.8.8 srcport=51234 dstport=53 proto=UDP
+
+check: >-
+  starts_with($event.original, 'date=')
+
+normalize:
+  - map:
+      - _kv: parse_key_value($event.original, '=', ' ')
+      - event.dataset: fortinet.fortigate
+      - event.kind: event
+      - observer.product: FortiGate
+      - observer.vendor: Fortinet
+      - event.category: array_append(network)
+      - source.ip: get_key_in($_kv, 'srcip')
+      - source.port: parse_long(get_key_in($_kv, 'srcport'))
+      - destination.ip: get_key_in($_kv, 'dstip')
+      - destination.port: parse_long(get_key_in($_kv, 'dstport'))
+      - network.transport: downcase(get_key_in($_kv, 'proto'))
+      - event.code: get_key_in($_kv, 'action')
+      - host.name: get_key_in($_kv, 'devname')
+  - check: string_equal($network.transport, '6')
+    map:
+      - network.transport: tcp
+  - check: string_equal($network.transport, '17')
+    map:
+      - network.transport: udp
+  - check: string_equal($network.transport, '1')
+    map:
+      - network.transport: icmp
+  - check: string_equal($network.transport, '58')
+    map:
+      - network.transport: ipv6-icmp
+  - check: string_equal($event.code, 'accept')
+    map:
+      - event.type: array_append(allowed)
+      - event.outcome: success
+  - check: string_equal($event.code, 'deny')
+    map:
+      - event.type: array_append(denied)
+      - event.outcome: failure
+  - check: string_equal($event.code, 'drop')
+    map:
+      - event.type: array_append(denied)
+      - event.outcome: failure
+  - check: exists($source.ip)
+    map:
+      - related.ip: array_append_unique($source.ip)
+  - check: exists($destination.ip)
+    map:
+      - related.ip: array_append_unique($destination.ip)
+  - map:
+      - _kv: delete()

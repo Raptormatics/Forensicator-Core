@@ -13,6 +13,7 @@ import {
   LogOut,
   Menu,
   Monitor,
+  ScanLine,
   Search,
   Settings,
   Shield,
@@ -31,9 +32,10 @@ import { useRef, useState } from "react";
 // The Enterprise overlay replaces this file with an extended version that
 // adds its own remaining Pro-only nav groups (PCAP Analysis, RAM Analysis,
 // Developers) and Pro-only items nested inside Platform/Settings (Webhooks,
-// Retention, SIEM Integrations, Single Sign-On, License) — Intelligence
-// (and, soon, Log Analysis) used to be overlay-only too, now native to
-// Core. Unlike most of the files the overlay touches, this one's hardcoded
+// Retention, SIEM Integrations, Single Sign-On, License) — Intelligence and
+// Log Analysis used to be overlay-only too, now native to Core (custom
+// decoder/rule authoring stays Enterprise-only within those pages). Unlike
+// most of the files the overlay touches, this one's hardcoded
 // href strings aren't a safety boundary — dynamic-import tricks don't
 // apply to a nav list — so a 404 on a stripped route would be the actual
 // failure mode if any Pro href leaked back in here. Keep this list in sync
@@ -66,6 +68,16 @@ const NAV: NavItem[] = [
       { label: "Sigma Detections", href: "/intelligence/sigma" },
       { label: "Correlations",     href: "/intelligence/correlations" },
       { label: "Threat Intel",     href: "/intelligence/threat-intel" },
+    ],
+  },
+  {
+    kind: "group",
+    label: "Log Analysis",
+    icon: ScanLine,
+    children: [
+      { label: "Uploads",  href: "/log-analysis" },
+      { label: "Decoders", href: "/log-analysis/decoders" },
+      { label: "Rules",    href: "/log-analysis/rules" },
     ],
   },
   { kind: "link",  label: "Reports",         href: "/reports",         icon: FileText },

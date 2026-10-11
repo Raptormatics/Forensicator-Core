@@ -1,0 +1,128 @@
+name: decoder/auditd/0
+enabled: true
+
+metadata:
+  title: 'Linux Auditd System Audit Log Decoder'
+  author: 'Forensicator'
+  date: '2026-06-24'
+  description: >-
+    Decoder for the Linux Audit daemon (auditd). Parses key=value records
+    from audit.log. Covers syscall auditing, file access, network events,
+    authentication, and privilege escalation. Essential for comprehensive
+    Linux forensics.
+  references:
+    - 'https://manpages.ubuntu.com/manpages/xenial/man8/auditd.8.html'
+    - 'https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/7/html/security_guide/sec-understanding_audit_log_files'
+
+source_type: syslog
+priority: 40
+
+check: >-
+  starts_with($event.original, 'type=')
+  OR starts_with($event.original, 'node=')
+
+normalize:
+  - map:
+      - event.dataset: auditd
+      - event.kind: event
+      - event.category: array_append(host)
+      - observer.vendor: Linux
+      - observer.type: host
+
+  # Extract record type and timestamp from header
+  - map:
+      - event.code: regex_extract($event.original, 'type=(\S+)')
+      - host.name: regex_extract($event.original, 'node=(\S+)')
+
+  # Parse key=value body into _kv
+  - map:
+      - _kv: parse_key_value($event.original, '=', ' ')
+      - user.id: get_key_in($_kv, 'uid')
+      - process.real_user.id: get_key_in($_kv, 'euid')
+      - user.name: get_key_in($_kv, 'acct')
+      - process.pid: parse_long(get_key_in($_kv, 'pid'))
+      - process.executable: get_key_in($_kv, 'exe')
+      - process.command_line: get_key_in($_kv, 'cmd')
+      - process.name: get_key_in($_kv, 'comm')
+      - source.ip: get_key_in($_kv, 'addr')
+      - source.port: parse_long(get_key_in($_kv, 'port'))
+      - file.path: get_key_in($_kv, 'name')
+      - event.action: get_key_in($_kv, 'key')
+      - event.outcome: get_key_in($_kv, 'success')
+      - network.direction: get_key_in($_kv, 'direction')
+      - host.name: get_key_in($_kv, 'node')
+
+  # Normalize outcome
+  - check: string_equal($event.outcome, 'yes')
+    map:
+      - event.outcome: success
+
+  - check: string_equal($event.outcome, 'no')
+    map:
+      - event.outcome: failure
+
+  # SYSCALL records - process activity
+  - check: string_equal($event.code, 'SYSCALL')
+    map:
+      - event.category: array_append(process)
+      - event.type: array_append(info)
+      - process.pid: parse_long(get_key_in($_kv, 'pid'))
+      - process.parent.pid: parse_long(get_key_in($_kv, 'ppid'))
+
+  # USER_AUTH / USER_LOGIN records - authentication
+  - check: string_equal($event.code, 'USER_AUTH') OR string_equal($event.code, 'USER_LOGIN')
+    map:
+      - event.category: array_append(authentication)
+      - event.type: array_append(info)
+      - event.action: logged-in
+
+  # USER_LOGOUT
+  - check: string_equal($event.code, 'USER_LOGOUT')
+    map:
+      - event.category: array_append(authentication)
+      - event.type: array_append(end)
+      - event.action: logged-out
+
+  # ADD_USER - account management
+  - check: string_equal($event.code, 'ADD_USER')
+    map:
+      - event.category: array_append(iam)
+      - event.type: array_append(created)
+      - event.action: user-created
+
+  # DEL_USER - account management
+  - check: string_equal($event.code, 'DEL_USER')
+    map:
+      - event.category: array_append(iam)
+      - event.type: array_append(deleted)
+      - event.action: user-deleted
+
+  # ADD_GROUP - group management
+  - check: string_equal($event.code, 'ADD_GROUP')
+    map:
+      - event.category: array_append(iam)
+      - event.type: array_append(created)
+      - event.action: group-created
+
+  # FILE operations
+  - check: string_equal($event.code, 'PATH')
+    map:
+      - event.category: array_append(file)
+      - event.type: array_append(info)
+
+  # Network CONNECT / ACCEPT
+  - check: string_equal($event.code, 'SOCKADDR')
+    map:
+      - event.category: array_append(network)
+      - event.type: array_append(info)
+
+  - check: exists($user.name)
+    map:
+      - related.user: array_append_unique($user.name)
+
+  - check: exists($source.ip)
+    map:
+      - related.ip: array_append_unique($source.ip)
+
+  - map:
+      - _kv: delete()

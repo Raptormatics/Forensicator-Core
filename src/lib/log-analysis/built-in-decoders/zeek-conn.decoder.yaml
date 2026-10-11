@@ -1,0 +1,79 @@
+name: decoder/zeek-conn/0
+enabled: true
+
+metadata:
+  title: 'Zeek Network Connection Log Decoder'
+  author: 'Forensicator'
+  date: '2026-06-24'
+  description: >-
+    Decoder for Zeek conn.log — network connection records. Provides
+    comprehensive flow data including endpoints, bytes, packets, and
+    connection state. Foundation for network baseline analysis and
+    lateral movement detection.
+  references:
+    - 'https://docs.zeek.org/en/master/logs/conn.html'
+
+source_type: custom-json
+priority: 40
+
+check: >-
+  exists(ts) AND exists(conn_state)
+
+normalize:
+  - map:
+      - event.kind: event
+      - event.category: array_append(network)
+      - event.type: array_append(start)
+      - event.dataset: zeek.conn
+      - event.id: event.original.uid
+      - observer.vendor: Zeek
+      - observer.type: network
+      - source.ip: event.original.id.orig_h
+      - source.port: parse_long(event.original.id.orig_p)
+      - source.bytes: parse_long(event.original.orig_ip_bytes)
+      - source.packets: parse_long(event.original.orig_pkts)
+      - source.mac: event.original.orig_l2_addr
+      - destination.ip: event.original.id.resp_h
+      - destination.port: parse_long(event.original.id.resp_p)
+      - destination.bytes: parse_long(event.original.resp_ip_bytes)
+      - destination.packets: parse_long(event.original.resp_pkts)
+      - destination.mac: event.original.resp_l2_addr
+      - network.transport: event.original.proto
+      - network.protocol: event.original.service
+      - event.reason: event.original.conn_state
+      - related.ip: array_append_unique($source.ip)
+      - related.ip: array_append_unique($destination.ip)
+
+  # Connection rejected
+  - check: string_equal(event.original.conn_state, 'REJ')
+    map:
+      - event.action: connection-refused
+      - event.outcome: failure
+
+  # Normal connection
+  - check: string_equal(event.original.conn_state, 'SF')
+    map:
+      - event.action: connection-established
+      - event.outcome: success
+
+  # Connection attempt seen, no reply
+  - check: string_equal(event.original.conn_state, 'S0')
+    map:
+      - event.action: connection-attempt
+      - event.outcome: failure
+
+  # RST seen
+  - check: string_equal(event.original.conn_state, 'RSTO') OR string_equal(event.original.conn_state, 'RSTR')
+    map:
+      - event.action: connection-reset
+      - event.outcome: failure
+
+  # Odd-state connection
+  - check: >-
+      string_equal(event.original.conn_state, 'OTH') OR
+      string_equal(event.original.conn_state, 'RSTOS0') OR
+      string_equal(event.original.conn_state, 'SH') OR
+      string_equal(event.original.conn_state, 'SHR')
+    map:
+      - event.action: connection-incomplete
+      - event.outcome: unknown

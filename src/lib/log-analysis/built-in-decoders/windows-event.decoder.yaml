@@ -1,0 +1,71 @@
+name: decoder/windows-event/0
+enabled: true
+
+metadata:
+  title: 'Windows Event Log — Base Decoder'
+  author: 'Forensicator'
+  date: '2026-06-24'
+  description: >-
+    Base decoder for Windows XML event logs. Extracts common fields from
+    Windows events exported in XML format (e.g. via WEF or Winlogbeat).
+    Note: full field extraction requires parse_xml() support; this decoder
+    provides structural detection and common field extraction via regex.
+  references:
+    - 'https://learn.microsoft.com/en-us/windows/win32/events/windows-events'
+
+source_type: windows-event
+priority: 40
+
+check: >-
+  starts_with($event.original, '<Event xmlns=')
+  AND contains($event.original, 'http://schemas.microsoft.com/win/2004/08/events/event')
+
+normalize:
+  - map:
+      - event.kind: event
+      - event.dataset: windows
+      - observer.vendor: Microsoft
+      - observer.type: host
+
+  # Extract EventID from XML — try Qualifiers pattern first, fall back to plain
+  - map:
+      - event.code: regex_extract($event.original, '<EventID Qualifiers[^>]*>(\d+)</EventID>')
+
+  - map:
+      - event.code: >-
+          if(NOT is_empty($event.code),
+            $event.code,
+            regex_extract($event.original, '<EventID>(\d+)</EventID>')
+          )
+
+  # Extract hostname
+  - map:
+      - host.name: regex_extract($event.original, '<Computer>([^<]+)</Computer>')
+
+  # Extract event timestamp
+  - map:
+      - event.start: regex_extract($event.original, 'SystemTime=''([^'']+)''')
+
+  # Extract channel into log.logger only (do NOT overwrite event.dataset)
+  - map:
+      - log.logger: regex_extract($event.original, '<Channel>([^<]+)</Channel>')
+
+  # Extract process information
+  - map:
+      - process.pid: parse_long(regex_extract($event.original, '<ProcessID>(\d+)</ProcessID>'))
+      - process.executable: regex_extract($event.original, '<Data Name=.Image.>([^<]+)</Data>')
+      - process.command_line: regex_extract($event.original, '<Data Name=.CommandLine.>([^<]+)</Data>')
+      - process.parent.executable: regex_extract($event.original, '<Data Name=.ParentImage.>([^<]+)</Data>')
+
+  # Extract user information
+  - map:
+      - user.name: regex_extract($event.original, '<Data Name=.SubjectUserName.>([^<]+)</Data>')
+      - user.domain: regex_extract($event.original, '<Data Name=.SubjectDomainName.>([^<]+)</Data>')
+
+  # Extract network information
+  - map:
+      - source.ip: regex_extract($event.original, '<Data Name=.IpAddress.>([^<]+)</Data>')
+      - source.port: parse_long(regex_extract($event.original, '<Data Name=.IpPort.>(\d+)</Data>'))
+      - destination.ip: regex_extract($event.original, '<Data Name=.DestinationIp.>([^<]+)</Data>')
+      - destination.port: parse_long(regex_extract($event.original, '<Data Name=.DestinationPort.>(\d+)</Data>'))
+      - network.transport: regex_extract($event.original, '<Data Name=.Protocol.>([^<]+)</Data>')

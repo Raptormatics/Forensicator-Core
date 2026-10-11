@@ -1,0 +1,74 @@
+name: decoder/modsecurity-apache/0
+enabled: true
+
+metadata:
+  title: 'ModSecurity WAF (Apache) JSON Log Decoder'
+  author: 'Forensicator'
+  date: '2026-06-24'
+  description: >-
+    Decoder for ModSecurity Web Application Firewall logs in JSON audit format
+    (Apache module). Extracts transaction details, HTTP request/response,
+    WAF rule triggers, and block/allow outcome. Critical for detecting
+    SQL injection, XSS, and other web application attacks.
+  references:
+    - 'https://github.com/owasp-modsecurity/ModSecurity/wiki'
+
+source_type: custom-json
+priority: 45
+
+check: >-
+  exists(transaction) AND exists(request) AND exists(response) AND exists(audit_data)
+
+normalize:
+  - map:
+      - event.kind: event
+      - event.category: array_append(web)
+      - event.type: array_append(access)
+      - event.dataset: modsecurity.apache
+      - event.outcome: unknown
+      - observer.vendor: OWASP
+      - observer.type: waf
+      - source.ip: event.original.transaction.remote_address
+      - source.port: parse_long(event.original.transaction.remote_port)
+      - source.address: event.original.transaction.remote_address
+      - destination.ip: event.original.transaction.local_address
+      - destination.port: parse_long(event.original.transaction.local_port)
+      - destination.address: event.original.transaction.local_address
+      - http.request.method: event.original.request.method
+      - http.response.status_code: parse_long(event.original.response.status)
+      - http.response.body.content: event.original.response.body
+      - http.request.body.content: event.original.request.body
+      - http.request.referrer: event.original.request.headers.Referer
+      - user_agent.original: event.original.request.headers.User-Agent
+      - user.name: event.original.request.headers.REMOTE_USER
+      - related.ip: array_append_unique($source.ip)
+      - related.ip: array_append_unique($destination.ip)
+
+  # HTTP response outcome
+  - check: string_equal(event.original.response.status, '200')
+    map:
+      - event.outcome: success
+      - event.action: http-request
+
+  # WAF blocked the request
+  - check: string_equal(event.original.audit_data.action.intercepted, 'true')
+    map:
+      - event.outcome: failure
+      - event.action: http-blocked
+      - event.kind: alert
+      - event.category: array_append(intrusion_detection)
+      - rule.name: event.original.audit_data.action.message
+
+  # Response 403 / 406 (WAF blocking response codes)
+  - check: string_equal(event.original.response.status, '403') OR string_equal(event.original.response.status, '406')
+    map:
+      - event.type: array_append(denied)
+
+  # Response 4xx/5xx
+  - check: regex_match(event.original.response.status, '^[45]\d{2}$')
+    map:
+      - event.outcome: failure
+
+  - check: exists($user.name)
+    map:
+      - related.user: array_append_unique($user.name)

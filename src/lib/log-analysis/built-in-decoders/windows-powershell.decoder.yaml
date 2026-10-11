@@ -1,0 +1,68 @@
+name: decoder/windows-powershell/0
+enabled: true
+
+metadata:
+  title: 'Windows PowerShell Operational Log Decoder'
+  author: 'Forensicator'
+  date: '2026-06-24'
+  description: >-
+    Decoder for Windows PowerShell/Operational event log. Captures script
+    block logging (4104), module logging, and command pipeline execution.
+    Critical for detecting PowerShell-based attacks and living-off-the-land
+    techniques.
+  references:
+    - 'https://learn.microsoft.com/en-us/powershell/scripting/windows-powershell/wmf/whats-new/script-logging'
+
+source_type: windows-event
+priority: 55
+
+check: >-
+  starts_with($event.original, '<Event xmlns=')
+  AND contains($event.original, 'Windows PowerShell')
+
+normalize:
+  - map:
+      - event.kind: event
+      - event.dataset: windows.powershell
+      - event.category: array_append(process)
+      - observer.vendor: Microsoft
+      - observer.type: host
+      - host.name: regex_extract($event.original, '<Computer>([^<]+)</Computer>')
+      - event.code: regex_extract($event.original, '<EventID[^>]*>(\d+)</EventID>')
+      - event.start: regex_extract($event.original, 'SystemTime="([^"]+)"')
+      - process.pid: parse_long(regex_extract($event.original, 'ProcessID="(\d+)"'))
+      - process.thread.id: regex_extract($event.original, 'ThreadID="(\d+)"')
+      - user.id: regex_extract($event.original, '<UserID>([^<]+)</UserID>')
+      - process.command_line: regex_extract($event.original, 'CommandLine=([^\n\r]+)')
+      - process.executable: regex_extract($event.original, 'CommandPath=([^\n\r]+)')
+      - file.path: regex_extract($event.original, 'ScriptName=([^\n\r]+)')
+      - service.version: regex_extract($event.original, 'EngineVersion=([^\n\r]+)')
+
+  # EventID 4104 - Script block logging (most important for IR)
+  - check: string_equal($event.code, '4104')
+    map:
+      - event.action: script-block-executed
+      - event.type: array_append(info)
+      - message: regex_extract($event.original, '<Data Name=.ScriptBlockText.>([\s\S]+?)</Data>')
+      - message: delete()
+
+  # EventID 4105 - Command start
+  - check: string_equal($event.code, '4105')
+    map:
+      - event.action: started
+      - event.type: array_append(start)
+
+  # EventID 4106 - Command stop
+  - check: string_equal($event.code, '4106')
+    map:
+      - event.action: stopped
+      - event.type: array_append(end)
+
+  # Default for other event codes
+  - check: not_exists($event.type)
+    map:
+      - event.type: array_append(info)
+
+  - check: exists($user.name)
+    map:
+      - related.user: array_append_unique($user.name)

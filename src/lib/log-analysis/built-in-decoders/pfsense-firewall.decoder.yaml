@@ -1,0 +1,63 @@
+name: decoder/pfsense-firewall/0
+enabled: true
+
+metadata:
+  title: 'pfSense Firewall Log Decoder'
+  author: 'Forensicator'
+  date: '2026-06-24'
+  description: >-
+    Decoder for pfSense filterlog (firewall) logs in syslog format.
+    Extracts interface, tracker (rule ID), action, direction, IPs, ports,
+    and protocol from packet filter log entries.
+  references:
+    - 'https://docs.netgate.com/pfsense/en/latest/monitoring/logs/firewall.html'
+
+source_type: firewall
+priority: 45
+
+check: >-
+  contains($event.original, 'filterlog') AND
+  regex_match($event.original, 'filterlog\s+\d+\s+-\s+-\s+\d+,')
+
+normalize:
+  - map:
+      - event.dataset: pfsense.firewall
+      - event.kind: event
+      - event.category: array_append(network)
+      - event.outcome: unknown
+      - observer.type: firewall
+      - observer.vendor: netgate
+      # CSV layout after PID: rule_num(0),,,(1)(2),tracker(3),interface(4),reason(5),action(6),direction(7),...
+      - rule.id: regex_extract($event.original, 'filterlog\s+\d+\s+-\s+-\s+\d+,[^,]*,[^,]*,(\d+),')
+      - observer.ingress.interface.name: regex_extract($event.original, 'filterlog\s+\d+\s+-\s+-\s+\d+,[^,]*,[^,]*,[^,]*,([^,]+),')
+      # action and direction pulled directly — no temp fields needed
+      - event.action: regex_extract($event.original, ',(pass|block),(?:in|out),')
+      - network.direction: regex_extract($event.original, ',(?:pass|block),(in|out),')
+      - network.transport: regex_extract($event.original, ',(tcp|udp|icmp|icmp6|esp|igmp),')
+      # IPs anchored on protocol column: proto,length,src_ip,dst_ip
+      - source.ip: regex_extract($event.original, ',(?:tcp|udp|icmp|icmp6|esp|igmp),\d+,([\d\.]+),')
+      - destination.ip: regex_extract($event.original, ',(?:tcp|udp|icmp|icmp6|esp|igmp),\d+,[\d\.]+,([\d\.]+),')
+
+  - check: string_equal($event.action, 'pass')
+    map:
+      - event.type: array_append(allowed)
+      - event.outcome: success
+
+  - check: string_equal($event.action, 'block')
+    map:
+      - event.type: array_append(denied)
+      - event.outcome: failure
+
+  # Ports only present for TCP and UDP — ICMP uses text type field instead
+  - check: string_equal($network.transport, 'tcp') OR string_equal($network.transport, 'udp')
+    map:
+      - source.port: parse_long(regex_extract($event.original, ',(?:tcp|udp),\d+,[\d\.]+,[\d\.]+,(\d+),'))
+      - destination.port: parse_long(regex_extract($event.original, ',(?:tcp|udp),\d+,[\d\.]+,[\d\.]+,\d+,(\d+)'))
+
+  - check: exists($source.ip)
+    map:
+      - related.ip: array_append_unique($source.ip)
+
+  - check: exists($destination.ip)
+    map:
+      - related.ip: array_append_unique($destination.ip)

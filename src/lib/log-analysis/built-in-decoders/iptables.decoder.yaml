@@ -1,0 +1,80 @@
+name: decoder/iptables/0
+enabled: true
+
+metadata:
+  title: 'Linux iptables / Netfilter Log Decoder'
+  author: 'Forensicator'
+  date: '2026-06-24'
+  description: >-
+    Decoder for Linux kernel iptables/netfilter packet filter logs sent via
+    syslog (kernel: [...] prefix). Extracts interface, source/destination
+    IPs and ports, protocol, and TCP flags. Used for host-based firewall
+    forensics on Linux systems.
+  references:
+    - 'https://linux.die.net/man/8/iptables'
+
+source_type: firewall
+priority: 40
+
+check: >-
+  regex_match($event.original, 'IN=\S* OUT=\S* .* SRC=\S+ DST=\S+')
+
+normalize:
+  - map:
+      - event.dataset: iptables
+      - event.kind: event
+      - event.category: array_append(network)
+      - event.outcome: unknown
+      - observer.type: firewall
+      - observer.vendor: Linux
+
+  # Extract action from chain label (e.g. [DROP], iptables DROP:, IPTABLES ACCEPT:)
+  - map:
+      - _tmp.action: regex_extract($event.original, '\[(\w+(?:_\w+)?)\]')
+      - _tmp.action: regex_extract($event.original, 'iptables\s+(\w+):')
+
+  # Parse key=value pairs from the iptables log line
+  - map:
+      - _kv: parse_key_value($event.original, '=', ' ')
+      - source.ip: get_key_in($_kv, 'SRC')
+      - destination.ip: get_key_in($_kv, 'DST')
+      - source.port: parse_long(get_key_in($_kv, 'SPT'))
+      - destination.port: parse_long(get_key_in($_kv, 'DPT'))
+      - network.transport: downcase(get_key_in($_kv, 'PROTO'))
+      - observer.ingress.interface.name: get_key_in($_kv, 'IN')
+      - observer.egress.interface.name: get_key_in($_kv, 'OUT')
+      - destination.mac: get_key_in($_kv, 'MAC')
+      - host.name: regex_extract($event.original, '^[^:]*:\s+(\S+)\s+kernel')
+
+  # Action outcome mapping
+  - check: regex_match($_tmp.action, '^(ACCEPT|ALLOW)$')
+    map:
+      - event.type: array_append(allowed)
+      - event.outcome: success
+
+  - check: regex_match($_tmp.action, '^(DROP|DROP_INPUT|DENY|REJECT)$')
+    map:
+      - event.action: connection-denied
+      - event.type: array_append(denied)
+      - event.outcome: failure
+
+  # Network direction
+  - check: exists($observer.ingress.interface.name) AND not_exists($observer.egress.interface.name)
+    map:
+      - network.direction: ingress
+
+  - check: not_exists($observer.ingress.interface.name) AND exists($observer.egress.interface.name)
+    map:
+      - network.direction: egress
+
+  - check: exists($source.ip)
+    map:
+      - related.ip: array_append_unique($source.ip)
+
+  - check: exists($destination.ip)
+    map:
+      - related.ip: array_append_unique($destination.ip)
+
+  - map:
+      - _kv: delete()
+      - _tmp: delete()

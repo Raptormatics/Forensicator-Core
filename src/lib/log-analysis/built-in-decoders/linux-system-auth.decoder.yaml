@@ -1,0 +1,120 @@
+name: decoder/linux-system-auth/0
+enabled: true
+
+metadata:
+  title: 'Linux System Authentication Log Decoder'
+  author: 'Forensicator'
+  date: '2026-06-24'
+  description: >-
+    Decoder for Linux authentication logs (auth.log, secure). Handles SSH
+    logon/logoff/failures, sudo commands, PAM events, and user/group
+    management. Critical for Linux intrusion detection and lateral movement
+    analysis.
+  references:
+    - 'https://www.loggly.com/ultimate-guide/linux-logging-basics/'
+
+source_type: syslog
+priority: 45
+
+check: >-
+  contains($event.original, 'sshd[')
+  OR contains($event.original, 'sudo[')
+  OR contains($event.original, 'sudo:')
+  OR contains($event.original, 'useradd[')
+  OR contains($event.original, 'userdel[')
+  OR contains($event.original, 'usermod[')
+  OR contains($event.original, 'groupadd[')
+  OR contains($event.original, 'groupdel[')
+  OR contains($event.original, 'su[')
+  OR contains($event.original, 'CRON[')
+
+normalize:
+  - map:
+      - event.dataset: system.auth
+      - event.kind: event
+      - event.category: array_append(authentication)
+      - event.outcome: unknown
+      - observer.vendor: Linux
+      - observer.type: host
+      - host.name: regex_extract($event.original, '^\S+\s+\S+\s+\S+\s+(\S+)\s+')
+      - process.name: regex_extract($event.original, '(\w+)\[\d+\]')
+      - process.pid: regex_extract($event.original, '\[(\d+)\]')
+      - message: regex_extract($event.original, '\[\d+\]:\s+(.+)$')
+
+  # SSH accepted login
+  - check: contains($event.original, 'Accepted')
+    map:
+      - event.action: logged-in
+      - event.type: array_append(info)
+      - event.outcome: success
+      - user.name: regex_extract($event.original, 'Accepted \S+ for (\S+) from')
+      - source.ip: regex_extract($event.original, 'from ([\d\.a-fA-F:]+) port')
+      - source.port: regex_extract($event.original, 'port (\d+)')
+      - network.transport: ssh
+
+  # SSH failed login
+  - check: contains($event.original, 'Failed password') OR contains($event.original, 'Invalid user')
+    map:
+      - event.action: authentication-failure
+      - event.type: array_append(info)
+      - event.outcome: failure
+      - user.name: regex_extract($event.original, '(?:for|user) (\S+) from')
+      - source.ip: regex_extract($event.original, 'from ([\d\.a-fA-F:]+) port')
+      - source.port: regex_extract($event.original, 'port (\d+)')
+
+  # SSH disconnection
+  - check: contains($event.original, 'Disconnected') OR contains($event.original, 'disconnect')
+    map:
+      - event.action: logged-out
+      - event.type: array_append(end)
+      - event.outcome: success
+
+  # sudo command execution
+  - check: contains($event.original, 'sudo') AND contains($event.original, 'COMMAND=')
+    map:
+      - event.action: sudo
+      - event.category: array_append(process)
+      - event.type: array_append(start)
+      - event.outcome: success
+      - user.name: regex_extract($event.original, '^\S+\s+\S+\s+\S+\s+\S+\s+(\S+)\s+:')
+      - user.effective.name: regex_extract($event.original, 'USER=(\S+)\s*;')
+      - process.command_line: regex_extract($event.original, 'COMMAND=(.+)$')
+
+  # Session opened / closed (PAM)
+  - check: contains($event.original, 'session opened')
+    map:
+      - event.action: logged-in
+      - event.type: array_append(start)
+      - event.outcome: success
+      - user.name: regex_extract($event.original, 'for user (\S+)')
+
+  - check: contains($event.original, 'session closed')
+    map:
+      - event.action: logged-out
+      - event.type: array_append(end)
+      - event.outcome: success
+      - user.name: regex_extract($event.original, 'for user (\S+)')
+
+  # User account management
+  - check: contains($event.original, 'useradd')
+    map:
+      - event.action: user-created
+      - event.category: array_append(iam)
+      - event.type: array_append(created)
+
+  - check: contains($event.original, 'userdel')
+    map:
+      - event.action: user-deleted
+      - event.category: array_append(iam)
+      - event.type: array_append(deleted)
+
+  - check: exists($user.name)
+    map:
+      - related.user: array_append_unique($user.name)
+
+  - check: exists($source.ip)
+    map:
+      - related.ip: array_append_unique($source.ip)
+
+  - map:
+      - message: delete()

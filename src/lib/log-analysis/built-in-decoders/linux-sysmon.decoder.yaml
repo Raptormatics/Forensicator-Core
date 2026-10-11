@@ -1,0 +1,93 @@
+name: decoder/linux-sysmon/0
+enabled: true
+
+metadata:
+  title: 'Sysmon for Linux Event Decoder'
+  author: 'Forensicator'
+  date: '2026-06-24'
+  description: >-
+    Decoder for Sysinternals Sysmon for Linux. Handles process creation (1),
+    network connections (3), file creation/deletion (11/23), and service
+    state changes (4). Provides deep endpoint telemetry for Linux hosts.
+  references:
+    - 'https://github.com/Sysinternals/SysmonForLinux'
+
+source_type: syslog
+priority: 50
+
+check: >-
+  contains($event.original, 'sysmon')
+  AND contains($event.original, '<Event')
+
+normalize:
+  - map:
+      - event.dataset: sysmon
+      - event.kind: event
+      - observer.vendor: Sysinternals
+      - observer.type: host
+      - host.name: regex_extract($event.original, '<Computer>([^<]+)</Computer>')
+      - event.code: regex_extract($event.original, '<EventID>(\d+)</EventID>')
+      - process.entity_id: regex_extract($event.original, '<Data Name=.ProcessGuid.>\{([^}]+)\}</Data>')
+      - process.pid: regex_extract($event.original, '<Data Name=.ProcessId.>(\d+)</Data>')
+      - process.executable: regex_extract($event.original, '<Data Name=.Image.>([^<]+)</Data>')
+      - process.command_line: regex_extract($event.original, '<Data Name=.CommandLine.>([^<]+)</Data>')
+      - user.name: regex_extract($event.original, '<Data Name=.User.>([^<]+)</Data>')
+
+  # EventID 1: Process Create
+  - check: string_equal($event.code, '1')
+    map:
+      - event.category: array_append(process)
+      - event.type: array_append(start)
+      - event.action: started
+      - process.parent.pid: regex_extract($event.original, '<Data Name=.ParentProcessId.>(\d+)</Data>')
+      - process.parent.executable: regex_extract($event.original, '<Data Name=.ParentImage.>([^<]+)</Data>')
+      - process.parent.command_line: regex_extract($event.original, '<Data Name=.ParentCommandLine.>([^<]+)</Data>')
+
+  # EventID 3: Network connection
+  - check: string_equal($event.code, '3')
+    map:
+      - event.category: array_append(network)
+      - event.type: array_append(start)
+      - event.action: connection-established
+      - destination.ip: regex_extract($event.original, '<Data Name=.DestinationIp.>([^<]+)</Data>')
+      - destination.port: regex_extract($event.original, '<Data Name=.DestinationPort.>(\d+)</Data>')
+      - source.ip: regex_extract($event.original, '<Data Name=.SourceIp.>([^<]+)</Data>')
+      - source.port: regex_extract($event.original, '<Data Name=.SourcePort.>(\d+)</Data>')
+      - network.transport: regex_extract($event.original, '<Data Name=.Protocol.>([^<]+)</Data>')
+      - related.ip: array_append_unique($source.ip)
+      - related.ip: array_append_unique($destination.ip)
+
+  # EventID 5: Process terminated
+  - check: string_equal($event.code, '5')
+    map:
+      - event.category: array_append(process)
+      - event.type: array_append(end)
+      - event.action: stopped
+
+  # EventID 9: RawAccessRead
+  - check: string_equal($event.code, '9')
+    map:
+      - event.category: array_append(file)
+      - event.type: array_append(access)
+      - event.action: accessed
+      - event.kind: alert
+
+  # EventID 11: File Create
+  - check: string_equal($event.code, '11')
+    map:
+      - event.category: array_append(file)
+      - event.type: array_append(created)
+      - event.action: created
+      - file.path: regex_extract($event.original, '<Data Name=.TargetFilename.>([^<]+)</Data>')
+
+  # EventID 23: File Delete
+  - check: string_equal($event.code, '23')
+    map:
+      - event.category: array_append(file)
+      - event.type: array_append(deleted)
+      - event.action: deleted
+      - file.path: regex_extract($event.original, '<Data Name=.TargetFilename.>([^<]+)</Data>')
+
+  - check: exists($user.name)
+    map:
+      - related.user: array_append_unique($user.name)

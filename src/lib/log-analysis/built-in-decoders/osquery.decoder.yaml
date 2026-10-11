@@ -1,0 +1,96 @@
+name: decoder/osquery/0
+enabled: true
+
+metadata:
+  title: 'Osquery Endpoint Telemetry Decoder'
+  author: 'Forensicator'
+  date: '2026-06-24'
+  description: >-
+    Decoder for Osquery differential log results. Osquery exposes the OS as
+    a relational database enabling powerful endpoint telemetry — file integrity,
+    process auditing, network connections, installed software, and more.
+    Invaluable for endpoint forensics and threat hunting.
+  references:
+    - 'https://osquery.readthedocs.io/en/stable/deployment/logging/'
+
+source_type: custom-json
+priority: 40
+
+check: >-
+  exists(action) AND exists(calendarTime) AND exists(columns)
+  AND exists(name) AND exists(hostIdentifier)
+
+normalize:
+  - map:
+      - event.kind: event
+      - event.category: array_append(host)
+      - event.outcome: unknown
+      - event.dataset: osquery
+      - observer.vendor: Osquery
+      - observer.type: endpoint
+      - rule.name: event.original.name
+      - host.name: event.original.hostIdentifier
+      - event.action: event.original.action
+      - user.name: event.original.decorations.username
+      - host.id: event.original.decorations.host_uuid
+      - file.path: event.original.columns.path
+      - file.name: event.original.columns.filename
+      - labels.file_directory: event.original.columns.directory
+      - file.mode: event.original.columns.mode
+      - process.name: event.original.columns.process
+      - url.full: event.original.columns.source_url
+      - related.hosts: array_append($host.name)
+
+  # File integrity / access events
+  - check: exists($file.path)
+    map:
+      - event.category: array_append(file)
+
+  - check: exists($file.path) AND string_equal(event.original.action, 'added')
+    map:
+      - event.action: created
+      - event.type: array_append(created)
+
+  - check: exists($file.path) AND string_equal(event.original.action, 'removed')
+    map:
+      - event.action: deleted
+      - event.type: array_append(deleted)
+
+  - check: exists($file.path) AND string_equal(event.original.action, 'modified')
+    map:
+      - event.action: modified
+      - event.type: array_append(change)
+
+  # Process events
+  - check: exists($process.name) AND not_exists($file.path)
+    map:
+      - event.category: array_append(process)
+      - event.type: array_append(info)
+      - process.pid: parse_long(event.original.columns.pid)
+      - process.executable: event.original.columns.path
+      - process.command_line: event.original.columns.cmdline
+      - process.parent.pid: parse_long(event.original.columns.parent)
+      - user.name: event.original.columns.uid
+
+  # Network events
+  - check: exists(event.original.columns.remote_address)
+    map:
+      - event.category: array_append(network)
+      - event.type: array_append(info)
+      - destination.ip: event.original.columns.remote_address
+      - destination.port: parse_long(event.original.columns.remote_port)
+      - source.ip: event.original.columns.local_address
+      - source.port: parse_long(event.original.columns.local_port)
+      - network.transport: event.original.columns.protocol
+      - related.ip: array_append_unique($destination.ip)
+      - related.ip: array_append_unique($source.ip)
+
+  # Package/software events
+  - check: exists(event.original.columns.version) AND exists(event.original.columns.name)
+    map:
+      - package.name: event.original.columns.name
+      - package.version: event.original.columns.version
+
+  - check: exists($user.name)
+    map:
+      - related.user: array_append_unique($user.name)
