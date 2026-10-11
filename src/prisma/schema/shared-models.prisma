@@ -146,7 +146,7 @@ model Organization {
   description String?  @db.Text
   logoUrl     String?  @map("logo_url")
   website     String?
-  plan        String   @default("free")  // free | professional | enterprise
+  plan        String   @default("free")  // free | enterprise
   settings    Json     @default("{}") @db.JsonB  // branding, notifications, etc.
 
   // Quotas

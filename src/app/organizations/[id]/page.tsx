@@ -16,10 +16,9 @@ interface Org {
   _count: { investigations: number; cases: number; hostProfiles: number };
 }
 
-const PLAN_LABELS: Record<string, string> = { free: "Free", professional: "Professional", enterprise: "Enterprise" };
+const PLAN_LABELS: Record<string, string> = { free: "Free", enterprise: "Enterprise" };
 const PLAN_COLOR: Record<string, string> = {
   free: "bg-zinc-800 text-zinc-400",
-  professional: "bg-teal-900/40 text-teal-300",
   enterprise: "bg-orange-900/40 text-orange-300",
 };
 
@@ -267,7 +266,6 @@ export default function OrgDetailPage() {
               <select value={plan} onChange={e => setPlan(e.target.value)}
                 className="w-full rounded-md border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-200 focus:border-teal-500 focus:outline-none">
                 <option value="free">Free</option>
-                <option value="professional">Professional</option>
                 <option value="enterprise">Enterprise</option>
               </select>
             </div>

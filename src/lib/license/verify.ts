@@ -28,10 +28,17 @@ const PUBLIC_KEY_PATH = path.join(process.cwd(), "deploy", "license-public-key.p
 export const LICENSE_TYPES = ["subscription", "trial"] as const;
 export type LicenseType = (typeof LICENSE_TYPES)[number];
 
-/** Ordered low-to-high — planAtLeast() in the overlay's license/types.ts
- * depends on this order, not just set membership. */
-export const PLANS = ["professional", "enterprise"] as const;
-export type Plan = (typeof PLANS)[number];
+// There used to be a "professional" plan below "enterprise" here, with the
+// overlay's planAtLeast() gating a handful of routes (SSO, SIEM, Webhooks,
+// Retention, Threat Intel Providers) behind "enterprise" specifically.
+// Collapsed to a single paid tier — Core (free) vs Enterprise (everything
+// else) — so a validly signed license is just "enterprise," full stop; no
+// more sub-tier to compare against. `plan` stays a plain string, not an
+// enum, so an already-issued license still carrying the old
+// "professional" value (forensicator-license, the separate issuer repo,
+// isn't touched by this change) still verifies and is treated as fully
+// entitled, same as "enterprise" — nothing here distinguishes them anymore.
+export type Plan = string;
 
 export type LicensePayload = {
   licenseId: string;
@@ -79,9 +86,6 @@ export function verifyLicense(licContent: string): LicensePayload {
   }
   if (!LICENSE_TYPES.includes(payload.licenseType)) {
     throw new InvalidLicenseError(`Unrecognized license type: ${payload.licenseType}`);
-  }
-  if (!PLANS.includes(payload.plan)) {
-    throw new InvalidLicenseError(`Unrecognized plan: ${payload.plan}`);
   }
   return payload;
 }

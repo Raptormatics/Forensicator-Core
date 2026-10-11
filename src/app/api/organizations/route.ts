@@ -10,7 +10,7 @@ const createSchema = z.object({
   name: z.string().min(1).max(100),
   slug: z.string().min(1).max(50).regex(/^[a-z0-9-]+$/),
   description: z.string().optional(),
-  plan: z.enum(["free", "professional", "enterprise"]).optional(),
+  plan: z.enum(["free", "enterprise"]).optional(),
 });
 
 export async function GET(req: NextRequest) {

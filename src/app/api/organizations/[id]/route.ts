@@ -11,7 +11,7 @@ const patchSchema = z.object({
   description: z.string().nullable().optional(),
   website:     z.string().url().nullable().optional(),
   logoUrl:     z.string().url().nullable().optional(),
-  plan:        z.enum(["free", "professional", "enterprise"]).optional(),
+  plan:        z.enum(["free", "enterprise"]).optional(),
   settings:    z.record(z.unknown()).optional(),
   maxUsers:    z.number().int().optional(),
   maxInvestigations: z.number().int().optional(),
