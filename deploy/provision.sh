@@ -80,7 +80,28 @@ echo "==> Installing system packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
 # tshark — PCAP Analysis's packet-dissection dependency (src/lib/pcap-analysis/tshark.ts).
-apt-get install -y ca-certificates curl gnupg build-essential postgresql postgresql-contrib redis-server sudo tshark
+# python3-venv/python3-dev — RAM Analysis's Volatility3 + yara-python venv, below.
+apt-get install -y ca-certificates curl gnupg build-essential postgresql postgresql-contrib redis-server sudo tshark python3-venv python3-dev
+
+echo "==> Installing Volatility3 and yara-python (RAM Analysis dependencies)"
+if [[ ! -x "${APP_DIR}/.venvs/volatility3/bin/vol" ]]; then
+  runuser -u "$SERVICE_USER" -- bash -lc "
+    python3 -m venv '${APP_DIR}/.venvs/volatility3' &&
+    '${APP_DIR}/.venvs/volatility3/bin/pip' install --upgrade pip &&
+    '${APP_DIR}/.venvs/volatility3/bin/pip' install volatility3
+  "
+  # yara-python — custom Yara signature scanning (RAM Analysis > Detection
+  # Rules > Custom Yara Signatures). Shares this venv rather than getting
+  # its own, since src/lib/ram-analysis/yara.ts resolves the interpreter
+  # as the sibling of the `vol` binary. Needs python3-dev (installed
+  # above) for its C extension — pip has no prebuilt wheel for every
+  # Python version, so it compiles from source, which needs Python.h.
+  # Missing/failed here degrades gracefully at scan time (reported as a
+  # "not_installed" plugin status), so a failure on this line is
+  # intentionally non-fatal.
+  runuser -u "$SERVICE_USER" -- bash -lc "'${APP_DIR}/.venvs/volatility3/bin/pip' install yara-python" \
+    || echo "WARNING: yara-python install failed — custom Yara signatures will be unavailable until installed manually"
+fi
 
 echo "==> Installing Node.js 26.x (current LTS)"
 if ! command -v node >/dev/null || [[ "$(node -v)" != v26.* ]]; then

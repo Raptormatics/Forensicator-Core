@@ -23,6 +23,10 @@ export async function GET(req: NextRequest) {
     reportsDir: settings?.reportsDir ?? null,
     pcapDir: settings?.pcapDir ?? null,
     tsharkPath: settings?.tsharkPath ?? null,
+    ramDir: settings?.ramDir ?? null,
+    volatilityPath: settings?.volatilityPath ?? null,
+    volatilitySymbolsDir: settings?.volatilitySymbolsDir ?? null,
+    ramChunkSizeBytes: settings?.ramChunkSizeBytes ?? null,
   });
 }
 
@@ -33,6 +37,12 @@ const putSchema = z.object({
   reportsDir: z.union([z.string().min(1).max(500), z.literal("")]).optional(),
   pcapDir: z.union([z.string().min(1).max(500), z.literal("")]).optional(),
   tsharkPath: z.union([z.string().min(1).max(500), z.literal("")]).optional(),
+  ramDir: z.union([z.string().min(1).max(500), z.literal("")]).optional(),
+  volatilityPath: z.union([z.string().min(1).max(500), z.literal("")]).optional(),
+  volatilitySymbolsDir: z.union([z.string().min(1).max(500), z.literal("")]).optional(),
+  // 0 clears the override (falls back to env var / 40MB default) — distinct
+  // from omitting the field, which leaves it unchanged.
+  ramChunkSizeBytes: z.number().int().min(0).optional(),
 });
 
 // PUT — instance admin only (platform_admin, or org_admin in appliance
@@ -55,7 +65,10 @@ export async function PUT(req: NextRequest) {
     return NextResponse.json({ error: "Invalid request body." }, { status: 400 });
   }
 
-  const data: { appDomain?: string | null; reportsDir?: string | null; pcapDir?: string | null; tsharkPath?: string | null } = {};
+  const data: {
+    appDomain?: string | null; reportsDir?: string | null; pcapDir?: string | null; tsharkPath?: string | null;
+    ramDir?: string | null; volatilityPath?: string | null; volatilitySymbolsDir?: string | null; ramChunkSizeBytes?: number | null;
+  } = {};
   if (body.appDomain !== undefined) {
     // Strip a trailing slash so callers can safely do `${appDomain}/api` etc.
     data.appDomain = body.appDomain === "" ? null : body.appDomain.replace(/\/+$/, "");
@@ -68,6 +81,18 @@ export async function PUT(req: NextRequest) {
   }
   if (body.tsharkPath !== undefined) {
     data.tsharkPath = body.tsharkPath === "" ? null : body.tsharkPath.trim();
+  }
+  if (body.ramDir !== undefined) {
+    data.ramDir = body.ramDir === "" ? null : body.ramDir.trim();
+  }
+  if (body.volatilityPath !== undefined) {
+    data.volatilityPath = body.volatilityPath === "" ? null : body.volatilityPath.trim();
+  }
+  if (body.volatilitySymbolsDir !== undefined) {
+    data.volatilitySymbolsDir = body.volatilitySymbolsDir === "" ? null : body.volatilitySymbolsDir.trim();
+  }
+  if (body.ramChunkSizeBytes !== undefined) {
+    data.ramChunkSizeBytes = body.ramChunkSizeBytes === 0 ? null : body.ramChunkSizeBytes;
   }
 
   const settings = await prisma.systemSettings.upsert({
@@ -91,5 +116,9 @@ export async function PUT(req: NextRequest) {
     reportsDir: settings.reportsDir,
     pcapDir: settings.pcapDir,
     tsharkPath: settings.tsharkPath,
+    ramDir: settings.ramDir,
+    volatilityPath: settings.volatilityPath,
+    volatilitySymbolsDir: settings.volatilitySymbolsDir,
+    ramChunkSizeBytes: settings.ramChunkSizeBytes,
   });
 }

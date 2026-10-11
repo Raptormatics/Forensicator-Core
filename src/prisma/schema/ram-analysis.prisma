@@ -1,0 +1,337 @@
+// RAM Analysis — ported from the Enterprise overlay into Core.
+//
+// RamAnalysisRule.isBuiltin and RamYaraRule.isBuiltin are new here, not in
+// the overlay's version of these models (same move already made for
+// LogAnalysisRule/PcapAnalysisRule): the overlay has no built-in/custom
+// split for either rule type. Core ships a small built-in ruleset for
+// each (see src/lib/ram-analysis/rule-engine/seed.ts and
+// src/lib/ram-analysis/yara-seed.ts) — built-in rows are visible/
+// toggleable (not editable) by anyone, custom rule/signature authoring is
+// an Enterprise-only capability. The always-on heuristic detections in
+// src/lib/ram-analysis/heuristics.ts are a separate, unconditional layer
+// and were never gated by anything — those stay exactly as they were.
+// RamSymbolTable has no built-in/custom concept at all — it's operational
+// input (custom ISF files for non-standard kernels), not detection
+// content, and is fully free in Core.
+
+model RamUpload {
+  id       String @id @default(uuid()) @db.Uuid
+  filename String
+  fileSize BigInt @map("file_size")
+  sha256   String
+
+  status       String  @default("queued") // queued | processing | ready | failed
+  storagePath  String? @map("storage_path") // absolute path under getRamDir()
+  jobId        String? @map("job_id")        // BullMQ job id
+  errorMessage String? @map("error_message") @db.Text
+
+  // windows | linux | macos — selected by the user at upload time (the
+  // collector doesn't bundle OS metadata into a standalone artifact
+  // upload). Determines which Volatility3 plugin namespace/mapper set the
+  // processor uses. Defaulted to "windows" for pre-existing rows from
+  // before Linux/macOS support shipped.
+  osType String @default("windows") @map("os_type")
+
+  // Windows: from windows.info.Info's NTBuildLab/Major-Minor + MachineType.
+  // Linux/macOS: from banners.Banners' raw "Linux version ..."/"Darwin
+  // Kernel Version ..." banner string (osArch left null — not derived from
+  // that banner text).
+  osBuild String? @map("os_build")
+  osArch  String? @map("os_arch")
+
+  // Per-plugin outcome, e.g. {"windows.info.Info":"ok","windows.netscan.NetScan":"timeout"}.
+  // The mandatory pslist-equivalent plugin (windows.pslist / linux.pslist /
+  // mac.pslist) failing fails the whole upload; everything else is
+  // degradable — a failure/timeout here still lets the upload reach
+  // "ready", just with that section's data absent.
+  pluginStatus Json? @map("plugin_status") @db.JsonB
+
+  processCount    Int @default(0) @map("process_count")
+  connectionCount Int @default(0) @map("connection_count")
+  findingCount    Int @default(0) @map("finding_count")
+  iocCount        Int @default(0) @map("ioc_count")
+
+  hostname  String?
+  assetName String? @map("asset_name")
+  ipAddress String? @map("ip_address")
+  notes     String? @db.Text
+
+  uploadedById   String        @map("uploaded_by_id") @db.Uuid
+  uploadedBy     User          @relation(fields: [uploadedById], references: [id])
+  organizationId String?       @map("organization_id") @db.Uuid
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  caseId String? @map("case_id") @db.Uuid
+  case   Case?   @relation(fields: [caseId], references: [id], onDelete: SetNull)
+
+  processes   RamProcess[]
+  connections RamNetworkConnection[]
+  findings    RamFinding[]
+  iocs        RamIoc[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([uploadedById])
+  @@index([organizationId])
+  @@index([status])
+  @@index([caseId])
+  @@index([createdAt])
+  @@map("ram_uploads")
+}
+
+model RamUploadSession {
+  id            String  @id @default(uuid()) @db.Uuid
+  filename      String
+  totalBytes    BigInt  @map("total_bytes")
+  receivedBytes BigInt  @default(0) @map("received_bytes")
+
+  osType    String  @map("os_type")
+  hostname  String?
+  assetName String? @map("asset_name")
+  ipAddress String? @map("ip_address")
+  notes     String? @db.Text
+
+  // The .partial file's path, fixed at init time — never re-derived from
+  // getRamDir() later, since that setting is read fresh per job and could
+  // change mid-session.
+  storagePath String @map("storage_path")
+
+  status String @default("uploading") // uploading | completed | failed | expired
+
+  uploadedById   String        @map("uploaded_by_id") @db.Uuid
+  uploadedBy     User          @relation(fields: [uploadedById], references: [id])
+  organizationId String?       @map("organization_id") @db.Uuid
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  caseId         String?       @map("case_id") @db.Uuid
+  case           Case?         @relation(fields: [caseId], references: [id], onDelete: SetNull)
+
+  // createdAt + 24h — enforced both lazily (a chunk/complete request against
+  // an expired session is rejected outright) and by the periodic sweep.
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([uploadedById])
+  @@index([organizationId])
+  @@index([caseId])
+  @@index([status])
+  @@index([expiresAt])
+  @@map("ram_upload_sessions")
+}
+
+model RamProcess {
+  id       String    @id @default(uuid()) @db.Uuid
+  uploadId String    @map("upload_id") @db.Uuid
+  upload   RamUpload @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+
+  pid  Int
+  ppid Int?
+  name String
+
+  // Best-effort, parsed from CmdLine's first token — pslist itself has no
+  // path column. Null when cmdline enrichment didn't cover this pid, not
+  // necessarily suspicious.
+  path        String?
+  commandLine String? @map("command_line") @db.Text
+
+  createTime DateTime? @map("create_time")
+  exitTime   DateTime? @map("exit_time")
+  sessionId  Int?      @map("session_id")
+  threads    Int?
+  handles    Int?
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([uploadId])
+  @@index([pid])
+  @@map("ram_processes")
+}
+
+model RamNetworkConnection {
+  id       String    @id @default(uuid()) @db.Uuid
+  uploadId String    @map("upload_id") @db.Uuid
+  upload   RamUpload @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+
+  protocol String? // TCPv4 | UDPv4 | TCPv6 | UDPv6
+  localAddr    String? @map("local_addr")
+  localPort    Int?    @map("local_port")
+  foreignAddr  String? @map("foreign_addr")
+  foreignPort  Int?    @map("foreign_port")
+  state        String?
+  pid          Int?
+  processName  String? @map("process_name")
+  created      DateTime?
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([uploadId])
+  @@index([foreignAddr])
+  @@map("ram_network_connections")
+}
+
+model RamFinding {
+  id       String            @id @default(uuid()) @db.Uuid
+  uploadId String            @map("upload_id") @db.Uuid
+  upload   RamUpload         @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+  ruleId   String?           @map("rule_id") @db.Uuid
+  rule     RamAnalysisRule?  @relation(fields: [ruleId], references: [id], onDelete: SetNull)
+  yaraRuleId String?         @map("yara_rule_id") @db.Uuid
+  yaraRule   RamYaraRule?    @relation(fields: [yaraRuleId], references: [id], onDelete: SetNull)
+
+  title        String
+  description  String?   @db.Text
+  severity     String    // critical | high | medium | low | info
+  matchCount   Int       @default(1) @map("match_count")
+  firstSeen    DateTime? @map("first_seen")
+  lastSeen     DateTime? @map("last_seen")
+  matchedField String?   @map("matched_field")
+  matchedValue String?   @map("matched_value") @db.Text
+
+  // Structured process linkage — populated for any process-scoped finding
+  // (malfind, masquerading, orphan-parent, most rule matches) so the UI can
+  // do a real indexed lookup ("does this process have findings?", "jump to
+  // this finding's process") instead of regex-parsing title/matchedValue.
+  // Null for findings with no single process to point at.
+  pid         Int?    @map("pid")
+  processName String? @map("process_name")
+
+  malfindRegions RamMalfindRegion[]
+  matches        RamFindingMatch[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([uploadId])
+  @@index([ruleId])
+  @@index([yaraRuleId])
+  @@index([severity])
+  @@index([pid])
+  @@map("ram_findings")
+}
+
+model RamFindingMatch {
+  id        String     @id @default(uuid()) @db.Uuid
+  findingId String     @map("finding_id") @db.Uuid
+  finding   RamFinding @relation(fields: [findingId], references: [id], onDelete: Cascade)
+
+  pid          Int?
+  processName  String? @map("process_name")
+  matchedField String? @map("matched_field")
+  matchedValue String? @map("matched_value") @db.Text
+
+  @@index([findingId])
+  @@map("ram_finding_matches")
+}
+
+model RamIoc {
+  id       String    @id @default(uuid()) @db.Uuid
+  uploadId String    @map("upload_id") @db.Uuid
+  upload   RamUpload @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+
+  type  String // ip | domain
+  value String
+  count Int    @default(1)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([uploadId, type, value])
+  @@index([uploadId])
+  @@index([type])
+  @@index([value])
+  @@map("ram_iocs")
+}
+
+model RamMalfindRegion {
+  id        String     @id @default(uuid()) @db.Uuid
+  findingId String     @map("finding_id") @db.Uuid
+  finding   RamFinding @relation(fields: [findingId], references: [id], onDelete: Cascade)
+
+  tag           String?
+  protection    String?
+  startAddress  String? @map("start_address")
+  endAddress    String? @map("end_address")
+  commitCharge  Int?    @map("commit_charge")
+  privateMemory Int?    @map("private_memory")
+  path          String? // Linux VMA file path
+  previewHex    String? @map("preview_hex") @db.Text
+
+  @@index([findingId])
+  @@map("ram_malfind_regions")
+}
+
+model RamSymbolTable {
+  id       String @id @default(uuid()) @db.Uuid
+  osType   String @map("os_type") // linux | mac
+  filename String
+  description String? @db.Text
+  storagePath String @map("storage_path")
+  fileSize    Int     @map("file_size")
+
+  uploadedById   String        @map("uploaded_by_id") @db.Uuid
+  uploadedBy     User          @relation(fields: [uploadedById], references: [id])
+  organizationId String?       @map("organization_id") @db.Uuid
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([osType])
+  @@index([organizationId])
+  @@map("ram_symbol_tables")
+}
+
+model RamAnalysisRule {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String
+  description String?  @db.Text
+  severity    String   @default("medium") // critical | high | medium | low | info
+  enabled     Boolean  @default(true)
+  isBuiltin   Boolean  @default(false) @map("is_builtin")
+  logic       String   @default("AND")    // AND | OR
+  conditions  Json     @db.JsonB           // [{ field, operator, value }]
+  tags        String[] @default([])
+
+  createdById    String?      @map("created_by_id") @db.Uuid
+  createdBy      User?        @relation("ramRuleAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+  organizationId String?      @map("organization_id") @db.Uuid
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  hitCount Int @default(0) @map("hit_count")
+
+  findings RamFinding[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([organizationId])
+  @@index([enabled])
+  @@index([severity])
+  @@index([isBuiltin])
+  @@map("ram_analysis_rules")
+}
+
+model RamYaraRule {
+  id          String  @id @default(uuid()) @db.Uuid
+  name        String
+  description String? @db.Text
+  severity    String  @default("medium") // critical | high | medium | low | info
+  enabled     Boolean @default(true)
+  isBuiltin   Boolean @default(false) @map("is_builtin")
+  yaraSource  String  @map("yara_source") @db.Text
+  tags        String[] @default([])
+
+  createdById    String?       @map("created_by_id") @db.Uuid
+  createdBy      User?         @relation("ramYaraRuleAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+  organizationId String?       @map("organization_id") @db.Uuid
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  hitCount Int          @default(0) @map("hit_count")
+  findings RamFinding[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([organizationId])
+  @@index([enabled])
+  @@index([isBuiltin])
+  @@map("ram_yara_rules")
+}

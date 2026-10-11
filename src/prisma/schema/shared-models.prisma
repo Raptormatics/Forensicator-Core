@@ -47,6 +47,11 @@ model User {
   iocBlocklistUpdates    IocRecord[]
   pcapUploads            PcapUpload[]
   pcapAnalysisRules      PcapAnalysisRule[]     @relation("pcapRuleAuthor")
+  ramUploads             RamUpload[]
+  ramUploadSessions      RamUploadSession[]
+  ramAnalysisRules       RamAnalysisRule[]      @relation("ramRuleAuthor")
+  ramYaraRules           RamYaraRule[]          @relation("ramYaraRuleAuthor")
+  ramSymbolTables        RamSymbolTable[]
 
   @@map("users")
 }
@@ -127,6 +132,8 @@ model Case {
   correlations       Correlation[]
   logUploads         LogUpload[]
   pcapUploads        PcapUpload[]
+  ramUploads         RamUpload[]
+  ramUploadSessions  RamUploadSession[]
 
   organizationId String?  @map("organization_id") @db.Uuid
   organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
@@ -170,6 +177,11 @@ model Organization {
   correlationWhitelist CorrelationWhitelist[]
   pcapUploads    PcapUpload[]
   pcapAnalysisRules PcapAnalysisRule[]
+  ramUploads     RamUpload[]
+  ramUploadSessions RamUploadSession[]
+  ramAnalysisRules RamAnalysisRule[]
+  ramYaraRules   RamYaraRule[]
+  ramSymbolTables RamSymbolTable[]
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -221,10 +233,31 @@ model SystemSettings {
   // a file, not a service.
   tsharkPath String? @map("tshark_path")
 
-  // ramDir/volatilityPath/volatilitySymbolsDir/ramChunkSizeBytes deliberately
-  // omitted — those columns belong to the Enterprise overlay's version of
-  // this exact model (RAM Analysis config, still Enterprise-only), added
-  // back when the overlay replaces this file.
+  // Overrides RAM_DIR when set — same read-fresh-per-job, no-restart-needed
+  // pattern as pcapDir. Raw uploaded memory-image bytes are kept on disk here
+  // (RAM Analysis re-reads the file via Volatility3 per plugin rather than
+  // dissolving it into DB rows on first parse).
+  ramDir String? @map("ram_dir")
+  // Absolute path to the `vol` binary the RAM worker invokes. Null resolves
+  // to VOLATILITY_PATH env var, then <APP_DIR>/.venvs/volatility3/bin/vol —
+  // unlike tsharkPath's bare "tshark", Volatility3 lives inside an isolated
+  // Python venv (see deploy/provision.sh), never on PATH.
+  volatilityPath String? @map("volatility_path")
+  // Optional local symbol-table cache directory passed to Volatility3 via
+  // -s/--symbol-dirs. Null means Volatility3 falls back to its own bundled
+  // cache and, for unseen Windows builds, fetching from the public symbol
+  // server over the network. Pre-staging this speeds up repeat analysis and
+  // helps air-gapped deployments.
+  volatilitySymbolsDir String? @map("volatility_symbols_dir")
+
+  // Overrides RAM_CHUNK_SIZE_BYTES when set — chunked RAM uploads (see
+  // RamUploadSession) split the source file into pieces no larger than
+  // this so any request individually stays under a fronting reverse
+  // proxy/tunnel's own body-size cap (e.g. Cloudflare's, which is enforced
+  // at its edge and can't be raised via any origin-server config). Null
+  // resolves to the env var, then a 40MB default — safely under even
+  // Cloudflare's most restrictive (Free/Pro, 100MB) tier.
+  ramChunkSizeBytes Int? @map("ram_chunk_size_bytes")
 
   updatedAt DateTime @updatedAt @map("updated_at")
 
