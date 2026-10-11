@@ -12,6 +12,7 @@ import {
   LayoutDashboard,
   LogOut,
   Menu,
+  MemoryStick,
   Monitor,
   Network,
   ScanLine,
@@ -31,12 +32,12 @@ import { useRef, useState } from "react";
 // ── Nav tree ─────────────────────────────────────────────────────────────────
 //
 // The Enterprise overlay replaces this file with an extended version that
-// adds its own remaining Pro-only nav groups (RAM Analysis, Developers) and
-// Pro-only items nested inside Platform/Settings (Webhooks, Retention,
-// SIEM Integrations, Single Sign-On, License) — Intelligence, Log Analysis,
-// and PCAP Analysis used to be overlay-only too, now native to Core (custom
-// decoder/rule authoring stays Enterprise-only within those pages). Unlike
-// most of the files the overlay touches, this one's hardcoded
+// adds its own remaining Pro-only nav group (Developers) and Pro-only
+// items nested inside Platform/Settings (Webhooks, Retention, SIEM
+// Integrations, Single Sign-On, License) — Intelligence, Log Analysis,
+// PCAP Analysis, and RAM Analysis used to be overlay-only too, now native
+// to Core (custom decoder/rule/signature authoring stays Enterprise-only
+// within those pages). Unlike most of the files the overlay touches, this one's hardcoded
 // href strings aren't a safety boundary — dynamic-import tricks don't
 // apply to a nav list — so a 404 on a stripped route would be the actual
 // failure mode if any Pro href leaked back in here. Keep this list in sync
@@ -88,6 +89,16 @@ const NAV: NavItem[] = [
     children: [
       { label: "Uploads", href: "/pcap-analysis" },
       { label: "Rules",   href: "/pcap-analysis/rules" },
+    ],
+  },
+  {
+    kind: "group",
+    label: "RAM Analysis",
+    icon: MemoryStick,
+    children: [
+      { label: "Uploads",       href: "/ram-analysis" },
+      { label: "Symbol Tables", href: "/ram-analysis/symbols" },
+      { label: "Rules",         href: "/ram-analysis/rules" },
     ],
   },
   { kind: "link",  label: "Reports",         href: "/reports",         icon: FileText },
