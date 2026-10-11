@@ -16,17 +16,16 @@ import {
 } from "@/lib/upload/summary";
 import { parseInvestigationZip, UploadValidationError } from "@/lib/upload/zip";
 import { extractEvidence, extractTimelineEvents } from "@/lib/upload/evidence-extractor";
+import { extractAndUpsertIocs, type NewIocRecord } from "@/lib/intelligence/investigation-ioc-extract";
+import { autoEnrichNewIocs } from "@/lib/intelligence/auto-enrich";
 
-// dispatchSiemExport, autoEnrichNewIocs, and extractAndUpsertIocs live in
-// the Enterprise overlay (@/lib/siem, @/lib/intelligence), not in
+// dispatchSiemExport lives in the Enterprise overlay (@/lib/siem), not in
 // Forensicator Core — loaded via dynamic import below so this route works
-// whether or not those modules are present on disk. This is deliberate,
-// not a workaround: it means this file never needs to be modified by the
-// overlay at all — SIEM export and IOC extraction/auto-enrichment just
-// start working automatically once the Pro overlay adds those files to an
-// existing Core install, with no file replacement needed here.
+// whether or not that module is present on disk. IOC extraction and
+// auto-enrichment used to be gated the same way; both are now native Core
+// modules (see src/lib/intelligence/), imported directly above instead.
 //
-// Each import() below uses a non-literal specifier (a const, not the
+// The import() below uses a non-literal specifier (a const, not the
 // string inlined directly) — with a literal string, TypeScript resolves
 // the module at compile time and hard-fails the build when it's absent
 // (exactly the "Cannot find module" this pattern exists to tolerate at
@@ -34,10 +33,6 @@ import { extractEvidence, extractTimelineEvents } from "@/lib/upload/evidence-ex
 // tsc skips that check and only the dynamic, catchable runtime import
 // remains.
 const SIEM_DISPATCH_MODULE = "@/lib/siem/dispatch";
-const AUTO_ENRICH_MODULE = "@/lib/intelligence/auto-enrich";
-const IOC_EXTRACT_MODULE = "@/lib/intelligence/investigation-ioc-extract";
-
-type NewIocRecord = { id: string; value: string; type: "ip" | "hash" | "url" | "domain" | "email" };
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -250,31 +245,26 @@ export async function POST(request: NextRequest) {
     // This populates the IOC Intelligence page without requiring a separate enrichment step.
     // Newly-created (not previously-seen) records are auto-enriched below —
     // the free local URLhaus feed match always, live providers capped/queued.
-    // @/lib/intelligence lives in the Enterprise overlay, not Core — same
-    // dynamic-import-and-degrade pattern as autoEnrichNewIocs/dispatchSiemExport
-    // below, so this file needs no changes once the overlay adds that module.
+    // IOC extraction/auto-enrichment are native Core features now (see
+    // src/lib/intelligence/) — still wrapped in try/catch so a genuine bug
+    // here (bad data, a transient enrichment-provider error) degrades to a
+    // logged warning rather than failing the whole upload; this is no
+    // longer about tolerating the module's mere absence.
     let newIocRecords: NewIocRecord[] = [];
     try {
-      const { extractAndUpsertIocs } = await import(IOC_EXTRACT_MODULE);
       newIocRecords = await extractAndUpsertIocs(findingsWithIds);
     } catch (iocError) {
-      const msg = iocError instanceof Error ? iocError.message : String(iocError);
-      console.warn("[upload] IocRecord extraction skipped:", msg);
-      enrichmentWarnings.push(`IOC extraction: ${msg}`);
+      console.warn("[upload] IocRecord extraction skipped:", iocError instanceof Error ? iocError.message : iocError);
     }
 
     let iocFeedMatches = 0;
     let iocQueuedForEnrichment = 0;
     if (newIocRecords.length > 0) {
       try {
-        const { autoEnrichNewIocs } = await import(AUTO_ENRICH_MODULE);
         const { feedMatches, queued } = await autoEnrichNewIocs(newIocRecords, actor.organizationIds[0]);
         iocFeedMatches = feedMatches;
         iocQueuedForEnrichment = queued;
       } catch (enrichErr) {
-        // Also covers the module simply not existing (Forensicator Core,
-        // no Enterprise overlay applied) — same no-op-and-log behavior as
-        // any other enrichment failure.
         console.warn("[upload] Auto-enrichment skipped:", enrichErr instanceof Error ? enrichErr.message : enrichErr);
       }
     }

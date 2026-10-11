@@ -5,6 +5,7 @@ import {
   BookOpen,
   ChevronDown,
   ChevronRight,
+  Crosshair,
   FileText,
   Folder,
   Globe,
@@ -27,16 +28,16 @@ import { useRef, useState } from "react";
 
 // ── Nav tree ─────────────────────────────────────────────────────────────────
 //
-// Core-only — the Enterprise overlay replaces this file with an extended
-// version that adds the Pro nav groups (Log Analysis, PCAP Analysis, RAM
-// Analysis, Intelligence, Developers) and the Pro-only items nested inside
-// Platform/Settings (Webhooks, Retention, API Keys, SIEM Integrations,
-// Single Sign-On, Threat Intel Providers, License). Unlike most of the
-// files the overlay touches, this one's hardcoded href strings aren't a
-// safety boundary — dynamic-import tricks don't apply to a nav list — so a
-// 404 on a stripped route would be the actual failure mode if any Pro href
-// leaked back in here. Keep this list in sync with the actual app route
-// list on every change, both directions.
+// The Enterprise overlay replaces this file with an extended version that
+// adds its own remaining Pro-only nav groups (PCAP Analysis, RAM Analysis,
+// Developers) and Pro-only items nested inside Platform/Settings (Webhooks,
+// Retention, SIEM Integrations, Single Sign-On, License) — Intelligence
+// (and, soon, Log Analysis) used to be overlay-only too, now native to
+// Core. Unlike most of the files the overlay touches, this one's hardcoded
+// href strings aren't a safety boundary — dynamic-import tricks don't
+// apply to a nav list — so a 404 on a stripped route would be the actual
+// failure mode if any Pro href leaked back in here. Keep this list in sync
+// with the actual app route list on every change, both directions.
 
 type NavItem =
   | { kind: "link";  label: string; href: string; icon: React.ElementType; allowedRoles?: string[] }
@@ -56,6 +57,17 @@ const NAV: NavItem[] = [
     ],
   },
   { kind: "link",  label: "Hosts",           href: "/hosts",           icon: Monitor },
+  {
+    kind: "group",
+    label: "Intelligence",
+    icon: Crosshair,
+    children: [
+      { label: "IOCs",             href: "/intelligence/iocs" },
+      { label: "Sigma Detections", href: "/intelligence/sigma" },
+      { label: "Correlations",     href: "/intelligence/correlations" },
+      { label: "Threat Intel",     href: "/intelligence/threat-intel" },
+    ],
+  },
   { kind: "link",  label: "Reports",         href: "/reports",         icon: FileText },
   {
     kind: "group",
@@ -73,6 +85,7 @@ const NAV: NavItem[] = [
     { label: "Security", href: "/settings/security" },
     { label: "API Keys",           href: "/settings/keys" },
     { label: "AI Analysis",        href: "/settings/ai", allowedRoles: ["platform_admin", "org_admin"] },
+    { label: "Threat Intel Providers", href: "/settings/threat-intel" },
     { label: "General",            href: "/settings" },
   ]},
   { kind: "link",  label: "Enterprise",       href: "/enterprise",      icon: Sparkles },
