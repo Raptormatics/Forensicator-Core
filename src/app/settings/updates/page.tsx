@@ -341,6 +341,10 @@ export default function UpdatesPage() {
                     {checkResult.latest.releaseNotes && (
                       <p className="whitespace-pre-line text-xs text-zinc-400">{checkResult.latest.releaseNotes}</p>
                     )}
+                    <p className="text-xs text-zinc-500">
+                      Installing runs in the background — the app will go offline briefly while it
+                      updates, then come back online on its own once it&apos;s done.
+                    </p>
                     <button
                       onClick={installOnline}
                       disabled={busy || (!checkResult.updateAvailable && !allowDowngrade)}
@@ -367,6 +371,10 @@ export default function UpdatesPage() {
                   <input type="checkbox" checked={allowDowngrade} onChange={(e) => setAllowDowngrade(e.target.checked)} />
                   Allow downgrade / reinstall of an equal or older version
                 </label>
+                <p className="text-xs text-zinc-500">
+                  Installing runs in the background — the app will go offline briefly while it
+                  updates, then come back online on its own once it&apos;s done.
+                </p>
                 <button
                   onClick={install}
                   disabled={!file || busy}
