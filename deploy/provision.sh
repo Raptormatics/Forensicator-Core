@@ -79,7 +79,8 @@ fi
 echo "==> Installing system packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
-apt-get install -y ca-certificates curl gnupg build-essential postgresql postgresql-contrib redis-server sudo
+# tshark — PCAP Analysis's packet-dissection dependency (src/lib/pcap-analysis/tshark.ts).
+apt-get install -y ca-certificates curl gnupg build-essential postgresql postgresql-contrib redis-server sudo tshark
 
 echo "==> Installing Node.js 26.x (current LTS)"
 if ! command -v node >/dev/null || [[ "$(node -v)" != v26.* ]]; then

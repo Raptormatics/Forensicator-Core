@@ -21,6 +21,8 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     appDomain: settings?.appDomain ?? null,
     reportsDir: settings?.reportsDir ?? null,
+    pcapDir: settings?.pcapDir ?? null,
+    tsharkPath: settings?.tsharkPath ?? null,
   });
 }
 
@@ -29,6 +31,8 @@ const putSchema = z.object({
   // distinct from omitting the field, which leaves it unchanged.
   appDomain: z.union([z.string().url().max(255), z.literal("")]).optional(),
   reportsDir: z.union([z.string().min(1).max(500), z.literal("")]).optional(),
+  pcapDir: z.union([z.string().min(1).max(500), z.literal("")]).optional(),
+  tsharkPath: z.union([z.string().min(1).max(500), z.literal("")]).optional(),
 });
 
 // PUT — instance admin only (platform_admin, or org_admin in appliance
@@ -51,13 +55,19 @@ export async function PUT(req: NextRequest) {
     return NextResponse.json({ error: "Invalid request body." }, { status: 400 });
   }
 
-  const data: { appDomain?: string | null; reportsDir?: string | null } = {};
+  const data: { appDomain?: string | null; reportsDir?: string | null; pcapDir?: string | null; tsharkPath?: string | null } = {};
   if (body.appDomain !== undefined) {
     // Strip a trailing slash so callers can safely do `${appDomain}/api` etc.
     data.appDomain = body.appDomain === "" ? null : body.appDomain.replace(/\/+$/, "");
   }
   if (body.reportsDir !== undefined) {
     data.reportsDir = body.reportsDir === "" ? null : body.reportsDir.trim();
+  }
+  if (body.pcapDir !== undefined) {
+    data.pcapDir = body.pcapDir === "" ? null : body.pcapDir.trim();
+  }
+  if (body.tsharkPath !== undefined) {
+    data.tsharkPath = body.tsharkPath === "" ? null : body.tsharkPath.trim();
   }
 
   const settings = await prisma.systemSettings.upsert({
@@ -79,5 +89,7 @@ export async function PUT(req: NextRequest) {
   return NextResponse.json({
     appDomain: settings.appDomain,
     reportsDir: settings.reportsDir,
+    pcapDir: settings.pcapDir,
+    tsharkPath: settings.tsharkPath,
   });
 }

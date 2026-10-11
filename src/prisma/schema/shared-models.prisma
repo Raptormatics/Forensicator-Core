@@ -45,6 +45,8 @@ model User {
   logDecoders            LogDecoder[]           @relation("logDecoderAuthor")
   correlationWhitelist   CorrelationWhitelist[]
   iocBlocklistUpdates    IocRecord[]
+  pcapUploads            PcapUpload[]
+  pcapAnalysisRules      PcapAnalysisRule[]     @relation("pcapRuleAuthor")
 
   @@map("users")
 }
@@ -124,6 +126,7 @@ model Case {
   tasks              CaseTask[]
   correlations       Correlation[]
   logUploads         LogUpload[]
+  pcapUploads        PcapUpload[]
 
   organizationId String?  @map("organization_id") @db.Uuid
   organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
@@ -165,6 +168,8 @@ model Organization {
   logDecoders    LogDecoder[]
   threatIntelProviders OrgThreatIntelProvider[]
   correlationWhitelist CorrelationWhitelist[]
+  pcapUploads    PcapUpload[]
+  pcapAnalysisRules PcapAnalysisRule[]
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -205,10 +210,21 @@ model SystemSettings {
   // when aiProvider="ollama".
   ollamaManaged Boolean @default(false) @map("ollama_managed")
 
-  // pcapDir/tsharkPath/ramDir/volatilityPath/volatilitySymbolsDir/
-  // ramChunkSizeBytes deliberately omitted — those columns belong to the
-  // Enterprise overlay's version of this exact model (PCAP/RAM Analysis
-  // config), added back when the overlay replaces this file.
+  // Overrides PCAP_DIR when set — same read-fresh-per-job, no-restart-needed
+  // pattern as reportsDir. Raw uploaded .pcap/.pcapng bytes are kept on disk
+  // here (unlike investigation/log uploads, PCAP analysis re-reads the file
+  // via tshark rather than fully dissolving it into DB rows on first parse).
+  pcapDir String? @map("pcap_dir")
+  // Path/name of the tshark binary the PCAP worker invokes. Null resolves to
+  // TSHARK_PATH env var, then bare "tshark" (resolved via PATH). No install/
+  // start/stop lifecycle to manage here — tshark is a stateless CLI reading
+  // a file, not a service.
+  tsharkPath String? @map("tshark_path")
+
+  // ramDir/volatilityPath/volatilitySymbolsDir/ramChunkSizeBytes deliberately
+  // omitted — those columns belong to the Enterprise overlay's version of
+  // this exact model (RAM Analysis config, still Enterprise-only), added
+  // back when the overlay replaces this file.
 
   updatedAt DateTime @updatedAt @map("updated_at")
 

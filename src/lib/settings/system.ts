@@ -33,6 +33,27 @@ export async function getReportsDir(): Promise<string> {
 }
 
 /**
+ * DB override > PCAP_DIR env var > default ./pcap-storage under the project
+ * root. Same read-fresh-per-job pattern as getReportsDir() — unlike JSON
+ * finding uploads, raw .pcap/.pcapng bytes are kept on disk here so the
+ * PCAP worker can re-read them via tshark.
+ */
+export async function getPcapDir(): Promise<string> {
+  const settings = await getSystemSettings();
+  return (
+    settings?.pcapDir ??
+    process.env.PCAP_DIR ??
+    path.join(process.cwd(), "pcap-storage")
+  );
+}
+
+/** DB override > TSHARK_PATH env var > bare "tshark" (resolved via PATH). */
+export async function getTsharkPath(): Promise<string> {
+  const settings = await getSystemSettings();
+  return settings?.tsharkPath ?? process.env.TSHARK_PATH ?? "tshark";
+}
+
+/**
  * Forensicator AI provider config — DB-backed, schema defaults cover an
  * unconfigured instance. Decrypts the stored API key (if any) so callers
  * get something directly usable; never returns aiApiKeyEncrypted itself.

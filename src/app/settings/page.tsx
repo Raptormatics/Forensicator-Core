@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
 import Link from "next/link";
-import { Settings2, Globe, FolderOutput, Database, CheckCircle2, AlertCircle, Loader2, BrainCircuit, ArrowRight } from "lucide-react";
+import { Settings2, Globe, FolderOutput, Database, CheckCircle2, AlertCircle, Loader2, BrainCircuit, ArrowRight, Network } from "lucide-react";
 
 // Mirrors isInstanceAdmin() (src/lib/auth/session.ts), which the API
 // route actually enforces — this only gates the UI, not security. System
@@ -19,6 +19,9 @@ export default function SettingsPage() {
 
   const [appDomain, setAppDomain]   = useState("");
   const [reportsDir, setReportsDir] = useState("");
+  const [pcapDir, setPcapDir]       = useState("");
+  const [tsharkPath, setTsharkPath] = useState("");
+  const [tsharkStatus, setTsharkStatus] = useState<{ available: boolean; path: string; version: string | null } | null>(null);
   const [loading, setLoading]       = useState(true);
   const [saving, setSaving]         = useState(false);
   const [error, setError]           = useState("");
@@ -30,8 +33,15 @@ export default function SettingsPage() {
       .then(d => {
         setAppDomain(d.appDomain ?? "");
         setReportsDir(d.reportsDir ?? "");
+        setPcapDir(d.pcapDir ?? "");
+        setTsharkPath(d.tsharkPath ?? "");
       })
       .finally(() => setLoading(false));
+
+    fetch("/api/settings/pcap/tshark-status")
+      .then(r => r.json())
+      .then(setTsharkStatus)
+      .catch(() => setTsharkStatus(null));
   }, []);
 
   async function handleSave(e: React.FormEvent) {
@@ -46,6 +56,8 @@ export default function SettingsPage() {
         body: JSON.stringify({
           appDomain: appDomain.trim(),
           reportsDir: reportsDir.trim(),
+          pcapDir: pcapDir.trim(),
+          tsharkPath: tsharkPath.trim(),
         }),
       });
       const data = await res.json();
@@ -55,6 +67,8 @@ export default function SettingsPage() {
       }
       setAppDomain(data.appDomain ?? "");
       setReportsDir(data.reportsDir ?? "");
+      setPcapDir(data.pcapDir ?? "");
+      setTsharkPath(data.tsharkPath ?? "");
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
     } catch {
@@ -123,6 +137,52 @@ export default function SettingsPage() {
             placeholder="/var/lib/forensicator/reports"
             className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500/30 disabled:opacity-60"
           />
+        </div>
+
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-4 space-y-2">
+          <div className="flex items-center gap-2">
+            <Network className="h-4 w-4 text-teal-400" />
+            <h2 className="text-sm font-semibold text-zinc-200">PCAP Storage Directory</h2>
+          </div>
+          <p className="text-xs text-zinc-500">
+            Where uploaded packet captures are stored on disk for analysis. Leave blank to use the{" "}
+            <code className="text-zinc-400">PCAP_DIR</code> environment variable, or{" "}
+            <code className="text-zinc-400">./pcap-storage</code> if that&apos;s not set either.
+          </p>
+          <input
+            type="text"
+            disabled={!isAdmin}
+            value={pcapDir}
+            onChange={e => setPcapDir(e.target.value)}
+            placeholder="/var/lib/forensicator/pcap"
+            className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500/30 disabled:opacity-60"
+          />
+          <div className="flex items-center gap-2 pt-1 text-xs">
+            {tsharkStatus === null ? (
+              <span className="flex items-center gap-1.5 text-zinc-500"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Checking tshark…</span>
+            ) : tsharkStatus.available ? (
+              <span className="flex items-center gap-1.5 text-teal-400">
+                <CheckCircle2 className="h-3.5 w-3.5" /> tshark available{tsharkStatus.version ? ` (${tsharkStatus.version})` : ""}
+              </span>
+            ) : (
+              <span className="flex items-center gap-1.5 text-red-400">
+                <AlertCircle className="h-3.5 w-3.5" /> tshark not found at &quot;{tsharkStatus.path}&quot; — install it (<code className="text-zinc-400">apt install tshark</code>) or set the path below.
+              </span>
+            )}
+          </div>
+          <input
+            type="text"
+            disabled={!isAdmin}
+            value={tsharkPath}
+            onChange={e => setTsharkPath(e.target.value)}
+            placeholder="tshark"
+            className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500/30 disabled:opacity-60"
+          />
+          <p className="text-xs text-zinc-600">
+            Path to the <code className="text-zinc-500">tshark</code> binary. Leave blank to use the{" "}
+            <code className="text-zinc-500">TSHARK_PATH</code> environment variable, or resolve{" "}
+            <code className="text-zinc-500">tshark</code> from <code className="text-zinc-500">PATH</code> if that&apos;s not set either.
+          </p>
         </div>
 
         {isAdmin && (

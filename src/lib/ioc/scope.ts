@@ -3,11 +3,11 @@
  * IOC list (paginated) and the Excel export (unpaginated) routes.
  *
  * IocRecord is a global, org-agnostic dedup table (unique by value) fed by
- * two independent pipelines: Investigation uploads (via Evidence), and Log
- * Analysis (via its own per-upload IOC tally table, LogIoc). Neither of
- * those carry an orgId/caseId of their own, so scoping and "which module(s)
- * surfaced this value" are both derived by joining through Investigation/
- * LogUpload, which do.
+ * three independent pipelines: Investigation uploads (via Evidence), Log
+ * Analysis (via its own per-upload IOC tally table, LogIoc), and PCAP
+ * Analysis (PcapIoc, same shape). None of those carry an orgId/caseId of
+ * their own, so scoping and "which module(s) surfaced this value" are both
+ * derived by joining through Investigation/LogUpload/PcapUpload, which do.
  */
 import { prisma } from "@/lib/db/prisma";
 import type { AuthActor } from "@/lib/auth/api-guard";
@@ -20,6 +20,7 @@ function mergeSources(
   target: Map<string, Set<string>>,
   evidenceRows: EvidenceRow[],
   logRows: ValueRow[],
+  pcapRows: ValueRow[],
 ) {
   const add = (value: string | null | undefined, label: string) => {
     if (!value) return;
@@ -33,6 +34,7 @@ function mergeSources(
     add(r.domain, "Investigation");
   }
   for (const r of logRows) add(r.value, "Log Analysis");
+  for (const r of pcapRows) add(r.value, "PCAP Analysis");
 }
 
 /**
@@ -52,14 +54,16 @@ export async function deriveScopedIocSources(actor: AuthActor, caseId?: string) 
     ...(caseId ? { caseId } : {}),
   };
 
-  const [investigations, logUploads] = await Promise.all([
+  const [investigations, logUploads, pcapUploads] = await Promise.all([
     prisma.investigation.findMany({ where: commonWhere, select: { id: true } }),
     prisma.logUpload.findMany({ where: commonWhere, select: { id: true } }),
+    prisma.pcapUpload.findMany({ where: commonWhere, select: { id: true } }),
   ]);
   const investigationIds = investigations.map((i) => i.id);
   const logUploadIds     = logUploads.map((u) => u.id);
+  const pcapUploadIds    = pcapUploads.map((u) => u.id);
 
-  const [evidenceRows, logIocRows] = await Promise.all([
+  const [evidenceRows, logIocRows, pcapIocRows] = await Promise.all([
     investigationIds.length
       ? prisma.evidence.findMany({
           where: {
@@ -72,10 +76,13 @@ export async function deriveScopedIocSources(actor: AuthActor, caseId?: string) 
     logUploadIds.length
       ? prisma.logIoc.findMany({ where: { uploadId: { in: logUploadIds } }, select: { value: true } })
       : [],
+    pcapUploadIds.length
+      ? prisma.pcapIoc.findMany({ where: { uploadId: { in: pcapUploadIds } }, select: { value: true } })
+      : [],
   ]);
 
   const sources = new Map<string, Set<string>>();
-  mergeSources(sources, evidenceRows, logIocRows);
+  mergeSources(sources, evidenceRows, logIocRows, pcapIocRows);
 
   const valueFilter = sources.size > 0 ? { in: Array.from(sources.keys()) } : { in: [] };
   return { valueFilter, sources, needsScoping };
@@ -85,14 +92,15 @@ export async function deriveScopedIocSources(actor: AuthActor, caseId?: string) 
 export async function sourcesForValues(values: string[]): Promise<Map<string, Set<string>>> {
   const sources = new Map<string, Set<string>>();
   if (values.length === 0) return sources;
-  const [evidenceRows, logIocRows] = await Promise.all([
+  const [evidenceRows, logIocRows, pcapIocRows] = await Promise.all([
     prisma.evidence.findMany({
       where: { OR: [{ ip: { in: values } }, { url: { in: values } }, { hash: { in: values } }, { domain: { in: values } }] },
       select: { ip: true, url: true, hash: true, domain: true },
     }),
     prisma.logIoc.findMany({ where: { value: { in: values } }, select: { value: true } }),
+    prisma.pcapIoc.findMany({ where: { value: { in: values } }, select: { value: true } }),
   ]);
-  mergeSources(sources, evidenceRows, logIocRows);
+  mergeSources(sources, evidenceRows, logIocRows, pcapIocRows);
   return sources;
 }
 

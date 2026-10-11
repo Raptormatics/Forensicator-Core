@@ -1,0 +1,184 @@
+// PCAP Analysis — ported from the Enterprise overlay into Core.
+//
+// PcapAnalysisRule.isBuiltin is new here, not in the overlay's version of
+// this model (same move already made for LogAnalysisRule): the overlay
+// has no built-in/custom split for PCAP rules at all. Core ships a small
+// built-in ruleset (see src/lib/pcap-analysis/rule-engine/seed.ts) —
+// built-in rules are visible/toggleable (not editable) by anyone, custom
+// rule authoring is an Enterprise-only capability. The three always-on
+// heuristic detections in src/lib/pcap-analysis/heuristics.ts are a
+// separate, unconditional layer and were never gated by anything —
+// those stay exactly as they were.
+
+model PcapUpload {
+  id       String @id @default(uuid()) @db.Uuid
+  filename String
+  fileSize Int    @map("file_size")
+  sha256   String // raw-bytes hash, same convention as Investigation.archiveSha256
+
+  status       String  @default("queued") // queued | processing | ready | failed
+  storagePath  String? @map("storage_path") // absolute path under getPcapDir()
+  jobId        String? @map("job_id")        // BullMQ job id
+  errorMessage String? @map("error_message") @db.Text
+
+  captureStart DateTime? @map("capture_start")
+  captureEnd   DateTime? @map("capture_end")
+  linkType     String?   @map("link_type")
+  packetCount  Int    @default(0) @map("packet_count")
+  byteCount    BigInt @default(0) @map("byte_count")
+
+  conversationCount Int @default(0) @map("conversation_count")
+  dnsQueryCount     Int @default(0) @map("dns_query_count")
+  findingCount      Int @default(0) @map("finding_count")
+  iocCount          Int @default(0) @map("ioc_count")
+
+  hostname  String?
+  assetName String? @map("asset_name")
+  ipAddress String? @map("ip_address")
+  notes     String? @db.Text
+
+  uploadedById   String        @map("uploaded_by_id") @db.Uuid
+  uploadedBy     User          @relation(fields: [uploadedById], references: [id])
+  organizationId String?       @map("organization_id") @db.Uuid
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  caseId String? @map("case_id") @db.Uuid
+  case   Case?   @relation(fields: [caseId], references: [id], onDelete: SetNull)
+
+  conversations PcapConversation[]
+  dnsQueries    PcapDnsQuery[]
+  findings      PcapFinding[]
+  iocs          PcapIoc[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([uploadedById])
+  @@index([organizationId])
+  @@index([status])
+  @@index([caseId])
+  @@index([createdAt])
+  @@map("pcap_uploads")
+}
+
+model PcapConversation {
+  id       String     @id @default(uuid()) @db.Uuid
+  uploadId String     @map("upload_id") @db.Uuid
+  upload   PcapUpload @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+
+  protocol String // tcp | udp | other
+  addrA    String @map("addr_a")
+  portA    Int?   @map("port_a")
+  addrB    String @map("addr_b")
+  portB    Int?   @map("port_b")
+
+  packetsAtoB Int    @default(0) @map("packets_a_to_b")
+  packetsBtoA Int    @default(0) @map("packets_b_to_a")
+  bytesAtoB   BigInt @default(0) @map("bytes_a_to_b")
+  bytesBtoA   BigInt @default(0) @map("bytes_b_to_a")
+
+  firstSeen DateTime? @map("first_seen")
+  lastSeen  DateTime? @map("last_seen")
+  tlsSni    String?   @map("tls_sni") // ClientHello SNI observed on this flow, if any
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([uploadId, protocol, addrA, portA, addrB, portB])
+  @@index([uploadId])
+  @@index([addrA])
+  @@index([addrB])
+  @@map("pcap_conversations")
+}
+
+model PcapDnsQuery {
+  id       String     @id @default(uuid()) @db.Uuid
+  uploadId String     @map("upload_id") @db.Uuid
+  upload   PcapUpload @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+
+  queryName   String   @map("query_name")
+  queryType   String?  @map("query_type") // A | AAAA | PTR | ...
+  responseIps String[] @default([]) @map("response_ips")
+  count       Int      @default(1)
+
+  firstSeen DateTime? @map("first_seen")
+  lastSeen  DateTime? @map("last_seen")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([uploadId, queryName])
+  @@index([uploadId])
+  @@index([queryName])
+  @@map("pcap_dns_queries")
+}
+
+model PcapFinding {
+  id       String            @id @default(uuid()) @db.Uuid
+  uploadId String            @map("upload_id") @db.Uuid
+  upload   PcapUpload        @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+  ruleId   String?           @map("rule_id") @db.Uuid
+  rule     PcapAnalysisRule? @relation(fields: [ruleId], references: [id], onDelete: SetNull)
+
+  title        String
+  description  String?   @db.Text
+  severity     String    // critical | high | medium | low | info
+  matchCount   Int       @default(1) @map("match_count")
+  firstSeen    DateTime? @map("first_seen")
+  lastSeen     DateTime? @map("last_seen")
+  matchedField String?   @map("matched_field")
+  matchedValue String?   @map("matched_value") @db.Text
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([uploadId])
+  @@index([ruleId])
+  @@index([severity])
+  @@map("pcap_findings")
+}
+
+model PcapIoc {
+  id       String     @id @default(uuid()) @db.Uuid
+  uploadId String     @map("upload_id") @db.Uuid
+  upload   PcapUpload @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+
+  type  String // ip | domain
+  value String
+  count Int    @default(1)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([uploadId, type, value])
+  @@index([uploadId])
+  @@index([type])
+  @@index([value])
+  @@map("pcap_iocs")
+}
+
+model PcapAnalysisRule {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String
+  description String?  @db.Text
+  severity    String   @default("medium") // critical | high | medium | low | info
+  enabled     Boolean  @default(true)
+  isBuiltin   Boolean  @default(false) @map("is_builtin")
+  logic       String   @default("AND")    // AND | OR
+  conditions  Json     @db.JsonB           // [{ field, operator, value }]
+  tags        String[] @default([])
+
+  createdById    String?      @map("created_by_id") @db.Uuid
+  createdBy      User?        @relation("pcapRuleAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+  organizationId String?      @map("organization_id") @db.Uuid
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  hitCount Int @default(0) @map("hit_count")
+
+  findings PcapFinding[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([organizationId])
+  @@index([enabled])
+  @@index([severity])
+  @@index([isBuiltin])
+  @@map("pcap_analysis_rules")
+}
