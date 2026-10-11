@@ -40,6 +40,11 @@ model User {
   apiKeys                ApiKey[]
   auditLogs              AuditLog[]
   hostIsolationUpdates   HostProfile[]
+  logUploads             LogUpload[]
+  logAnalysisRules       LogAnalysisRule[]      @relation("logRuleAuthor")
+  logDecoders            LogDecoder[]           @relation("logDecoderAuthor")
+  correlationWhitelist   CorrelationWhitelist[]
+  iocBlocklistUpdates    IocRecord[]
 
   @@map("users")
 }
@@ -117,6 +122,8 @@ model Case {
   notes              CaseNote[]
   reports            Report[]
   tasks              CaseTask[]
+  correlations       Correlation[]
+  logUploads         LogUpload[]
 
   organizationId String?  @map("organization_id") @db.Uuid
   organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
@@ -153,6 +160,11 @@ model Organization {
   hostProfiles   HostProfile[]
   apiKeys        ApiKey[]
   auditLogs      AuditLog[]
+  logUploads     LogUpload[]
+  logAnalysisRules LogAnalysisRule[]
+  logDecoders    LogDecoder[]
+  threatIntelProviders OrgThreatIntelProvider[]
+  correlationWhitelist CorrelationWhitelist[]
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")

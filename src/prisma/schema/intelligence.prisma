@@ -1,0 +1,137 @@
+// IOC management, correlation, and threat intel — ported from the
+// Enterprise overlay into Core. These used to be overlay-only; Core's
+// upload pipeline already had dynamic-import hooks for them (see
+// src/app/api/investigations/upload/route.ts) that silently no-op'd when
+// the modules weren't present. Now native.
+
+model IocRecord {
+  id              String        @id @default(uuid()) @db.Uuid
+  value           String        @unique // the raw IOC (IP, hash, URL, domain)
+  type            String        // ip | hash | url | domain | email
+  firstSeen       DateTime?     @map("first_seen")
+  lastSeen        DateTime?     @map("last_seen")
+  reputation      Int?          // 0-100 maliciousness score
+  confidence      Int?          // 0-100
+  malwareFamily   String?       @map("malware_family")
+  threatType      String?       @map("threat_type")
+  enrichedAt      DateTime?     @map("enriched_at")
+  enrichJobId     String?       @map("enrich_job_id")
+  providerResults Json?         @map("provider_results") @db.JsonB
+
+  // Analyst-tracked blocklist recommendation — this platform has no
+  // firewall/proxy/EDR integration to actually enforce a block, so this
+  // only records "this should be blocked at the perimeter," the same
+  // manual-tracking convention as HostProfile.isolationStatus.
+  blocklisted        Boolean   @default(false)
+  blocklistedAt      DateTime? @map("blocklisted_at")
+  blocklistedById    String?   @map("blocklisted_by_id") @db.Uuid
+  blocklistedBy      User?     @relation(fields: [blocklistedById], references: [id], onDelete: SetNull)
+
+  enrichments     IocEnrichment[]
+
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+
+  @@index([type])
+  @@index([reputation])
+  @@index([enrichedAt])
+  @@index([blocklisted])
+  @@map("ioc_records")
+}
+
+model IocEnrichment {
+  id          String    @id @default(uuid()) @db.Uuid
+  iocId       String    @map("ioc_id") @db.Uuid
+  ioc         IocRecord @relation(fields: [iocId], references: [id], onDelete: Cascade)
+  provider    String    // virustotal | abuseipdb | urlhaus | otx | threatfox | malwarebazaar
+  status      String    @default("pending")  // pending | ok | error | not_found
+  response    Json?     @db.JsonB
+  enrichedAt  DateTime? @map("enriched_at")
+  errorMsg    String?   @map("error_msg") @db.Text
+
+  @@unique([iocId, provider])
+  @@index([iocId])
+  @@index([provider, status])
+  @@map("ioc_enrichments")
+}
+
+model Correlation {
+  id              String   @id @default(uuid()) @db.Uuid
+  caseId          String?  @map("case_id") @db.Uuid
+  case            Case?    @relation(fields: [caseId], references: [id], onDelete: SetNull)
+  correlationType String   @map("correlation_type") // hash | user | ip | domain | url | process | persistence
+  value           String   // the shared value (hash, username, etc.)
+  confidence      Int      @default(50) // 0-100
+  hosts           String[] // list of hostnames involved
+  investigationIds String[] @map("investigation_ids")  // DB UUIDs
+  evidenceIds     String[] @map("evidence_ids")
+  metadata        Json?    @db.JsonB
+  jobId           String?  @map("job_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([caseId])
+  @@index([correlationType])
+  @@index([confidence])
+  @@index([createdAt])
+  @@map("correlations")
+}
+
+model CorrelationWhitelist {
+  id              String   @id @default(uuid()) @db.Uuid
+  correlationType String   @map("correlation_type")
+  value           String
+  note            String?  @db.Text
+
+  createdById String @map("created_by_id") @db.Uuid
+  createdBy   User   @relation(fields: [createdById], references: [id])
+
+  organizationId String?       @map("organization_id") @db.Uuid
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([correlationType, value, organizationId])
+  @@index([correlationType, value])
+  @@map("correlation_whitelist")
+}
+
+model OrgThreatIntelProvider {
+  id              String       @id @default(uuid()) @db.Uuid
+  organizationId  String       @map("organization_id") @db.Uuid
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  provider        String       // virustotal | abuseipdb | otx | urlhaus | threatfox | malwarebazaar
+  encryptedApiKey String?      @map("encrypted_api_key") @db.Text // null for keyless providers
+  keyLast4        String?      @map("key_last4") // last 4 chars, plaintext, for display only
+  enabled         Boolean      @default(true)
+
+  lastUsedAt      DateTime?    @map("last_used_at")
+  lastError       String?      @map("last_error") @db.Text
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([organizationId, provider])
+  @@index([organizationId])
+  @@map("org_threat_intel_providers")
+}
+
+model UrlhausFeedEntry {
+  id          String    @id @default(uuid()) @db.Uuid
+  urlhausId   String    @unique @map("urlhaus_id") // the feed's own numeric id
+  url         String    @db.Text
+  urlStatus   String?   @map("url_status")
+  threat      String?
+  tags        String[]  @default([])
+  reporter    String?
+  dateAdded   DateTime? @map("date_added")
+  urlhausLink String?   @map("urlhaus_link")
+  syncedAt    DateTime  @default(now()) @map("synced_at")
+
+  // Some URLs exceed the btree row-size limit (same issue Evidence.url hit) —
+  // hash index only supports equality, which is all this is ever queried with.
+  @@index([url], type: Hash)
+  @@map("urlhaus_feed_entries")
+}

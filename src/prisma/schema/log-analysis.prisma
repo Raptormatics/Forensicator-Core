@@ -1,0 +1,183 @@
+// Log Analysis — ported from the Enterprise overlay into Core.
+//
+// LogAnalysisRule.isBuiltin is new here, not in the overlay's version of
+// this model: the overlay has no built-in/custom split for rules at all
+// (every rule there is custom-authored). Core ships a small built-in
+// ruleset (see src/lib/log-analysis/rule-engine/seed.ts) and mirrors
+// LogDecoder's existing isBuiltin pattern — custom rule *authoring* stays
+// an Enterprise-only capability; built-in rules are visible/toggleable
+// (not editable) by anyone, matching the decoder gating in the API routes.
+
+model LogUpload {
+  id           String    @id @default(uuid()) @db.Uuid
+  filename     String
+  sourceType   String    @map("source_type") // apache | nginx | syslog | windows-event | iis | firewall | custom-json | custom-csv
+  status       String    @default("pending") // pending | processing | ready | failed
+  eventCount   Int       @default(0) @map("event_count")
+  findingCount Int       @default(0) @map("finding_count")
+  hostname     String?
+  assetName    String?   @map("asset_name")
+  ipAddress    String?   @map("ip_address")
+  notes        String?   @db.Text
+  errorMessage String?   @map("error_message") @db.Text
+
+  uploadedById   String       @map("uploaded_by_id") @db.Uuid
+  uploadedBy     User         @relation(fields: [uploadedById], references: [id])
+  organizationId String?      @map("organization_id") @db.Uuid
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  events   LogEvent[]
+  findings LogFinding[]
+  iocs     LogIoc[]
+
+  caseId String? @map("case_id") @db.Uuid
+  case   Case?   @relation(fields: [caseId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([uploadedById])
+  @@index([organizationId])
+  @@index([status])
+  @@index([caseId])
+  @@index([createdAt])
+  @@map("log_uploads")
+}
+
+model LogEvent {
+  id         String    @id @default(uuid()) @db.Uuid
+  uploadId   String    @map("upload_id") @db.Uuid
+  upload     LogUpload @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+
+  lineNumber Int      @map("line_number")
+  timestamp  DateTime?
+  sourceApp  String   @map("source_app")
+  eventType  String?  @map("event_type")
+
+  srcIp       String?  @map("src_ip")
+  dstIp       String?  @map("dst_ip")
+  srcPort     Int?     @map("src_port")
+  dstPort     Int?     @map("dst_port")
+  username    String?
+  domain      String?
+  process     String?
+  commandLine String?  @map("command_line") @db.Text
+  filePath    String?  @map("file_path")
+  fileName    String?  @map("file_name")
+  hashMd5     String?  @map("hash_md5")
+  hashSha1    String?  @map("hash_sha1")
+  hashSha256  String?  @map("hash_sha256")
+  url         String?  @db.Text
+  httpMethod  String?  @map("http_method")
+  statusCode  Int?     @map("status_code")
+  userAgent   String?  @map("user_agent") @db.Text
+  message     String?  @db.Text
+
+  raw        String @db.Text
+  normalized Json   @db.JsonB
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([uploadId])
+  @@index([uploadId, timestamp])
+  @@index([srcIp])
+  @@index([username])
+  @@index([process])
+  @@map("log_events")
+}
+
+model LogFinding {
+  id       String    @id @default(uuid()) @db.Uuid
+  uploadId String    @map("upload_id") @db.Uuid
+  upload   LogUpload @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+  ruleId   String?   @map("rule_id") @db.Uuid
+  rule     LogAnalysisRule? @relation(fields: [ruleId], references: [id], onDelete: SetNull)
+
+  title        String
+  description  String?  @db.Text
+  severity     String   // critical | high | medium | low | info
+  eventCount   Int      @default(1) @map("event_count")
+  firstSeen    DateTime? @map("first_seen")
+  lastSeen     DateTime? @map("last_seen")
+  matchedField String?  @map("matched_field")
+  matchedValue String?  @map("matched_value") @db.Text
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([uploadId])
+  @@index([ruleId])
+  @@index([severity])
+  @@map("log_findings")
+}
+
+model LogIoc {
+  id       String    @id @default(uuid()) @db.Uuid
+  uploadId String    @map("upload_id") @db.Uuid
+  upload   LogUpload @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+
+  type  String // ip | domain | url | hash_md5 | hash_sha1 | hash_sha256 | process | filepath | email | username
+  value String
+  count Int    @default(1)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([uploadId, type, value])
+  @@index([uploadId])
+  @@index([type])
+  @@index([value])
+  @@map("log_iocs")
+}
+
+model LogAnalysisRule {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String
+  description String?  @db.Text
+  severity    String   @default("medium") // critical | high | medium | low | info
+  enabled     Boolean  @default(true)
+  isBuiltin   Boolean  @default(false) @map("is_builtin")
+  logic       String   @default("AND")    // AND | OR
+  conditions  Json     @db.JsonB           // [{ field, operator, value }]
+  tags        String[] @default([])
+
+  createdById    String?      @map("created_by_id") @db.Uuid
+  createdBy      User?        @relation("logRuleAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+  organizationId String?      @map("organization_id") @db.Uuid
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  hitCount Int @default(0) @map("hit_count")
+
+  findings LogFinding[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([organizationId])
+  @@index([enabled])
+  @@index([severity])
+  @@index([isBuiltin])
+  @@map("log_analysis_rules")
+}
+
+model LogDecoder {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String   @unique // decoder/<integration-name>/0
+  title       String?
+  description String?  @db.Text
+  yamlContent String   @map("yaml_content") @db.Text
+  enabled     Boolean  @default(true)
+  isBuiltin   Boolean  @default(false) @map("is_builtin")
+  version     Int      @default(1)
+
+  createdById    String?       @map("created_by_id") @db.Uuid
+  createdBy      User?         @relation("logDecoderAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+  organizationId String?       @map("organization_id") @db.Uuid
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([enabled])
+  @@index([isBuiltin])
+  @@index([organizationId])
+  @@map("log_decoders")
+}
