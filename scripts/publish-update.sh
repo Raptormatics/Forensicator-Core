@@ -7,6 +7,13 @@
 # Without credentials configured, it just builds locally and prints what
 # to upload by hand.
 #
+# Also creates a GitHub release (tag v<version>) with the .fpk attached,
+# if the `gh` CLI is installed and authenticated — a separate, manual
+# download path for anyone doing an offline/CLI install rather than
+# using the in-app "Check for Updates" flow, which only ever talks to
+# the R2-hosted update server above and never touches GitHub. Skipped
+# (not failed) if `gh` isn't available or logged in.
+#
 # Forensicator Core shares the same R2 bucket/custom domain as Forensicator
 # Enterprise's update packages, under a core/ prefix — same credentials
 # file, no separate Cloudflare setup needed:
@@ -116,3 +123,37 @@ else
 fi
 echo ""
 cat "$LATEST_JSON"
+
+echo ""
+echo "==> GitHub release (for manual/offline downloads — separate from the"
+echo "    hosted update server above; appliances never fetch from this)"
+TAG="v${VERSION}"
+if ! command -v gh >/dev/null 2>&1; then
+  echo "    gh CLI not found (https://cli.github.com/) — skipping. Create it by hand:"
+  echo "    gh release create ${TAG} ${FPK_PATH} --title \"Forensicator Core v${VERSION}\" --notes-file \"${RELEASE_NOTES_FILE:-<notes file>}\""
+elif ! gh auth status >/dev/null 2>&1; then
+  echo "    gh CLI not authenticated (run 'gh auth login') — skipping. Create it by hand:"
+  echo "    gh release create ${TAG} ${FPK_PATH} --title \"Forensicator Core v${VERSION}\" --notes-file \"${RELEASE_NOTES_FILE:-<notes file>}\""
+else
+  # The release tags whatever commit is CURRENTLY on the remote default
+  # branch unless it's pushed first — build-update-package.sh's own
+  # version-bump commit (if VERSION= was passed) is local-only up to this
+  # point, so without this push `gh release create` would tag an older
+  # commit that doesn't actually match the package it's attached to.
+  echo "    pushing commits (including any version bump) to origin"
+  git push
+
+  if gh release view "$TAG" >/dev/null 2>&1; then
+    echo "    ${TAG} already exists — uploading ${FPK_NAME} to it (overwriting if already attached)"
+    gh release upload "$TAG" "$FPK_PATH" --clobber
+  else
+    GH_ARGS=(release create "$TAG" "$FPK_PATH" --title "Forensicator Core v${VERSION}")
+    if [[ -n "$RELEASE_NOTES_FILE" && -f "$RELEASE_NOTES_FILE" ]]; then
+      GH_ARGS+=(--notes-file "$RELEASE_NOTES_FILE")
+    else
+      GH_ARGS+=(--notes "Forensicator Core v${VERSION}")
+    fi
+    gh "${GH_ARGS[@]}"
+  fi
+  echo "    $(gh release view "$TAG" --json url -q .url)"
+fi
