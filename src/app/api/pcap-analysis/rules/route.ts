@@ -1,29 +1,19 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/**
+ * Core ships no POST here — creating a rule is custom-rule *authoring*,
+ * an Enterprise-only capability (see src/prisma/schema/pcap-analysis.prisma).
+ * This isn't a role/UI-level restriction on top of working create logic;
+ * the create logic itself doesn't exist in this file. Core is open source,
+ * so a check gating otherwise-functional code would be trivially
+ * bypassable by anyone reading or forking it — the only real boundary is
+ * that this code isn't here. The Enterprise overlay replaces this file
+ * with a version that adds POST back (see that file's own header comment).
+ */
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db/prisma";
 import { getActorOrThrow, AuthError } from "@/lib/auth/api-guard";
-import { z } from "zod";
-
-const ConditionSchema = z.object({
-  id:       z.string(),
-  field:    z.string(),
-  operator: z.string(),
-  value:    z.string(),
-});
-
-const CreateSchema = z.object({
-  name:           z.string().min(1),
-  description:    z.string().nullable().optional(),
-  severity:       z.string().optional(),
-  enabled:        z.boolean().optional(),
-  logic:          z.enum(["AND", "OR"]).optional(),
-  conditions:     z.array(ConditionSchema).min(1),
-  tags:           z.array(z.string()).optional(),
-  organizationId: z.string().uuid().optional().nullable(),
-  isBuiltin:      z.boolean().optional(),
-});
 
 // ── GET /api/pcap-analysis/rules ────────────────────────────────────────────
 export async function GET(req: NextRequest) {
@@ -54,37 +44,6 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ rules });
   } catch (err) {
     if (err instanceof AuthError) return err.toResponse();
-    return NextResponse.json({ error: "server_error" }, { status: 500 });
-  }
-}
-
-// ── POST /api/pcap-analysis/rules ───────────────────────────────────────────
-export async function POST(req: NextRequest) {
-  try {
-    const actor = await getActorOrThrow(req);
-    const body  = await req.json();
-    const input = CreateSchema.parse(body);
-
-    const rule = await prisma.pcapAnalysisRule.create({
-      data: {
-        name:           input.name.trim(),
-        description:    input.description ?? null,
-        severity:       input.severity ?? "medium",
-        enabled:        input.enabled !== false,
-        isBuiltin:      actor.role === "platform_admin" && (input.isBuiltin ?? false),
-        logic:          input.logic ?? "AND",
-        conditions:     input.conditions,
-        tags:           input.tags ?? [],
-        createdById:    actor.id,
-        organizationId: input.organizationId ?? actor.organizationIds[0] ?? null,
-      },
-      include: { createdBy: { select: { email: true, name: true } } },
-    });
-
-    return NextResponse.json({ rule }, { status: 201 });
-  } catch (err) {
-    if (err instanceof AuthError) return err.toResponse();
-    if (err instanceof z.ZodError) return NextResponse.json({ error: "validation", detail: err.errors }, { status: 422 });
     return NextResponse.json({ error: "server_error" }, { status: 500 });
   }
 }

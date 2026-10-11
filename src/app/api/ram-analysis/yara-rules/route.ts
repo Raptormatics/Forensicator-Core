@@ -1,23 +1,21 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/**
+ * Core ships no POST here — authoring a new Yara signature is custom
+ * *authoring*, an Enterprise-only capability (see
+ * src/prisma/schema/ram-analysis.prisma). This isn't a role/UI-level
+ * restriction on top of working create logic; the create logic itself
+ * (including validateYaraSource(), which only exists in the Enterprise
+ * overlay's version of src/lib/ram-analysis/yara.ts) doesn't exist here
+ * at all. Core is open source, so a check gating otherwise-functional
+ * code would be trivially bypassable by anyone reading or forking it —
+ * the only real boundary is that this code isn't here. The Enterprise
+ * overlay replaces this file with a version that adds POST back.
+ */
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db/prisma";
 import { getActorOrThrow, AuthError } from "@/lib/auth/api-guard";
-import { getVolatilityPath } from "@/lib/settings/system";
-import { validateYaraSource } from "@/lib/ram-analysis/yara";
-import { z } from "zod";
-
-const CreateSchema = z.object({
-  name:           z.string().min(1),
-  description:    z.string().nullable().optional(),
-  severity:       z.string().optional(),
-  enabled:        z.boolean().optional(),
-  yaraSource:     z.string().min(1),
-  tags:           z.array(z.string()).optional(),
-  organizationId: z.string().uuid().optional().nullable(),
-  isBuiltin:      z.boolean().optional(),
-});
 
 // ── GET /api/ram-analysis/yara-rules ────────────────────────────────────────
 export async function GET(req: NextRequest) {
@@ -47,42 +45,6 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ rules });
   } catch (err) {
     if (err instanceof AuthError) return err.toResponse();
-    return NextResponse.json({ error: "server_error" }, { status: 500 });
-  }
-}
-
-// ── POST /api/ram-analysis/yara-rules ───────────────────────────────────────
-export async function POST(req: NextRequest) {
-  try {
-    const actor = await getActorOrThrow(req);
-    const body  = await req.json();
-    const input = CreateSchema.parse(body);
-
-    const volPath = await getVolatilityPath();
-    const validation = await validateYaraSource(volPath, input.yaraSource);
-    if (!validation.valid) {
-      return NextResponse.json({ error: "yara_syntax", message: validation.message }, { status: 400 });
-    }
-
-    const rule = await prisma.ramYaraRule.create({
-      data: {
-        name:           input.name.trim(),
-        description:    input.description ?? null,
-        severity:       input.severity ?? "medium",
-        enabled:        input.enabled !== false,
-        isBuiltin:      actor.role === "platform_admin" && (input.isBuiltin ?? false),
-        yaraSource:     input.yaraSource,
-        tags:           input.tags ?? [],
-        createdById:    actor.id,
-        organizationId: input.organizationId ?? actor.organizationIds[0] ?? null,
-      },
-      include: { createdBy: { select: { email: true, name: true } } },
-    });
-
-    return NextResponse.json({ rule }, { status: 201 });
-  } catch (err) {
-    if (err instanceof AuthError) return err.toResponse();
-    if (err instanceof z.ZodError) return NextResponse.json({ error: "validation", detail: err.errors }, { status: 422 });
     return NextResponse.json({ error: "server_error" }, { status: 500 });
   }
 }

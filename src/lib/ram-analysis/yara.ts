@@ -1,10 +1,16 @@
 /**
- * Runs custom Yara rules directly against a raw memory image via
- * yara-scan.py, using the Volatility3 venv's own Python interpreter (a
- * sibling of the resolved `vol` binary — no separate settings field
- * needed). Mirrors volatility.ts's spawn/JSON-result conventions but the
- * "renderer" here is a small hand-rolled JSON-lines protocol over stdout,
- * since Yara has no equivalent of Volatility3's `-r jsonl`.
+ * Runs Yara rules directly against a raw memory image via yara-scan.py,
+ * using the Volatility3 venv's own Python interpreter (a sibling of the
+ * resolved `vol` binary — no separate settings field needed). Mirrors
+ * volatility.ts's spawn/JSON-result conventions but the "renderer" here
+ * is a small hand-rolled JSON-lines protocol over stdout, since Yara has
+ * no equivalent of Volatility3's `-r jsonl`.
+ *
+ * This file only runs rules — compiling/validating a signature's source
+ * at save time (validateYaraSource()) only matters for custom-signature
+ * *authoring*, an Enterprise-only capability, so that function lives in
+ * the Enterprise overlay's version of this file instead, which replaces
+ * this one wholesale and adds it on top of the same runYaraScan() below.
  */
 import { spawn } from "child_process";
 import path from "path";
@@ -34,35 +40,6 @@ export type YaraScanResult =
   | { status: "error"; message: string };
 
 const DEFAULT_YARA_TIMEOUT_SECONDS = 20 * 60; // mirrors volatility.ts's own 20-minute default
-
-/**
- * Compiles a single Yara source string without scanning anything — used
- * by the create/update rule API routes to reject invalid Yara syntax at
- * save time with a real error message, rather than silently dropping the
- * bad rule later during a scan (yara-scan.py still guards against this
- * independently, since a rule edited directly in the DB could bypass the
- * API, but this is what gives the analyst immediate feedback in the UI).
- */
-export async function validateYaraSource(
-  volPath: string,
-  source: string
-): Promise<{ valid: true } | { valid: false; message: string }> {
-  const pythonPath = path.join(path.dirname(volPath), "python3");
-  const code = "import sys\ntry:\n    import yara\nexcept ImportError:\n    sys.exit(0)\ntry:\n    yara.compile(source=sys.stdin.read())\nexcept Exception as e:\n    print(str(e))\n    sys.exit(1)\n";
-
-  return new Promise((resolve) => {
-    const child = spawn(pythonPath, ["-c", code], { stdio: ["pipe", "pipe", "pipe"] });
-    let stdout = "";
-    child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
-    child.on("error", () => resolve({ valid: true })); // interpreter missing entirely — treat as unvalidatable, not invalid
-    child.on("close", (exitCode) => {
-      if (exitCode !== 0) resolve({ valid: false, message: stdout.trim() || "Invalid Yara syntax" });
-      else resolve({ valid: true });
-    });
-    child.stdin.write(source);
-    child.stdin.end();
-  });
-}
 
 export async function runYaraScan(
   volPath: string,
