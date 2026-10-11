@@ -243,21 +243,37 @@ current_deployment_mode() {
 # though it turned out not to be what actually broke the 1.2.4/1.2.5/1.2.6
 # installs.
 #
-# `npm run prisma:generate` is the real fix, and the actual root cause:
-# `npm ci` alone used to be enough because @prisma/client's own
-# postinstall script auto-ran `prisma generate` — but a newer npm's
-# script-allowlisting security feature blocks postinstall scripts it
-# doesn't recognize by default (confirmed in update.log: "4 packages had
-# install scripts blocked ... @prisma/client@5.22.0 (postinstall)"), so
-# that auto-generation silently stopped happening, every single time,
-# on every single rebuild through this script. provision.sh was never
-# affected because it's always called this explicitly, never relying on
-# the postinstall hook — see its own "Installing dependencies and
-# building" step. Used by every rebuild site: the forward install, the
-# overlay apply/replay, and restore_backup()'s own post-rollback rebuild.
+# `npm run prisma:generate` is needed because `npm ci` alone used to be
+# enough: @prisma/client's own postinstall script auto-ran `prisma
+# generate`, but a newer npm's script-allowlisting security feature
+# blocks postinstall scripts it doesn't recognize by default (confirmed
+# in update.log: "4 packages had install scripts blocked ...
+# @prisma/client@5.22.0 (postinstall)"), so that auto-generation
+# silently stopped happening on every rebuild through this script.
+#
+# `NODE_ENV=development npm ci` (not a bare `npm ci`) is the other half,
+# and was the actual cause of the "Module not found" failures that
+# looked like a Next.js bug and briefly got misdiagnosed as one (even a
+# real Next.js downgrade "fixed" it in isolated testing — because that
+# testing never sourced $ENV_FILE, so NODE_ENV was never set there
+# either, not because the version mattered): $ENV_FILE sets
+# NODE_ENV="production" for the app's own runtime, and this script's
+# `set -a` source of it (see top of file, needed so DATABASE_URL reaches
+# prisma) exports that into every child process here too — including
+# this npm ci, which under NODE_ENV=production skips devDependencies
+# entirely. typescript is a devDependency; without it, Next's build
+# can't fully resolve tsconfig.json's "@/*" paths for some imports,
+# which is exactly the failure this produced. Overridden here, for the
+# install only — `next build` itself setting NODE_ENV=production
+# internally is normal and expected, this is specifically about what
+# `npm ci` sees. provision.sh never hit this: it runs npm ci before
+# $ENV_FILE is ever written, so NODE_ENV doesn't exist yet at that
+# point — see its own "Installing dependencies and building" step. Used
+# by every rebuild site: the forward install, the overlay apply/replay,
+# and restore_backup()'s own post-rollback rebuild.
 rebuild_app() {
   rm -rf "${APP_DIR}/.next"
-  runuser -u "$SERVICE_USER" -- bash -lc "cd '${APP_DIR}' && npm ci && npm run prisma:generate && NEXT_PUBLIC_DEPLOYMENT_MODE='$(current_deployment_mode)' npm run build"
+  runuser -u "$SERVICE_USER" -- bash -lc "cd '${APP_DIR}' && NODE_ENV=development npm ci && npm run prisma:generate && NEXT_PUBLIC_DEPLOYMENT_MODE='$(current_deployment_mode)' npm run build"
 }
 
 # Merges enterprise.deps.json (shipped by the overlay, extracted alongside
