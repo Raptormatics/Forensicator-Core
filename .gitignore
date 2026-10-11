@@ -9,6 +9,8 @@ coverage
 dist
 *.log
 *.tsbuildinfo
+__pycache__
+*.pyc
 
 # large local artifacts — never belong in version control
 /reports-output/
