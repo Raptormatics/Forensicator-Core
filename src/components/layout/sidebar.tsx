@@ -13,6 +13,7 @@ import {
   LogOut,
   Menu,
   Monitor,
+  Network,
   ScanLine,
   Search,
   Settings,
@@ -30,10 +31,10 @@ import { useRef, useState } from "react";
 // ── Nav tree ─────────────────────────────────────────────────────────────────
 //
 // The Enterprise overlay replaces this file with an extended version that
-// adds its own remaining Pro-only nav groups (PCAP Analysis, RAM Analysis,
-// Developers) and Pro-only items nested inside Platform/Settings (Webhooks,
-// Retention, SIEM Integrations, Single Sign-On, License) — Intelligence and
-// Log Analysis used to be overlay-only too, now native to Core (custom
+// adds its own remaining Pro-only nav groups (RAM Analysis, Developers) and
+// Pro-only items nested inside Platform/Settings (Webhooks, Retention,
+// SIEM Integrations, Single Sign-On, License) — Intelligence, Log Analysis,
+// and PCAP Analysis used to be overlay-only too, now native to Core (custom
 // decoder/rule authoring stays Enterprise-only within those pages). Unlike
 // most of the files the overlay touches, this one's hardcoded
 // href strings aren't a safety boundary — dynamic-import tricks don't
@@ -78,6 +79,15 @@ const NAV: NavItem[] = [
       { label: "Uploads",  href: "/log-analysis" },
       { label: "Decoders", href: "/log-analysis/decoders" },
       { label: "Rules",    href: "/log-analysis/rules" },
+    ],
+  },
+  {
+    kind: "group",
+    label: "PCAP Analysis",
+    icon: Network,
+    children: [
+      { label: "Uploads", href: "/pcap-analysis" },
+      { label: "Rules",   href: "/pcap-analysis/rules" },
     ],
   },
   { kind: "link",  label: "Reports",         href: "/reports",         icon: FileText },
