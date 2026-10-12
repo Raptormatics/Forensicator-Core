@@ -1,12 +1,15 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
 import Link from "next/link";
 import {
-  AlertCircle, ArrowLeft, CheckCircle2, Code2, Copy, Lock, Loader2, Play, Save, Trash2,
+  AlertCircle, ArrowLeft, CheckCircle2, Code2, Copy, Lock, Loader2, Play, Save, Trash2, Wand2, FileCode,
 } from "lucide-react";
+import VisualBuilder from "../new/visualBuilder/VisualBuilder";
+import VisualLoader from "../new/visualBuilder/VisualLoader";
+import { canReverseParse, type ReverseParseResult } from "../new/visualBuilder/reverseParse";
 
 type Decoder = {
   id: string;
@@ -45,6 +48,10 @@ export default function DecoderDetailPage() {
   const [validating, setValidating]   = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const [mode, setMode]               = useState<"visual" | "yaml">("yaml");
+  const [yamlManuallyEdited, setYamlManuallyEdited] = useState(false);
+  const [visualSeed, setVisualSeed]   = useState<ReverseParseResult | null>(null);
+
   // Test harness
   const [logLine, setLogLine]       = useState("");
   const [testing, setTesting]       = useState(false);
@@ -68,6 +75,11 @@ export default function DecoderDetailPage() {
     }
     loadDecoder();
   }, [id]);
+
+  const reverseParseCheck = useMemo(
+    () => (decoder ? canReverseParse(decoder.yamlContent) : { ok: false as const, reason: "yaml-error" as const }),
+    [decoder]
+  );
 
   useEffect(() => {
     if (!yaml) return;
@@ -176,6 +188,17 @@ export default function DecoderDetailPage() {
     router.push("/log-analysis/decoders");
   }
 
+  function switchToYamlMode() {
+    setMode("yaml");
+  }
+
+  function switchToVisualMode() {
+    if (visualSeed && yamlManuallyEdited) {
+      if (!confirm("Switching to the Visual Editor will discard your manual YAML edits. Continue?")) return;
+    }
+    setMode("visual");
+  }
+
   if (loading) {
     return (
       <div className="min-h-screen bg-zinc-950 flex items-center justify-center">
@@ -233,6 +256,26 @@ export default function DecoderDetailPage() {
               </div>
               {decoder.title && <p className="text-sm text-zinc-400 ml-7">{decoder.title}</p>}
             </div>
+            {!isReadonly && (
+              <div className="ml-2 flex items-center rounded-lg border border-zinc-800 bg-zinc-900 p-0.5 text-sm">
+                <button
+                  onClick={switchToVisualMode}
+                  className={`flex items-center gap-1.5 rounded-md px-3 py-1 transition-colors ${
+                    mode === "visual" ? "bg-teal-600 text-white" : "text-zinc-400 hover:text-zinc-200"
+                  }`}
+                >
+                  <Wand2 className="h-3.5 w-3.5" /> Visual Editor
+                </button>
+                <button
+                  onClick={switchToYamlMode}
+                  className={`flex items-center gap-1.5 rounded-md px-3 py-1 transition-colors ${
+                    mode === "yaml" ? "bg-teal-600 text-white" : "text-zinc-400 hover:text-zinc-200"
+                  }`}
+                >
+                  <FileCode className="h-3.5 w-3.5" /> Raw YAML
+                </button>
+              </div>
+            )}
           </div>
 
           <div className="flex items-center gap-2">
@@ -294,7 +337,39 @@ export default function DecoderDetailPage() {
 
           {/* YAML Editor */}
           <div className="lg:col-span-3 flex flex-col gap-4">
-            <div className="rounded-xl border border-zinc-800 bg-zinc-900 overflow-hidden">
+            {!isReadonly && (
+              <div className={mode === "visual" ? "" : "hidden"}>
+                {!reverseParseCheck.ok ? (
+                  <div className="flex items-start gap-2 text-sm text-orange-400 bg-orange-900/20 border border-orange-900/40 rounded-lg p-4">
+                    <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+                    <span>
+                      {reverseParseCheck.reason === "no-pattern" &&
+                        "This decoder doesn't use the pattern-based parser (for example, it may be JSON-based) — visual editing isn't available for it."}
+                      {reverseParseCheck.reason === "multi-pattern" &&
+                        "This decoder has more than one fallback pattern. The visual editor only supports a single pattern, and loading it here would discard the others on save."}
+                      {reverseParseCheck.reason === "yaml-error" &&
+                        "This decoder's YAML couldn't be parsed for visual editing."}
+                      {" "}Use the Raw YAML tab instead.
+                    </span>
+                  </div>
+                ) : visualSeed ? (
+                  <VisualBuilder
+                    key={decoder.id}
+                    initial={{ rawLine: visualSeed.rawLine, spans: visualSeed.spans, meta: visualSeed.meta }}
+                    existingName={visualSeed.name}
+                    onYamlChange={(y) => { setYaml(y); setYamlManuallyEdited(false); }}
+                  />
+                ) : (
+                  <VisualLoader
+                    yamlContent={decoder.yamlContent}
+                    defaultSampleLine={logLine}
+                    onLoaded={setVisualSeed}
+                  />
+                )}
+              </div>
+            )}
+
+            <div className={(isReadonly || mode === "yaml") ? "rounded-xl border border-zinc-800 bg-zinc-900 overflow-hidden" : "hidden"}>
               <div className="flex items-center justify-between px-4 py-2.5 border-b border-zinc-800 bg-zinc-900/80">
                 <span className="text-xs font-medium text-zinc-400 uppercase tracking-wider">
                   {decoder.name}.yaml {isDirty && !isReadonly && <span className="text-yellow-400">●</span>}
@@ -303,7 +378,7 @@ export default function DecoderDetailPage() {
               </div>
               <textarea
                 value={yaml}
-                onChange={(e) => { if (!isReadonly) setYaml(e.target.value); }}
+                onChange={(e) => { if (!isReadonly) { setYaml(e.target.value); setYamlManuallyEdited(true); } }}
                 readOnly={isReadonly}
                 spellCheck={false}
                 className={`w-full font-mono text-sm text-zinc-200 bg-zinc-950 p-4 h-[500px] resize-none outline-none leading-relaxed ${isReadonly ? "cursor-default opacity-80" : ""}`}

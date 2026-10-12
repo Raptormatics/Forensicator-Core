@@ -1,21 +1,17 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/**
- * Core ships no POST here — creating a brand-new decoder from scratch
- * (hand-written YAML or, in the overlay, the visual builder) is custom
- * decoder *authoring*, an Enterprise-only capability, and that code
- * doesn't exist in this file at all (not a check gating otherwise-working
- * logic — Core is open source, so that would be trivially bypassable).
- * Cloning a decoder (decoders/[id]/clone/route.ts) stays free in Core —
- * that's forking an existing decoder to customize it, a different thing
- * from authoring one from nothing, and has its own, unaffected endpoint.
- * The Enterprise overlay replaces this file with a version that adds
- * POST back (see that file's own header comment).
- */
 import { NextRequest, NextResponse } from "next/server";
 import { prisma }              from "@/lib/db/prisma";
 import { getActorOrThrow, AuthError } from "@/lib/auth/api-guard";
+import { z }                   from "zod";
+import { compileDecoder, loadDecoders } from "@/lib/log-analysis/decoder-engine/engine";
+
+const CreateSchema = z.object({
+  yamlContent:    z.string().min(10),
+  organizationId: z.string().uuid().optional().nullable(),
+  isBuiltin:      z.boolean().optional(),
+});
 
 // ── GET /api/log-analysis/decoders ──────────────────────────────────────────
 export async function GET(req: NextRequest) {
@@ -52,6 +48,51 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ decoders });
   } catch (err) {
     if (err instanceof AuthError) return err.toResponse();
+    return NextResponse.json({ error: "server_error" }, { status: 500 });
+  }
+}
+
+// ── POST /api/log-analysis/decoders ─────────────────────────────────────────
+// Creates a custom decoder from scratch (hand-written YAML or via the
+// visual builder UI). Cloning (decoders/[id]/clone/route.ts) is a separate,
+// unaffected endpoint.
+export async function POST(req: NextRequest) {
+  try {
+    const actor = await getActorOrThrow(req);
+    const body  = await req.json();
+    const input = CreateSchema.parse(body);
+
+    // Validate + compile YAML before persisting
+    let def;
+    try {
+      def = compileDecoder(input.yamlContent, false);
+    } catch (err) {
+      return NextResponse.json({ error: "invalid_yaml", detail: String(err) }, { status: 400 });
+    }
+
+    const decoder = await prisma.logDecoder.create({
+      data: {
+        name:           def.name,
+        title:          def.title ?? null,
+        description:    def.description ?? null,
+        yamlContent:    input.yamlContent,
+        enabled:        true,
+        isBuiltin:      actor.role === "platform_admin" && (input.isBuiltin ?? false),
+        version:        1,
+        createdById:    actor.id,
+        organizationId: input.organizationId ?? actor.organizationIds[0] ?? null,
+      },
+    });
+
+    // Reload decoders so the new one is available immediately
+    await loadDecoders();
+
+    return NextResponse.json({ decoder }, { status: 201 });
+  } catch (err) {
+    if (err instanceof AuthError) return err.toResponse();
+    if (err instanceof z.ZodError) return NextResponse.json({ error: "validation", detail: err.errors }, { status: 422 });
+    const msg = String(err);
+    if (msg.includes("Unique constraint")) return NextResponse.json({ error: "decoder_name_exists" }, { status: 409 });
     return NextResponse.json({ error: "server_error" }, { status: 500 });
   }
 }

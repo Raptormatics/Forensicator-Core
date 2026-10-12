@@ -1,16 +1,6 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/**
- * Core ships no POST here — creating a rule is custom-rule *authoring*,
- * an Enterprise-only capability (see src/prisma/schema/ram-analysis.prisma).
- * This isn't a role/UI-level restriction on top of working create logic;
- * the create logic itself doesn't exist in this file. Core is open source,
- * so a check gating otherwise-functional code would be trivially
- * bypassable by anyone reading or forking it — the only real boundary is
- * that this code isn't here. The Enterprise overlay replaces this file
- * with a version that adds POST back (see that file's own header comment).
- */
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db/prisma";
 import { getActorOrThrow, AuthError } from "@/lib/auth/api-guard";
@@ -42,6 +32,48 @@ export async function GET(req: NextRequest) {
     });
 
     return NextResponse.json({ rules });
+  } catch (err) {
+    if (err instanceof AuthError) return err.toResponse();
+    return NextResponse.json({ error: "server_error" }, { status: 500 });
+  }
+}
+
+// ── POST /api/ram-analysis/rules ────────────────────────────────────────────
+// Creates a custom rule, scoped to the actor's own organization. Built-in
+// rules are never created through this route — they only come from the
+// seed endpoint.
+export async function POST(req: NextRequest) {
+  try {
+    const actor = await getActorOrThrow(req);
+    const body  = await req.json() as Record<string, unknown>;
+
+    const { name, description, severity, enabled, logic, conditions, tags, organizationId } = body;
+
+    if (!name || typeof name !== "string" || !name.trim()) {
+      return NextResponse.json({ error: "validation", message: "name is required" }, { status: 400 });
+    }
+    if (!Array.isArray(conditions) || conditions.length === 0) {
+      return NextResponse.json({ error: "validation", message: "At least one condition is required" }, { status: 400 });
+    }
+
+    const rule = await prisma.ramAnalysisRule.create({
+      data: {
+        name:          String(name).trim(),
+        description:   description ? String(description) : null,
+        severity:      String(severity ?? "medium"),
+        enabled:       enabled !== false,
+        logic:         String(logic ?? "AND").toUpperCase(),
+        conditions:    conditions,
+        tags:          Array.isArray(tags) ? tags.map(String) : [],
+        createdById:   actor.id,
+        organizationId: organizationId
+          ? String(organizationId)
+          : (actor.organizationIds[0] ?? null),
+      },
+      include: { createdBy: { select: { email: true, name: true } } },
+    });
+
+    return NextResponse.json({ rule }, { status: 201 });
   } catch (err) {
     if (err instanceof AuthError) return err.toResponse();
     return NextResponse.json({ error: "server_error" }, { status: 500 });

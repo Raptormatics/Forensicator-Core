@@ -5,9 +5,12 @@ import Link from "next/link";
 import { useSession } from "next-auth/react";
 import {
   AlertCircle, ArrowLeft, CheckCircle2, ChevronDown, ChevronRight,
-  Lock, RefreshCw, Shield, Trash2, Zap,
+  Edit2, Lock, Plus, RefreshCw, Shield, Trash2, X, Zap,
 } from "lucide-react";
-import { FIELD_LABELS, type LogField, type RuleCondition } from "@/lib/log-analysis/types";
+import {
+  FIELD_LABELS, OPERATORS, SEVERITY_OPTIONS,
+  type LogField, type RuleCondition, type RuleOperator, type RuleSeverity,
+} from "@/lib/log-analysis/types";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -23,6 +26,8 @@ type GroupedRules = {
   builtin: Rule[];
 };
 
+type RuleDraft = Omit<Rule, "id" | "isBuiltin" | "hitCount" | "createdAt" | "createdBy">;
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 const SEVERITY_BADGE: Record<string, string> = {
@@ -32,6 +37,223 @@ const SEVERITY_BADGE: Record<string, string> = {
   low:      "bg-blue-900/40 text-blue-400 border-blue-900",
   info:     "bg-zinc-800 text-zinc-400 border-zinc-700",
 };
+
+function makeCondition(): RuleCondition {
+  return { id: Math.random().toString(36).slice(2), field: "message", operator: "contains", value: "" };
+}
+
+// ── Rule Editor Component ──────────────────────────────────────────────────
+
+function RuleEditor({
+  initial,
+  onSave,
+  onCancel,
+}: {
+  initial?: Partial<Rule>;
+  onSave: (data: RuleDraft) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [name, setName]               = useState(initial?.name ?? "");
+  const [description, setDescription] = useState(initial?.description ?? "");
+  const [severity, setSeverity]       = useState<RuleSeverity>((initial?.severity as RuleSeverity) ?? "medium");
+  const [logic, setLogic]             = useState<"AND" | "OR">((initial?.logic as "AND" | "OR") ?? "AND");
+  const [conditions, setConditions]   = useState<RuleCondition[]>(
+    initial?.conditions?.length ? initial.conditions : [makeCondition()]
+  );
+  const [tags, setTags]               = useState<string[]>(initial?.tags ?? []);
+  const [tagInput, setTagInput]       = useState("");
+  const [saving, setSaving]           = useState(false);
+  const [error, setError]             = useState("");
+
+  function addCondition()       { setConditions((c) => [...c, makeCondition()]); }
+  function removeCondition(id: string) { setConditions((c) => c.filter((x) => x.id !== id)); }
+  function updateCondition(id: string, patch: Partial<RuleCondition>) {
+    setConditions((c) => c.map((x) => x.id === id ? { ...x, ...patch } : x));
+  }
+
+  function addTag(e: React.KeyboardEvent) {
+    if (e.key === "Enter" && tagInput.trim()) {
+      e.preventDefault();
+      setTags((t) => [...new Set([...t, tagInput.trim().toLowerCase()])]);
+      setTagInput("");
+    }
+  }
+  function removeTag(t: string) { setTags((ts) => ts.filter((x) => x !== t)); }
+
+  async function handleSave() {
+    if (!name.trim()) { setError("Rule name is required"); return; }
+    if (conditions.length === 0) { setError("Add at least one condition"); return; }
+    if (conditions.some((c) => !c.value.trim())) { setError("All conditions must have a value"); return; }
+    setSaving(true);
+    setError("");
+    try {
+      await onSave({ name, description: description || null, severity, enabled: initial?.enabled ?? true, logic, conditions, tags });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="rounded-xl border border-zinc-700 bg-zinc-900 p-6 space-y-6">
+      {error && (
+        <div className="flex items-center gap-2 text-sm text-red-400 bg-red-950/20 border border-red-900/40 rounded-lg px-3 py-2">
+          <AlertCircle className="h-4 w-4 shrink-0" /> {error}
+        </div>
+      )}
+
+      {/* Name + Severity */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <div className="sm:col-span-2">
+          <label className="block text-xs text-zinc-400 mb-1.5">Rule Name *</label>
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="e.g. Encoded PowerShell Detected"
+            className="w-full rounded-md border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 outline-none focus:border-teal-500"
+          />
+        </div>
+        <div>
+          <label className="block text-xs text-zinc-400 mb-1.5">Severity</label>
+          <select
+            value={severity}
+            onChange={(e) => setSeverity(e.target.value as RuleSeverity)}
+            className="w-full rounded-md border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-teal-500"
+          >
+            {SEVERITY_OPTIONS.map((s) => (
+              <option key={s.value} value={s.value}>{s.label}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {/* Description */}
+      <div>
+        <label className="block text-xs text-zinc-400 mb-1.5">Description</label>
+        <textarea
+          value={description ?? ""}
+          onChange={(e) => setDescription(e.target.value)}
+          placeholder="What does this rule detect?"
+          rows={2}
+          className="w-full rounded-md border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 outline-none focus:border-teal-500 resize-none"
+        />
+      </div>
+
+      {/* Conditions */}
+      <div>
+        <div className="flex items-center justify-between mb-3">
+          <label className="text-xs text-zinc-400 font-medium">Conditions</label>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-zinc-500">Match</span>
+            {(["AND", "OR"] as const).map((l) => (
+              <button
+                key={l}
+                onClick={() => setLogic(l)}
+                className={`rounded px-2.5 py-1 text-xs font-medium transition-colors ${
+                  logic === l
+                    ? "bg-teal-900/50 text-teal-300 border border-teal-700"
+                    : "bg-zinc-800 text-zinc-500 border border-zinc-700 hover:border-zinc-600"
+                }`}
+              >
+                {l}
+              </button>
+            ))}
+            <span className="text-xs text-zinc-500">conditions</span>
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          {conditions.map((c, idx) => (
+            <div key={c.id} className="flex items-center gap-2">
+              {idx > 0 && (
+                <span className="shrink-0 w-8 text-center text-xs font-medium text-zinc-600">{logic}</span>
+              )}
+              {idx === 0 && <span className="shrink-0 w-8 text-center text-xs text-zinc-600">IF</span>}
+
+              {/* Field */}
+              <select
+                value={c.field}
+                onChange={(e) => updateCondition(c.id, { field: e.target.value as LogField })}
+                className="flex-1 min-w-0 rounded-md border border-zinc-700 bg-zinc-800 px-2 py-2 text-xs text-zinc-200 outline-none focus:border-teal-500"
+              >
+                {(Object.entries(FIELD_LABELS) as [LogField, string][]).map(([v, l]) => (
+                  <option key={v} value={v}>{l}</option>
+                ))}
+              </select>
+
+              {/* Operator */}
+              <select
+                value={c.operator}
+                onChange={(e) => updateCondition(c.id, { operator: e.target.value as RuleOperator })}
+                className="w-36 shrink-0 rounded-md border border-zinc-700 bg-zinc-800 px-2 py-2 text-xs text-zinc-200 outline-none focus:border-teal-500"
+              >
+                {OPERATORS.map(({ value, label }) => (
+                  <option key={value} value={value}>{label}</option>
+                ))}
+              </select>
+
+              {/* Value */}
+              <input
+                value={c.value}
+                onChange={(e) => updateCondition(c.id, { value: e.target.value })}
+                placeholder={c.operator === "in_list" ? "val1, val2, val3" : c.operator === "regex" ? "regex pattern" : "value"}
+                className="flex-1 min-w-0 rounded-md border border-zinc-700 bg-zinc-800 px-2 py-2 text-xs text-zinc-200 placeholder-zinc-600 outline-none focus:border-teal-500"
+              />
+
+              <button
+                onClick={() => removeCondition(c.id)}
+                disabled={conditions.length === 1}
+                className="shrink-0 p-1.5 rounded text-zinc-600 hover:text-red-400 disabled:opacity-30"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+
+        <button
+          onClick={addCondition}
+          className="mt-3 flex items-center gap-1.5 text-xs text-teal-400 hover:text-teal-300"
+        >
+          <Plus className="h-3.5 w-3.5" /> Add Condition
+        </button>
+      </div>
+
+      {/* Tags */}
+      <div>
+        <label className="block text-xs text-zinc-400 mb-1.5">Tags</label>
+        <div className="flex flex-wrap items-center gap-2">
+          {tags.map((t) => (
+            <span key={t} className="flex items-center gap-1 rounded bg-zinc-800 px-2 py-0.5 text-xs text-zinc-400">
+              {t}
+              <button onClick={() => removeTag(t)}><X className="h-2.5 w-2.5" /></button>
+            </span>
+          ))}
+          <input
+            value={tagInput}
+            onChange={(e) => setTagInput(e.target.value)}
+            onKeyDown={addTag}
+            placeholder="Add tag (Enter)"
+            className="rounded-md border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs text-zinc-300 placeholder-zinc-600 outline-none focus:border-teal-500"
+          />
+        </div>
+      </div>
+
+      {/* Actions */}
+      <div className="flex items-center justify-between border-t border-zinc-800 pt-4">
+        <button onClick={onCancel} className="text-sm text-zinc-500 hover:text-zinc-300">Cancel</button>
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          className="flex items-center gap-2 rounded-lg bg-teal-600 px-5 py-2 text-sm font-medium text-white hover:bg-teal-500 disabled:opacity-50"
+        >
+          {saving ? <span className="animate-pulse">Saving…</span> : <><CheckCircle2 className="h-4 w-4" /> Save Rule</>}
+        </button>
+      </div>
+    </div>
+  );
+}
 
 // ── Page ───────────────────────────────────────────────────────────────────
 
@@ -43,6 +265,8 @@ export default function LogAnalysisRulesPage() {
   const [loading, setLoading]   = useState(true);
   const [builtinExpanded, setBuiltinExpanded] = useState(true);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [showNew, setShowNew]   = useState(false);
+  const [editId, setEditId]     = useState<string | null>(null);
   const [seeding, setSeeding]   = useState(false);
   const [seedMsg, setSeedMsg]   = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -63,6 +287,34 @@ export default function LogAnalysisRulesPage() {
   }
 
   useEffect(() => { loadRules(); }, []);
+
+  async function createRule(data: RuleDraft) {
+    const res  = await fetch("/api/log-analysis/rules", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.message ?? body.error ?? `Create failed (${res.status})`);
+    }
+    setShowNew(false);
+    loadRules();
+  }
+
+  async function updateRule(id: string, data: RuleDraft) {
+    const res = await fetch(`/api/log-analysis/rules/${id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.message ?? body.error ?? `Save failed (${res.status})`);
+    }
+    setEditId(null);
+    loadRules();
+  }
 
   async function toggleRule(rule: Rule) {
     await fetch(`/api/log-analysis/rules/${rule.id}`, {
@@ -140,9 +392,15 @@ export default function LogAnalysisRulesPage() {
               <button
                 onClick={seedBuiltins}
                 disabled={seeding}
-                className="flex items-center gap-2 rounded-lg bg-teal-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-teal-500 disabled:opacity-50"
+                className="flex items-center gap-2 rounded-lg border border-zinc-700 px-4 py-2.5 text-sm font-medium text-zinc-300 hover:border-zinc-600 disabled:opacity-50"
               >
                 <RefreshCw className={`h-4 w-4 ${seeding ? "animate-spin" : ""}`} /> Seed Built-ins
+              </button>
+              <button
+                onClick={() => { setShowNew((v) => !v); setEditId(null); }}
+                className="flex items-center gap-2 rounded-lg bg-teal-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-teal-500"
+              >
+                <Plus className="h-4 w-4" /> New Rule
               </button>
             </div>
           </div>
@@ -168,6 +426,10 @@ export default function LogAnalysisRulesPage() {
           </div>
         )}
 
+        {showNew && (
+          <RuleEditor onSave={createRule} onCancel={() => setShowNew(false)} />
+        )}
+
         {loading ? (
           <div className="flex items-center justify-center py-16 text-zinc-500">
             <div className="h-5 w-5 animate-spin rounded-full border-2 border-zinc-700 border-t-teal-400" />
@@ -179,31 +441,43 @@ export default function LogAnalysisRulesPage() {
               <h2 className="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-3">
                 Custom Rules ({customCount})
               </h2>
-              {customCount === 0 ? (
+              {customCount === 0 && !showNew ? (
                 <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-zinc-700 py-10 text-center">
                   <Shield className="h-8 w-8 text-zinc-600 mb-3" />
                   <p className="text-sm text-zinc-400 font-medium">No custom rules yet</p>
-                  <p className="text-xs text-zinc-600 mt-1 max-w-sm">
-                    Core ships the built-in rules below. Authoring your own custom detection
-                    rules is an Enterprise feature — contact{" "}
-                    <a href="mailto:hello@forensicator.io" className="text-teal-400 hover:text-teal-300">
-                      hello@forensicator.io
-                    </a>{" "}
-                    to learn more.
+                  <p className="text-xs text-zinc-600 mt-1 max-w-sm mb-4">
+                    Core ships the built-in rules below — create your own to detect
+                    anything specific to your environment.
                   </p>
+                  <button
+                    onClick={() => setShowNew(true)}
+                    className="flex items-center gap-2 rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-500"
+                  >
+                    <Plus className="h-4 w-4" /> Create Rule
+                  </button>
                 </div>
               ) : (
                 <div className="space-y-3">
                   {rules.custom.map((rule) => (
-                    <RuleCard
-                      key={rule.id}
-                      rule={rule}
-                      expanded={expanded === rule.id}
-                      onExpand={() => setExpanded(expanded === rule.id ? null : rule.id)}
-                      onToggle={() => toggleRule(rule)}
-                      onDelete={() => deleteRule(rule)}
-                      canDelete
-                    />
+                    editId === rule.id ? (
+                      <RuleEditor
+                        key={rule.id}
+                        initial={rule}
+                        onSave={(data) => updateRule(rule.id, data)}
+                        onCancel={() => setEditId(null)}
+                      />
+                    ) : (
+                      <RuleCard
+                        key={rule.id}
+                        rule={rule}
+                        expanded={expanded === rule.id}
+                        onExpand={() => setExpanded(expanded === rule.id ? null : rule.id)}
+                        onToggle={() => toggleRule(rule)}
+                        onEdit={() => { setEditId(rule.id); setShowNew(false); }}
+                        onDelete={() => deleteRule(rule)}
+                        canDelete
+                      />
+                    )
                   ))}
                 </div>
               )}
@@ -250,12 +524,13 @@ export default function LogAnalysisRulesPage() {
 // ── Rule Card ────────────────────────────────────────────────────────────────
 
 function RuleCard({
-  rule, expanded, onExpand, onToggle, onDelete, canDelete,
+  rule, expanded, onExpand, onToggle, onEdit, onDelete, canDelete,
 }: {
   rule:      Rule;
   expanded:  boolean;
   onExpand:  () => void;
   onToggle:  () => void;
+  onEdit?:   () => void;
   onDelete:  () => void;
   canDelete: boolean;
 }) {
@@ -310,6 +585,15 @@ function RuleCard({
           >
             {rule.enabled ? "Enabled" : "Disabled"}
           </button>
+          {onEdit && (
+            <button
+              onClick={onEdit}
+              className="p-1.5 rounded text-zinc-600 hover:text-zinc-300 hover:bg-zinc-800"
+              title="Edit"
+            >
+              <Edit2 className="h-3.5 w-3.5" />
+            </button>
+          )}
           {canDelete && (
             <button
               onClick={onDelete}

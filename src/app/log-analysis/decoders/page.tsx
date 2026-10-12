@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useSession } from "next-auth/react";
 import {
   AlertCircle, CheckCircle2, ChevronDown, ChevronRight, Code2,
-  Copy, Eye, Lock, RefreshCw, Settings, Trash2,
+  Copy, Eye, Lock, Plus, RefreshCw, Settings, Trash2,
 } from "lucide-react";
 
 type Decoder = {
@@ -142,6 +142,13 @@ export default function DecodersPage() {
               <RefreshCw className={`h-3.5 w-3.5 ${seeding ? "animate-spin" : ""}`} />
               Seed Built-ins
             </button>
+            <Link
+              href="/log-analysis/decoders/new"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg bg-teal-600 hover:bg-teal-500 text-white font-medium transition-colors"
+            >
+              <Plus className="h-4 w-4" />
+              New Decoder
+            </Link>
           </div>
         </div>
 
@@ -180,10 +187,15 @@ export default function DecodersPage() {
                   <Code2 className="mx-auto h-10 w-10 text-zinc-600 mb-3" />
                   <p className="text-zinc-400 text-sm">No custom decoders yet.</p>
                   <p className="text-zinc-500 text-sm mt-1">
-                    Clone a built-in decoder below to customize it for your log sources, or
-                    contact <a href="mailto:hello@forensicator.io" className="text-teal-400 hover:text-teal-300">hello@forensicator.io</a> about
-                    Enterprise for the full decoder builder.
+                    Create one to add support for your log sources without changing code.
                   </p>
+                  <Link
+                    href="/log-analysis/decoders/new"
+                    className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 text-sm rounded-lg bg-teal-600 hover:bg-teal-500 text-white font-medium transition-colors"
+                  >
+                    <Plus className="h-4 w-4" />
+                    Create your first decoder
+                  </Link>
                 </div>
               ) : (
                 <div className="space-y-2">
