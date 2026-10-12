@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useSession } from "next-auth/react";
 import {
   AlertCircle, CheckCircle2, ChevronDown, ChevronRight, Code2,
-  Copy, Eye, Lock, Plus, RefreshCw, Settings, Trash2,
+  Copy, Lock, Plus, RefreshCw, Settings, Trash2,
 } from "lucide-react";
 
 type Decoder = {
@@ -372,9 +372,9 @@ function DecoderCard({
         <Link
           href={`/log-analysis/decoders/${decoder.id}`}
           className="p-1.5 rounded hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 transition-colors"
-          title={readonly ? "View" : "Edit"}
+          title="Edit"
         >
-          {readonly ? <Eye className="h-4 w-4" /> : <Settings className="h-4 w-4" />}
+          <Settings className="h-4 w-4" />
         </Link>
         <button
           onClick={onClone}

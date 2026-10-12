@@ -54,14 +54,6 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ id: str
     const existing = await prisma.logDecoder.findUnique({ where: { id: params.id } });
     if (!existing) return NextResponse.json({ error: "not_found" }, { status: 404 });
 
-    // Built-in decoders: content is read-only for everyone, including
-    // platform_admin — only 'enabled' may be toggled. Editing YAML is
-    // custom decoder authoring, an Enterprise-only capability (same
-    // boundary as every other built-in/custom content type in Core).
-    if (existing.isBuiltin && input.yamlContent) {
-      return NextResponse.json({ error: "builtin_readonly" }, { status: 403 });
-    }
-
     // Access check: must own org or be platform_admin
     if (actor.role !== "platform_admin" && !existing.isBuiltin) {
       if (!existing.organizationId || !actor.organizationIds.includes(existing.organizationId)) {

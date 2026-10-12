@@ -221,12 +221,9 @@ export default function DecoderDetailPage() {
     );
   }
 
-  // Built-in content is read-only for everyone, including platform_admin —
-  // editing it is custom decoder authoring, an Enterprise-only capability
-  // (same boundary as every other built-in/custom content type). Deleting
-  // a built-in (restored on reseed) is a different, Core-native admin
-  // capability and stays available to platform_admin.
-  const isReadonly = decoder.isBuiltin;
+  // Editing built-in YAML is unlocked for everyone — only deleting a
+  // built-in (restored on reseed) stays a platform_admin capability.
+  const isReadonly = false;
   const canDelete  = !decoder.isBuiltin || isPlatformAdmin;
   const isValid    = validation?.valid !== false;
   const isDirty    = yaml !== decoder.yamlContent;
