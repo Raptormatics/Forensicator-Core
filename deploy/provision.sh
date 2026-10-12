@@ -83,26 +83,6 @@ apt-get update -y
 # python3-venv/python3-dev — RAM Analysis's Volatility3 + yara-python venv, below.
 apt-get install -y ca-certificates curl gnupg build-essential postgresql postgresql-contrib redis-server sudo tshark python3-venv python3-dev
 
-echo "==> Installing Volatility3 and yara-python (RAM Analysis dependencies)"
-if [[ ! -x "${APP_DIR}/.venvs/volatility3/bin/vol" ]]; then
-  runuser -u "$SERVICE_USER" -- bash -lc "
-    python3 -m venv '${APP_DIR}/.venvs/volatility3' &&
-    '${APP_DIR}/.venvs/volatility3/bin/pip' install --upgrade pip &&
-    '${APP_DIR}/.venvs/volatility3/bin/pip' install volatility3
-  "
-  # yara-python — custom Yara signature scanning (RAM Analysis > Detection
-  # Rules > Custom Yara Signatures). Shares this venv rather than getting
-  # its own, since src/lib/ram-analysis/yara.ts resolves the interpreter
-  # as the sibling of the `vol` binary. Needs python3-dev (installed
-  # above) for its C extension — pip has no prebuilt wheel for every
-  # Python version, so it compiles from source, which needs Python.h.
-  # Missing/failed here degrades gracefully at scan time (reported as a
-  # "not_installed" plugin status), so a failure on this line is
-  # intentionally non-fatal.
-  runuser -u "$SERVICE_USER" -- bash -lc "'${APP_DIR}/.venvs/volatility3/bin/pip' install yara-python" \
-    || echo "WARNING: yara-python install failed — custom Yara signatures will be unavailable until installed manually"
-fi
-
 echo "==> Installing Node.js 26.x (current LTS)"
 if ! command -v node >/dev/null || [[ "$(node -v)" != v26.* ]]; then
   curl -fsSL https://deb.nodesource.com/setup_26.x | bash -
@@ -123,6 +103,29 @@ echo "    node $(node -v), npm $(npm -v)"
 echo "==> Creating service user '${SERVICE_USER}'"
 if ! id "$SERVICE_USER" >/dev/null 2>&1; then
   useradd --system --create-home --shell /usr/sbin/nologin "$SERVICE_USER"
+fi
+
+echo "==> Installing Volatility3 and yara-python (RAM Analysis dependencies)"
+# Must run after the service user above exists — this runs the venv setup
+# AS that user (runuser), not as root, so .venvs/volatility3 ends up
+# owned by the account that will actually invoke `vol` at runtime.
+if [[ ! -x "${APP_DIR}/.venvs/volatility3/bin/vol" ]]; then
+  runuser -u "$SERVICE_USER" -- bash -lc "
+    python3 -m venv '${APP_DIR}/.venvs/volatility3' &&
+    '${APP_DIR}/.venvs/volatility3/bin/pip' install --upgrade pip &&
+    '${APP_DIR}/.venvs/volatility3/bin/pip' install volatility3
+  "
+  # yara-python — custom Yara signature scanning (RAM Analysis > Detection
+  # Rules > Custom Yara Signatures). Shares this venv rather than getting
+  # its own, since src/lib/ram-analysis/yara.ts resolves the interpreter
+  # as the sibling of the `vol` binary. Needs python3-dev (installed
+  # above) for its C extension — pip has no prebuilt wheel for every
+  # Python version, so it compiles from source, which needs Python.h.
+  # Missing/failed here degrades gracefully at scan time (reported as a
+  # "not_installed" plugin status), so a failure on this line is
+  # intentionally non-fatal.
+  runuser -u "$SERVICE_USER" -- bash -lc "'${APP_DIR}/.venvs/volatility3/bin/pip' install yara-python" \
+    || echo "WARNING: yara-python install failed — custom Yara signatures will be unavailable until installed manually"
 fi
 
 if [[ "$IMAGE_BUILD" == "1" ]]; then
