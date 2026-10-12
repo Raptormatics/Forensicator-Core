@@ -83,6 +83,10 @@ export function YaraRulesSection() {
     try {
       const res  = await fetch("/api/ram-analysis/yara-rules/seed", { method: "POST" });
       const data = await res.json();
+      if (!res.ok) {
+        setSeedMsg(`Seed failed: ${data.detail ?? data.error ?? `HTTP ${res.status}`}`);
+        return;
+      }
       setSeedMsg(`Seeded ${data.seeded?.length ?? 0} signature(s). ${data.errors?.length ? `${data.errors.length} error(s).` : ""}`);
       loadRules();
     } finally {
