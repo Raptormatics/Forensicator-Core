@@ -198,7 +198,13 @@ export default function DecoderDetailPage() {
     );
   }
 
-  const isReadonly = decoder.isBuiltin && !isPlatformAdmin;
+  // Built-in content is read-only for everyone, including platform_admin —
+  // editing it is custom decoder authoring, an Enterprise-only capability
+  // (same boundary as every other built-in/custom content type). Deleting
+  // a built-in (restored on reseed) is a different, Core-native admin
+  // capability and stays available to platform_admin.
+  const isReadonly = decoder.isBuiltin;
+  const canDelete  = !decoder.isBuiltin || isPlatformAdmin;
   const isValid    = validation?.valid !== false;
   const isDirty    = yaml !== decoder.yamlContent;
 
@@ -243,27 +249,27 @@ export default function DecoderDetailPage() {
               <Copy className="h-4 w-4" />
               Clone
             </button>
+            {canDelete && (
+              <button
+                onClick={deleteDecoder}
+                disabled={deleting}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border border-red-900 text-red-400 hover:bg-red-900/30 transition-colors"
+              >
+                <Trash2 className="h-4 w-4" />
+                Delete
+              </button>
+            )}
             {!isReadonly && (
-              <>
-                <button
-                  onClick={deleteDecoder}
-                  disabled={deleting}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border border-red-900 text-red-400 hover:bg-red-900/30 transition-colors"
-                >
-                  <Trash2 className="h-4 w-4" />
-                  Delete
-                </button>
-                <button
-                  onClick={save}
-                  disabled={saving || !isValid || !isDirty}
-                  className="flex items-center gap-1.5 px-4 py-1.5 text-sm rounded-lg bg-teal-600 hover:bg-teal-500 text-white font-medium transition-colors disabled:opacity-50"
-                >
-                  {saving  ? <Loader2      className="h-4 w-4 animate-spin" /> :
-                   saved   ? <CheckCircle2 className="h-4 w-4" /> :
-                             <Save         className="h-4 w-4" />}
-                  {saved ? "Saved!" : "Save"}
-                </button>
-              </>
+              <button
+                onClick={save}
+                disabled={saving || !isValid || !isDirty}
+                className="flex items-center gap-1.5 px-4 py-1.5 text-sm rounded-lg bg-teal-600 hover:bg-teal-500 text-white font-medium transition-colors disabled:opacity-50"
+              >
+                {saving  ? <Loader2      className="h-4 w-4 animate-spin" /> :
+                 saved   ? <CheckCircle2 className="h-4 w-4" /> :
+                           <Save         className="h-4 w-4" />}
+                {saved ? "Saved!" : "Save"}
+              </button>
             )}
           </div>
         </div>
