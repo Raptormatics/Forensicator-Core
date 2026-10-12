@@ -108,7 +108,13 @@ fi
 echo "==> Installing Volatility3 and yara-python (RAM Analysis dependencies)"
 # Must run after the service user above exists — this runs the venv setup
 # AS that user (runuser), not as root, so .venvs/volatility3 ends up
-# owned by the account that will actually invoke `vol` at runtime.
+# owned by the account that will actually invoke `vol` at runtime. $APP_DIR
+# itself isn't chowned to that user until much later (writing the env
+# file, below) — rather than depend on that ordering, explicitly create
+# and hand over just .venvs/ here, which is all this step actually needs
+# to write into.
+mkdir -p "${APP_DIR}/.venvs"
+chown "${SERVICE_USER}:${SERVICE_USER}" "${APP_DIR}/.venvs"
 if [[ ! -x "${APP_DIR}/.venvs/volatility3/bin/vol" ]]; then
   runuser -u "$SERVICE_USER" -- bash -lc "
     python3 -m venv '${APP_DIR}/.venvs/volatility3' &&
