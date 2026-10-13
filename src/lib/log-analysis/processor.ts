@@ -19,6 +19,7 @@ import { loadDecoders, decodeLogLine } from "./decoder-engine/engine";
 import type { NormalizedLogEntry }     from "./decoder-engine/types";
 import type { IocLookupMap } from "@/lib/rule-engine/ioc-lookup";
 import { autoEnrichNewIocs, type NewIocRecord } from "@/lib/intelligence/auto-enrich";
+import { notifyCriticalFindings } from "@/lib/notifications/critical-finding-alert";
 
 const BATCH = 500; // rows per Prisma createMany
 
@@ -264,6 +265,8 @@ export async function processLogUpload(uploadId: string, content: string): Promi
       byRule.set(m.ruleId, arr);
     }
 
+    const criticalCandidates: { title: string; severity: string; sourceLabel: string; detailPath: string }[] = [];
+
     for (const [ruleId, hits] of byRule.entries()) {
       const rule = rules.find((r) => r.id === ruleId);
       if (!rule) continue;
@@ -293,7 +296,13 @@ export async function processLogUpload(uploadId: string, content: string): Promi
         where: { id: ruleId },
         data:  { hitCount: { increment: hits.length } },
       });
+
+      criticalCandidates.push({ title: rule.name, severity: rule.severity, sourceLabel: "Log Analysis", detailPath: `/log-analysis/${uploadId}` });
     }
+
+    await notifyCriticalFindings(criticalCandidates).catch((err) =>
+      console.warn("[log-analysis] Critical finding alert failed:", err instanceof Error ? err.message : err)
+    );
 
     // 8. Update upload status + counts
     await prisma.logUpload.update({

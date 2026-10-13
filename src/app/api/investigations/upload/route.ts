@@ -18,6 +18,7 @@ import { parseInvestigationZip, UploadValidationError } from "@/lib/upload/zip";
 import { extractEvidence, extractTimelineEvents } from "@/lib/upload/evidence-extractor";
 import { extractAndUpsertIocs, type NewIocRecord } from "@/lib/intelligence/investigation-ioc-extract";
 import { autoEnrichNewIocs } from "@/lib/intelligence/auto-enrich";
+import { notifyCriticalFindings } from "@/lib/notifications/critical-finding-alert";
 
 // dispatchSiemExport lives in the Enterprise overlay (@/lib/siem), not in
 // Forensicator Core — loaded via dynamic import below so this route works
@@ -196,6 +197,15 @@ export async function POST(request: NextRequest) {
       await prisma.investigation.delete({ where: { id: investigation.id } }).catch(() => {});
       throw findingError;
     }
+
+    await notifyCriticalFindings(
+      findingsWithIds.map(({ data }) => ({
+        title: data.finding_type,
+        severity: normalizeSeverity(data.severity ?? "informational"),
+        sourceLabel: "Investigation",
+        detailPath: `/investigations/${investigation.id}`,
+      }))
+    ).catch((err) => console.warn("[upload] Critical finding alert failed:", err instanceof Error ? err.message : err));
 
     // Step 3 — extract and insert normalised evidence + timeline events.
     // These are non-fatal: if the migration hasn't run yet (tables don't exist)

@@ -41,6 +41,7 @@ import { runHeuristics } from "./heuristics";
 import { buildSubjects, runRules, type StoredRamRule } from "./rule-engine";
 import { isEnriched, type IocLookupMap } from "@/lib/rule-engine/ioc-lookup";
 import { autoEnrichNewIocs, type NewIocRecord } from "@/lib/intelligence/auto-enrich";
+import { notifyCriticalFindings } from "@/lib/notifications/critical-finding-alert";
 import type { RamProcessRow, RamConnectionRow, RamMalfindHit, RamInfoSummary, RamOsType } from "./types";
 import type { VolatilityRow } from "./volatility";
 
@@ -255,6 +256,8 @@ export async function processRamUpload(uploadId: string, filePath: string): Prom
     const { malfindFindings, otherFindings } = runHeuristics(processes, malfindHits, osType);
 
     let findingTotal = 0;
+    const criticalCandidates: { title: string; severity: string; sourceLabel: string; detailPath: string }[] = [];
+    const detailPath = `/ram-analysis/${uploadId}`;
 
     // Malfind findings are grouped by process (see heuristics.ts) — one
     // RamFinding per pid, carrying every injected VAD region as a child
@@ -270,6 +273,7 @@ export async function processRamUpload(uploadId: string, filePath: string): Prom
         },
       });
       findingTotal++;
+      criticalCandidates.push({ title: f.title, severity: f.severity, sourceLabel: "RAM Analysis", detailPath });
 
       await prisma.ramMalfindRegion.createMany({
         data: f.regions.map((r) => ({
@@ -297,6 +301,7 @@ export async function processRamUpload(uploadId: string, filePath: string): Prom
         },
       });
       findingTotal++;
+      criticalCandidates.push({ title: f.title, severity: f.severity, sourceLabel: "RAM Analysis", detailPath });
     }
 
     for (const value of knownIocHits) {
@@ -361,6 +366,7 @@ export async function processRamUpload(uploadId: string, filePath: string): Prom
           },
         });
         findingTotal++;
+        criticalCandidates.push({ title: rule.name, severity: rule.severity, sourceLabel: "RAM Analysis", detailPath });
 
         await prisma.ramFindingMatch.createMany({
           data: hits.slice(0, MAX_MATCHES_PER_FINDING).map((h) => ({
@@ -428,6 +434,7 @@ export async function processRamUpload(uploadId: string, filePath: string): Prom
             },
           });
           findingTotal++;
+          criticalCandidates.push({ title: rule.name, severity: rule.severity, sourceLabel: "RAM Analysis", detailPath });
 
           await prisma.ramFindingMatch.createMany({
             data: hits.slice(0, MAX_YARA_MATCHES_PER_FINDING).map((h) => ({
@@ -443,6 +450,10 @@ export async function processRamUpload(uploadId: string, filePath: string): Prom
         pluginStatus["yara"] = yaraResult.status;
       }
     }
+
+    await notifyCriticalFindings(criticalCandidates).catch((err) =>
+      console.warn("[ram-analysis] Critical finding alert failed:", err instanceof Error ? err.message : err)
+    );
 
     // 8. Final status + counts
     await prisma.ramUpload.update({

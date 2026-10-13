@@ -23,6 +23,7 @@ import { buildSubjects, runRules, type StoredPcapRule } from "./rule-engine";
 import { isEnriched, type IocLookupMap } from "@/lib/rule-engine/ioc-lookup";
 import { autoEnrichNewIocs, type NewIocRecord } from "@/lib/intelligence/auto-enrich";
 import { runYaraScan } from "@/lib/yara/engine";
+import { notifyCriticalFindings } from "@/lib/notifications/critical-finding-alert";
 
 const BATCH = 500; // rows per Prisma createMany, same convention as processLogUpload
 
@@ -163,6 +164,9 @@ export async function processPcapUpload(uploadId: string, filePath: string): Pro
     // 5. Built-in heuristics
     const heuristicFindings = runHeuristics(result);
 
+    const criticalCandidates: { title: string; severity: string; sourceLabel: string; detailPath: string }[] = [];
+    const detailPath = `/pcap-analysis/${uploadId}`;
+
     let findingTotal = 0;
     for (const f of heuristicFindings) {
       await prisma.pcapFinding.create({
@@ -174,6 +178,7 @@ export async function processPcapUpload(uploadId: string, filePath: string): Pro
         },
       });
       findingTotal++;
+      criticalCandidates.push({ title: f.title, severity: f.severity, sourceLabel: "PCAP Analysis", detailPath });
     }
 
     for (const hit of knownIocHits) {
@@ -230,6 +235,7 @@ export async function processPcapUpload(uploadId: string, filePath: string): Pro
           },
         });
         findingTotal++;
+        criticalCandidates.push({ title: rule.name, severity: rule.severity, sourceLabel: "PCAP Analysis", detailPath });
 
         await prisma.pcapAnalysisRule.update({ where: { id: ruleId }, data: { hitCount: { increment: hits.length } } });
       }
@@ -280,6 +286,7 @@ export async function processPcapUpload(uploadId: string, filePath: string): Pro
             },
           });
           findingTotal++;
+          criticalCandidates.push({ title: rule.name, severity: rule.severity, sourceLabel: "PCAP Analysis", detailPath });
 
           await prisma.pcapYaraRule.update({ where: { id: yaraRuleId }, data: { hitCount: { increment: hits.length } } });
         }
@@ -287,6 +294,10 @@ export async function processPcapUpload(uploadId: string, filePath: string): Pro
         console.warn(`[pcap-analysis] Yara scan failed: ${yaraResult.message}`);
       }
     }
+
+    await notifyCriticalFindings(criticalCandidates).catch((err) =>
+      console.warn("[pcap-analysis] Critical finding alert failed:", err instanceof Error ? err.message : err)
+    );
 
     // 8. Final status + counts
     await prisma.pcapUpload.update({

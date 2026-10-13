@@ -275,6 +275,21 @@ model SystemSettings {
   // Cloudflare's most restrictive (Free/Pro, 100MB) tier.
   ramChunkSizeBytes Int? @map("ram_chunk_size_bytes")
 
+  // Critical-finding email alerts — one channel, one recipient address.
+  // Off by default (no SMTP server is assumed to exist). Read fresh per
+  // processing run, same no-restart-needed convention as the settings
+  // above. criticalFindingAlertsEnabled gates sending; the SMTP fields
+  // below configure how, and notificationEmail configures who.
+  criticalFindingAlertsEnabled Boolean @default(false) @map("critical_finding_alerts_enabled")
+  notificationEmail            String? @map("notification_email")
+  smtpHost                     String? @map("smtp_host")
+  smtpPort                     Int?    @map("smtp_port")
+  smtpUser                     String? @map("smtp_user")
+  smtpPasswordEncrypted        String? @map("smtp_password_encrypted") @db.Text
+  smtpPasswordLast4            String? @map("smtp_password_last4")
+  smtpFromAddress              String? @map("smtp_from_address")
+  smtpSecure                   Boolean @default(false) @map("smtp_secure")
+
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@map("system_settings")

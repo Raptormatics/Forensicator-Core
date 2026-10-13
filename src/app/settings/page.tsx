@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
 import Link from "next/link";
-import { Settings2, Globe, FolderOutput, Database, CheckCircle2, AlertCircle, Loader2, BrainCircuit, ArrowRight, Network, MemoryStick } from "lucide-react";
+import { Settings2, Globe, FolderOutput, Database, CheckCircle2, AlertCircle, Loader2, BrainCircuit, ArrowRight, Network, MemoryStick, Bell } from "lucide-react";
 
 // Core has no RBAC — the sole user always has full access.
 
@@ -279,6 +279,20 @@ export default function SettingsPage() {
           <div>
             <h2 className="text-sm font-semibold text-zinc-200">AI Analysis</h2>
             <p className="text-xs text-zinc-500">Moved — configure the Ollama/OpenAI/Anthropic provider, install a local model, and manage the service here.</p>
+          </div>
+        </div>
+        <ArrowRight className="h-4 w-4 shrink-0 text-zinc-600" />
+      </Link>
+
+      <Link
+        href="/settings/notifications"
+        className="flex items-center justify-between rounded-xl border border-zinc-800 bg-zinc-900 p-4 hover:border-teal-700/50 hover:bg-zinc-800/60"
+      >
+        <div className="flex items-center gap-2">
+          <Bell className="h-4 w-4 text-teal-400" />
+          <div>
+            <h2 className="text-sm font-semibold text-zinc-200">Critical Finding Alerts</h2>
+            <p className="text-xs text-zinc-500">Configure SMTP and get emailed when a critical-severity finding is detected.</p>
           </div>
         </div>
         <ArrowRight className="h-4 w-4 shrink-0 text-zinc-600" />
