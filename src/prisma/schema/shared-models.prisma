@@ -56,6 +56,7 @@ model User {
   iocBlocklistUpdates    IocRecord[]
   pcapUploads            PcapUpload[]
   pcapAnalysisRules      PcapAnalysisRule[]     @relation("pcapRuleAuthor")
+  pcapYaraRules          PcapYaraRule[]         @relation("pcapYaraRuleAuthor")
   ramUploads             RamUpload[]
   ramUploadSessions      RamUploadSession[]
   ramAnalysisRules       RamAnalysisRule[]      @relation("ramRuleAuthor")
@@ -191,6 +192,7 @@ model Organization {
   correlationWhitelist CorrelationWhitelist[]
   pcapUploads    PcapUpload[]
   pcapAnalysisRules PcapAnalysisRule[]
+  pcapYaraRules  PcapYaraRule[]
   ramUploads     RamUpload[]
   ramUploadSessions RamUploadSession[]
   ramAnalysisRules RamAnalysisRule[]

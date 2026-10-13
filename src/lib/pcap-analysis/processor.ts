@@ -11,16 +11,18 @@
  * 4. Upsert PcapIoc (per-upload tally) + global IocRecord for public IPs/domains
  * 5. Run built-in heuristics -> PcapFinding rows (ruleId: null)
  * 6. Load enabled PcapAnalysisRule (org-scoped OR global) -> run rule engine -> PcapFinding rows
- * 7. Update PcapUpload status + counts
+ * 7. Load enabled PcapYaraRule (org-scoped OR global) -> scan raw capture bytes -> PcapFinding rows
+ * 8. Update PcapUpload status + counts
  */
 import { prisma } from "@/lib/db/prisma";
-import { getTsharkPath } from "@/lib/settings/system";
+import { getTsharkPath, getVolatilityPath } from "@/lib/settings/system";
 import { runTsharkFieldExtraction } from "./tshark";
 import { aggregate, isPrivateIp } from "./aggregator";
 import { runHeuristics } from "./heuristics";
 import { buildSubjects, runRules, type StoredPcapRule } from "./rule-engine";
 import { isEnriched, type IocLookupMap } from "@/lib/rule-engine/ioc-lookup";
 import { autoEnrichNewIocs, type NewIocRecord } from "@/lib/intelligence/auto-enrich";
+import { runYaraScan } from "@/lib/yara/engine";
 
 const BATCH = 500; // rows per Prisma createMany, same convention as processLogUpload
 
@@ -233,7 +235,60 @@ export async function processPcapUpload(uploadId: string, filePath: string): Pro
       }
     }
 
-    // 7. Final status + counts
+    // 7. Custom Yara signatures — scanned directly against the capture's
+    // raw bytes (same shared engine RAM analysis uses). Fully degradable:
+    // yara-python not being installed in the venv yet just skips this step.
+    const yaraRules = await prisma.pcapYaraRule.findMany({
+      where: {
+        enabled: true,
+        OR: [
+          ...(upload.organizationId ? [{ organizationId: upload.organizationId }] : []),
+          { organizationId: null },
+        ],
+      },
+    });
+
+    if (yaraRules.length > 0) {
+      const volPath = await getVolatilityPath();
+      const yaraResult = await runYaraScan(volPath, filePath, yaraRules.map((r) => ({ id: r.id, yaraSource: r.yaraSource })));
+
+      if (yaraResult.status === "ok") {
+        for (const err of yaraResult.compileErrors) {
+          console.warn(`[pcap-analysis] Yara rule ${err.ruleId} failed to compile at scan time: ${err.message}`);
+        }
+
+        const byYaraRule = new Map<string, typeof yaraResult.matches>();
+        for (const m of yaraResult.matches) {
+          const arr = byYaraRule.get(m.ruleId) ?? [];
+          arr.push(m);
+          byYaraRule.set(m.ruleId, arr);
+        }
+
+        for (const [yaraRuleId, hits] of byYaraRule.entries()) {
+          const rule = yaraRules.find((r) => r.id === yaraRuleId);
+          if (!rule) continue;
+
+          await prisma.pcapFinding.create({
+            data: {
+              uploadId, yaraRuleId,
+              title: rule.name,
+              description: rule.description ?? undefined,
+              severity: rule.severity,
+              matchCount: hits.length,
+              matchedField: hits[0].identifier,
+              matchedValue: `offset 0x${hits[0].offset.toString(16)}`,
+            },
+          });
+          findingTotal++;
+
+          await prisma.pcapYaraRule.update({ where: { id: yaraRuleId }, data: { hitCount: { increment: hits.length } } });
+        }
+      } else if (yaraResult.status === "error") {
+        console.warn(`[pcap-analysis] Yara scan failed: ${yaraResult.message}`);
+      }
+    }
+
+    // 8. Final status + counts
     await prisma.pcapUpload.update({
       where: { id: uploadId },
       data: {

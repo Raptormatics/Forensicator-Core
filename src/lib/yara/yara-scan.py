@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-Scans a raw memory image directly against a set of custom Yara rules —
-no Volatility3 involvement, since Yara reports raw file offsets and mmap's
-the file itself rather than loading it into memory (appropriate given this
-box's limited RAM). Invoked as: yara-scan.py <image_path> <timeout_seconds>
+Scans a raw file (memory image, PCAP, or any other byte stream) directly
+against a set of custom Yara rules — no Volatility3 involvement, since
+Yara reports raw file offsets and mmap's the file itself rather than
+loading it into memory (appropriate given this box's limited RAM).
+Invoked as: yara-scan.py <file_path> <timeout_seconds>
 Rules are read as a JSON array from stdin: [{"id": "...", "yaraSource": "..."}]
 (stdin rather than argv — Yara rule source is multi-line and can be large,
 argv escaping would be fragile).
@@ -17,8 +18,8 @@ Emits one JSON object per line to stdout:
 Real yara-python 4.5.4 match-object shape confirmed by direct testing in
 this environment: Rules.match(path) returns Match objects with .rule,
 .namespace (== the sources dict key used at compile time — used here to
-map a hit back to its originating RamYaraRule id), and .strings (a list
-of StringMatch, each with .identifier and .instances, each instance
+map a hit back to its originating RamYaraRule/PcapYaraRule id), and
+.strings (a list of StringMatch, each with .identifier and .instances, each instance
 carrying .offset and .matched_data as raw bytes).
 """
 import sys

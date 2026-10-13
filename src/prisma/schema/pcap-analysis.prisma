@@ -117,6 +117,8 @@ model PcapFinding {
   upload   PcapUpload        @relation(fields: [uploadId], references: [id], onDelete: Cascade)
   ruleId   String?           @map("rule_id") @db.Uuid
   rule     PcapAnalysisRule? @relation(fields: [ruleId], references: [id], onDelete: SetNull)
+  yaraRuleId String?         @map("yara_rule_id") @db.Uuid
+  yaraRule   PcapYaraRule?   @relation(fields: [yaraRuleId], references: [id], onDelete: SetNull)
 
   title        String
   description  String?   @db.Text
@@ -131,6 +133,7 @@ model PcapFinding {
 
   @@index([uploadId])
   @@index([ruleId])
+  @@index([yaraRuleId])
   @@index([severity])
   @@map("pcap_findings")
 }
@@ -181,4 +184,34 @@ model PcapAnalysisRule {
   @@index([severity])
   @@index([isBuiltin])
   @@map("pcap_analysis_rules")
+}
+
+// Byte-pattern signatures scanned directly against a capture's raw bytes
+// (src/lib/yara/engine.ts — shared with RamYaraRule's identical scanning
+// path). Field-for-field mirror of RamYaraRule.
+model PcapYaraRule {
+  id          String  @id @default(uuid()) @db.Uuid
+  name        String
+  description String? @db.Text
+  severity    String  @default("medium") // critical | high | medium | low | info
+  enabled     Boolean @default(true)
+  isBuiltin   Boolean @default(false) @map("is_builtin")
+  yaraSource  String  @map("yara_source") @db.Text
+  tags        String[] @default([])
+
+  createdById    String?       @map("created_by_id") @db.Uuid
+  createdBy      User?         @relation("pcapYaraRuleAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+  organizationId String?       @map("organization_id") @db.Uuid
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  hitCount Int           @default(0) @map("hit_count")
+  findings PcapFinding[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([organizationId])
+  @@index([enabled])
+  @@index([isBuiltin])
+  @@map("pcap_yara_rules")
 }

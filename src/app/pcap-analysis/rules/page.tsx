@@ -11,6 +11,7 @@ import {
   type PcapField, type PcapRuleCondition, type RuleSeverity,
 } from "@/lib/pcap-analysis/types";
 import type { RuleOperator } from "@/lib/rule-engine/operators";
+import { PcapYaraRulesSection } from "@/components/pcap-analysis/yara-rules-section";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -516,6 +517,10 @@ export default function PcapAnalysisRulesPage() {
             </div>
           </div>
         )}
+
+        <div className="border-t border-zinc-800 pt-6">
+          <PcapYaraRulesSection />
+        </div>
       </section>
     </div>
   );
