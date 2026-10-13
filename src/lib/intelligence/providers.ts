@@ -152,7 +152,7 @@ export class URLHausProvider implements TIProvider {
   name = "urlhaus";
   supportsType(t: string) { return ["url", "domain", "hash"].includes(t); }
 
-  async lookup(value: string, type: string): Promise<ProviderResult> {
+  async lookup(value: string, type: string, apiKeyOverride?: string): Promise<ProviderResult> {
     const body = type === "hash"
       ? `md5_hash=${encodeURIComponent(value)}`
       : `url=${encodeURIComponent(value)}`;
@@ -161,13 +161,22 @@ export class URLHausProvider implements TIProvider {
       ? "https://urlhaus-api.abuse.ch/v1/payload/"
       : "https://urlhaus-api.abuse.ch/v1/url/";
 
-    const res = await fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body,
-    });
+    const headers: Record<string, string> = { "Content-Type": "application/x-www-form-urlencoded" };
+    if (apiKeyOverride) headers["Auth-Key"] = apiKeyOverride;
+
+    const res = await fetch(endpoint, { method: "POST", headers, body });
     const json = await res.json() as Record<string, unknown>;
-    const found = json.query_status !== "not_found" && json.query_status !== "no_results";
+    // abuse.ch's own success marker is query_status === "ok" — everything
+    // else (no_results, not_found, invalid_url, an unauthenticated/invalid
+    // Auth-Key response, a transient API error) must NOT be treated as a
+    // match. This used to be an exclusion list of just the two "known
+    // clean" statuses, which silently defaulted every OTHER response —
+    // including abuse.ch's own {"error":"Unauthorized"} once they made
+    // Auth-Key mandatory — to "found: true, reputation: 90", i.e. every
+    // single lookup got reported as confirmed-malicious regardless of the
+    // real value. ThreatFoxProvider/MalwareBazaarProvider below already
+    // used the correct positive check; this just brings URLHaus in line.
+    const found = json.query_status === "ok";
 
     return {
       found,
@@ -183,13 +192,11 @@ export class ThreatFoxProvider implements TIProvider {
   name = "threatfox";
   supportsType(t: string) { return ["ip", "hash", "url", "domain"].includes(t); }
 
-  async lookup(value: string, _type: string): Promise<ProviderResult> {
+  async lookup(value: string, _type: string, apiKeyOverride?: string): Promise<ProviderResult> {
     const body = JSON.stringify({ query: "search_ioc", search_term: value });
-    const res = await fetch("https://threatfox-api.abuse.ch/api/v1/", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body,
-    });
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (apiKeyOverride) headers["Auth-Key"] = apiKeyOverride;
+    const res = await fetch("https://threatfox-api.abuse.ch/api/v1/", { method: "POST", headers, body });
     const json = await res.json() as Record<string, unknown>;
     const found = json.query_status === "ok" && Array.isArray(json.data) && (json.data as unknown[]).length > 0;
     const first = found ? (json.data as Record<string, unknown>[])[0] : undefined;
@@ -209,13 +216,11 @@ export class MalwareBazaarProvider implements TIProvider {
   name = "malwarebazaar";
   supportsType(t: string) { return t === "hash"; }
 
-  async lookup(value: string, _type: string): Promise<ProviderResult> {
+  async lookup(value: string, _type: string, apiKeyOverride?: string): Promise<ProviderResult> {
     const body = `query=get_info&hash=${encodeURIComponent(value)}`;
-    const res = await fetch("https://mb-api.abuse.ch/api/v1/", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body,
-    });
+    const headers: Record<string, string> = { "Content-Type": "application/x-www-form-urlencoded" };
+    if (apiKeyOverride) headers["Auth-Key"] = apiKeyOverride;
+    const res = await fetch("https://mb-api.abuse.ch/api/v1/", { method: "POST", headers, body });
     const json = await res.json() as Record<string, unknown>;
     const found = json.query_status === "ok";
     const d = found ? ((json.data as Record<string, unknown>[])[0]) : undefined;

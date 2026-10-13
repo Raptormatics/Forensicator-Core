@@ -227,6 +227,31 @@ function ThreatIntelSettings() {
                     </button>
                   </div>
                 )}
+
+                {/* The bulk csv_recent feed download stays key-free even though
+                    the per-value API above it now requires an Auth-Key — two
+                    independent mechanisms under the same provider card. */}
+                {p.provider === "urlhaus" && (
+                  <div className="flex items-center justify-between border-t border-zinc-800 pt-2">
+                    <span className="text-xs text-zinc-500">
+                      {formatLastSynced(feedStatus?.lastSyncedAt ?? null)}
+                      {feedStatus && feedStatus.totalEntries > 0 && ` · ${feedStatus.totalEntries.toLocaleString()} cached indicators`}
+                    </span>
+                    {isAdmin && (
+                      <button
+                        onClick={syncUrlhausFeed}
+                        disabled={syncing}
+                        title="Refresh the local URLhaus feed cache used for free, automatic URL matching"
+                        className="flex items-center gap-1.5 rounded-md border border-zinc-800 px-2.5 py-1 text-xs text-zinc-400 hover:text-zinc-200 hover:border-zinc-600 disabled:opacity-50"
+                      >
+                        <RefreshCw className={`h-3 w-3 ${syncing ? "animate-spin" : ""}`} /> {syncing ? "Syncing…" : "Sync Now"}
+                      </button>
+                    )}
+                  </div>
+                )}
+                {p.provider === "urlhaus" && syncMsg && (
+                  <p className="text-xs text-zinc-500">{syncMsg}</p>
+                )}
               </div>
             ))}
           </section>
@@ -251,28 +276,6 @@ function ThreatIntelSettings() {
                     </label>
                   )}
                 </div>
-
-                {p.provider === "urlhaus" && (
-                  <div className="flex items-center justify-between border-t border-zinc-800 pt-2">
-                    <span className="text-xs text-zinc-500">
-                      {formatLastSynced(feedStatus?.lastSyncedAt ?? null)}
-                      {feedStatus && feedStatus.totalEntries > 0 && ` · ${feedStatus.totalEntries.toLocaleString()} cached indicators`}
-                    </span>
-                    {isAdmin && (
-                      <button
-                        onClick={syncUrlhausFeed}
-                        disabled={syncing}
-                        title="Refresh the local URLhaus feed cache used for free, automatic URL matching"
-                        className="flex items-center gap-1.5 rounded-md border border-zinc-800 px-2.5 py-1 text-xs text-zinc-400 hover:text-zinc-200 hover:border-zinc-600 disabled:opacity-50"
-                      >
-                        <RefreshCw className={`h-3 w-3 ${syncing ? "animate-spin" : ""}`} /> {syncing ? "Syncing…" : "Sync Now"}
-                      </button>
-                    )}
-                  </div>
-                )}
-                {p.provider === "urlhaus" && syncMsg && (
-                  <p className="text-xs text-zinc-500">{syncMsg}</p>
-                )}
               </div>
             ))}
           </section>

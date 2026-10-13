@@ -54,7 +54,7 @@ export async function extractAndUpsertIocs(
 
     for (const row of data.evidence as Record<string, unknown>[]) {
       let value: string | undefined;
-      let type: "hash" | "url";
+      let type: "hash" | "url" | "domain";
 
       if (isHash) {
         const h =
@@ -68,7 +68,13 @@ export async function extractAndUpsertIocs(
         if (!u) continue;
         // Postgres btree index limit ~2704 bytes — truncate to 500 chars safely.
         value = u.slice(0, 500);
-        type = "url";
+        // Some collector-supplied "url" fields are actually bare hostnames
+        // (no scheme) — classifying those as type "url" anyway sends a
+        // malformed value to URL-specific provider endpoints (URLhaus's
+        // /v1/url/ expects a real URL, not a hostname). Reclassify as a
+        // domain instead; it's still a useful indicator, just queried
+        // through domain-capable providers instead of URL-only ones.
+        type = /^[a-z][a-z0-9+.-]*:\/\//i.test(value) ? "url" : "domain";
       }
 
       try {

@@ -50,11 +50,21 @@ export async function POST(request: NextRequest, props: { params: Promise<{ id: 
 
   const truncated = rows.length === SCAN_CAP;
 
+  // Some collector-supplied "url" fields are actually bare hostnames (no
+  // scheme) — classifying those as type "url" anyway sends a malformed
+  // value to URL-specific provider endpoints (URLhaus's /v1/url/ expects a
+  // real URL, not a hostname). Reclassify as a domain instead — same fix
+  // as investigation-ioc-extract.ts's upload-time path.
+  const URL_SCHEME_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
+
   const values = new Map<string, "ip" | "hash" | "url" | "domain">();
   for (const row of rows) {
     if (row.ip) values.set(row.ip, "ip");
     if (row.domain) values.set(row.domain, "domain");
-    if (row.url) values.set(row.url.slice(0, 500), "url"); // Postgres btree row-size guard, same as upload-time extraction
+    if (row.url) {
+      const u = row.url.slice(0, 500); // Postgres btree row-size guard, same as upload-time extraction
+      values.set(u, URL_SCHEME_RE.test(u) ? "url" : "domain");
+    }
     if (row.hash) values.set(row.hash, "hash");
   }
 

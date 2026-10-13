@@ -5,10 +5,15 @@
  * and toggle every provider from the dashboard — none of them are invisible
  * defaults baked only into the codebase.
  *
- * - virustotal / abuseipdb / otx: need an API key. An org's own key (if set
- *   and enabled) is used; otherwise falls back to the global env-var key.
- * - urlhaus / threatfox / malwarebazaar: free, no key — the toggle purely
- *   controls whether that provider runs for this org's enrichment requests.
+ * - virustotal / abuseipdb / otx / urlhaus / threatfox / malwarebazaar: need
+ *   an API key. An org's own key (if set and enabled) is used; otherwise
+ *   falls back to the global env-var key.
+ *
+ * urlhaus/threatfox/malwarebazaar were free and keyless until abuse.ch
+ * rolled out mandatory "Auth-Key" authentication across all their APIs
+ * (confirmed directly against the live API — every request now returns
+ * {"query_status":"unknown_auth_key"}/{"error":"Unauthorized"} without
+ * one). Free to register for at https://auth.abuse.ch/.
  *
  * With no organizationId (e.g. a platform_admin acting outside any org), or
  * with no override row for a provider, everything defaults to enabled.
@@ -17,7 +22,7 @@ import { prisma } from "@/lib/db/prisma";
 import { encryptSecret, decryptSecret } from "@/lib/crypto/secret-box";
 import { ALL_PROVIDERS } from "./providers";
 
-export const KEYED_PROVIDERS = ["virustotal", "abuseipdb", "otx"] as const;
+export const KEYED_PROVIDERS = ["virustotal", "abuseipdb", "otx", "urlhaus", "threatfox", "malwarebazaar"] as const;
 export type KeyedProvider = (typeof KEYED_PROVIDERS)[number];
 
 /** Canonical provider list, sourced from the actual provider registry so it can't drift. */
@@ -27,6 +32,9 @@ const ENV_VAR: Record<KeyedProvider, string> = {
   virustotal: "VIRUSTOTAL_API_KEY",
   abuseipdb: "ABUSEIPDB_API_KEY",
   otx: "OTX_API_KEY",
+  urlhaus: "URLHAUS_AUTH_KEY",
+  threatfox: "THREATFOX_AUTH_KEY",
+  malwarebazaar: "MALWAREBAZAAR_AUTH_KEY",
 };
 
 export function isKeyedProvider(provider: string): provider is KeyedProvider {
