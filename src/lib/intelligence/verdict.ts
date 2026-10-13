@@ -18,6 +18,7 @@ export const PROVIDER_LABEL: Record<string, string> = {
   urlhaus_feed: "URLhaus (local feed)",
   threatfox: "ThreatFox",
   malwarebazaar: "MalwareBazaar",
+  malwarebazaar_feed: "MalwareBazaar (local feed)",
   otx: "OTX AlienVault",
 };
 
@@ -73,6 +74,13 @@ export function summarizeVendorVerdict(provider: string, status: string, respons
       const first = Array.isArray(r.data) ? (r.data as Record<string, unknown>[])[0] : undefined;
       if (!first) return UNKNOWN;
       return { label: first.signature ? `Malware: ${first.signature}` : "Confirmed malware sample", verdict: "malicious" };
+    }
+
+    // Flat response shape (see matchMalwareBazaarFeed) — not the live API's
+    // {data: [...]} wrapper, so this can't share the case above.
+    case "malwarebazaar_feed": {
+      const signature = r.signature as string | undefined;
+      return { label: signature ? `Malware: ${signature}` : "Confirmed malware sample", verdict: "malicious" };
     }
 
     case "otx": {

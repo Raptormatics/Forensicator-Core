@@ -7,6 +7,7 @@ import { getActorOrThrow, AuthError } from "@/lib/auth/api-guard";
 import { deriveScopedIocSources } from "@/lib/ioc/scope";
 import { getEnrichmentQueue } from "@/lib/jobs/queues";
 import { matchUrlhausFeed } from "@/lib/intelligence/urlhaus-feed";
+import { matchMalwareBazaarFeed } from "@/lib/intelligence/malwarebazaar-feed";
 
 // Manual action, explicitly triggered — bounded generously, but still capped
 // so one click can't accidentally queue an unbounded number of external API calls.
@@ -37,18 +38,26 @@ export async function POST(req: NextRequest) {
   }
   const scopeWhere = valueFilter ? { value: valueFilter } : {};
 
-  // Tier 1 — free local feed match: every url-type IocRecord that hasn't
-  // specifically been checked against the URLhaus feed cache yet, regardless
-  // of whether some other provider already ran against it.
-  const feedCandidates = await prisma.iocRecord.findMany({
-    where: {
-      ...scopeWhere,
-      type: "url",
-      enrichments: { none: { provider: "urlhaus_feed" } },
-    },
-    select: { id: true, value: true, type: true },
-  });
-  const feedMatches = await matchUrlhausFeed(feedCandidates);
+  // Tier 1 — free local feed matches: every url-type IocRecord that hasn't
+  // specifically been checked against the URLhaus feed cache yet, and every
+  // hash-type IocRecord not yet checked against the MalwareBazaar feed
+  // cache, regardless of whether some other provider already ran against it.
+  const [urlFeedCandidates, hashFeedCandidates] = await Promise.all([
+    prisma.iocRecord.findMany({
+      where: { ...scopeWhere, type: "url", enrichments: { none: { provider: "urlhaus_feed" } } },
+      select: { id: true, value: true, type: true },
+    }),
+    prisma.iocRecord.findMany({
+      where: { ...scopeWhere, type: "hash", enrichments: { none: { provider: "malwarebazaar_feed" } } },
+      select: { id: true, value: true, type: true },
+    }),
+  ]);
+  const [urlFeedMatches, hashFeedMatches] = await Promise.all([
+    matchUrlhausFeed(urlFeedCandidates),
+    matchMalwareBazaarFeed(hashFeedCandidates),
+  ]);
+  const feedMatches = urlFeedMatches + hashFeedMatches;
+  const feedCandidates = [...urlFeedCandidates, ...hashFeedCandidates];
 
   // Tier 2 — live providers: only IocRecords never enriched by anything at
   // all, since this spends real quota/rate limit.

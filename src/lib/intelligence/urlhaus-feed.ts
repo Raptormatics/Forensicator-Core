@@ -5,6 +5,7 @@
  * URL from every upload, with no external call and no rate-limit risk.
  */
 import { prisma } from "@/lib/db/prisma";
+import { parseCsvLine } from "./abuse-ch-csv";
 
 const FEED_URL = "https://urlhaus.abuse.ch/downloads/csv_recent/";
 
@@ -18,30 +19,6 @@ export type UrlhausFeedRow = {
   reporter: string | null;
   dateAdded: Date | null;
 };
-
-/** Minimal quoted-CSV line splitter — handles embedded commas and `""` escaping. */
-function parseCsvLine(line: string): string[] {
-  const fields: string[] = [];
-  let cur = "";
-  let inQuotes = false;
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i];
-    if (inQuotes) {
-      if (c === '"') {
-        if (line[i + 1] === '"') { cur += '"'; i++; }
-        else inQuotes = false;
-      } else {
-        cur += c;
-      }
-    } else {
-      if (c === '"') inQuotes = true;
-      else if (c === ",") { fields.push(cur); cur = ""; }
-      else cur += c;
-    }
-  }
-  fields.push(cur);
-  return fields;
-}
 
 /** Parses URLhaus's csv_recent format: id,dateadded,url,url_status,last_online,threat,tags,urlhaus_link,reporter */
 export function parseUrlhausCsv(text: string): UrlhausFeedRow[] {

@@ -40,15 +40,19 @@ function ThreatIntelSettings() {
   const cardRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const inputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
-  // URLhaus is the only free feed with a local bulk-cache to refresh — see
-  // src/lib/intelligence/urlhaus-feed.ts. Core syncs it manually only
-  // (POST /api/intelligence/urlhaus-sync, no schedule); the Enterprise
-  // overlay restores a 6-hour auto-sync on top of this same action.
-  // ThreatFox and MalwareBazaar are plain per-value live API lookups, same
-  // as VirusTotal/AbuseIPDB/OTX — no feed to sync, so no button for them.
+  // URLhaus and MalwareBazaar each have a free, keyless bulk-feed local
+  // cache to refresh — see src/lib/intelligence/{urlhaus,malwarebazaar}-feed.ts.
+  // Core syncs both manually only (POST /api/intelligence/{urlhaus,
+  // malwarebazaar}-sync, no schedule); the Enterprise overlay restores a
+  // 6-hour auto-sync on top of this same action. ThreatFox has no bulk feed
+  // export — per-value live API lookup only, same as VirusTotal/AbuseIPDB/OTX.
   const [feedStatus, setFeedStatus] = useState<{ lastSyncedAt: string | null; totalEntries: number } | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
+
+  const [mbFeedStatus, setMbFeedStatus] = useState<{ lastSyncedAt: string | null; totalEntries: number } | null>(null);
+  const [mbSyncing, setMbSyncing] = useState(false);
+  const [mbSyncMsg, setMbSyncMsg] = useState<string | null>(null);
 
   async function load() {
     setLoading(true);
@@ -83,7 +87,27 @@ function ThreatIntelSettings() {
     return `Last synced ${new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value))}`;
   }
 
-  useEffect(() => { load(); loadFeedStatus(); }, []);
+  async function loadMbFeedStatus() {
+    const r = await fetch("/api/intelligence/malwarebazaar-sync");
+    if (r.ok) setMbFeedStatus(await r.json());
+  }
+
+  async function syncMalwareBazaarFeed() {
+    setMbSyncing(true);
+    setMbSyncMsg(null);
+    try {
+      const r = await fetch("/api/intelligence/malwarebazaar-sync", { method: "POST" });
+      const d = await r.json().catch(() => ({}));
+      setMbSyncMsg(r.ok ? `Synced — ${d.added} new sample${d.added !== 1 ? "s" : ""} of ${d.total} total in the feed.` : (d.message ?? "Sync failed."));
+      if (r.ok) loadMbFeedStatus();
+    } catch {
+      setMbSyncMsg("Sync failed — check your connection.");
+    } finally {
+      setMbSyncing(false);
+    }
+  }
+
+  useEffect(() => { load(); loadFeedStatus(); loadMbFeedStatus(); }, []);
 
   // Deep-link support for "Configure"/"Add Key" buttons elsewhere (e.g. the
   // Threat Intelligence dashboard's provider cards) — jump straight to and
@@ -251,6 +275,32 @@ function ThreatIntelSettings() {
                 )}
                 {p.provider === "urlhaus" && syncMsg && (
                   <p className="text-xs text-zinc-500">{syncMsg}</p>
+                )}
+
+                {/* Same two-independent-mechanisms split as URLhaus above —
+                    MalwareBazaar's bulk csv_recent hash feed is also free
+                    and keyless even though its per-value API now requires
+                    an Auth-Key. */}
+                {p.provider === "malwarebazaar" && (
+                  <div className="flex items-center justify-between border-t border-zinc-800 pt-2">
+                    <span className="text-xs text-zinc-500">
+                      {formatLastSynced(mbFeedStatus?.lastSyncedAt ?? null)}
+                      {mbFeedStatus && mbFeedStatus.totalEntries > 0 && ` · ${mbFeedStatus.totalEntries.toLocaleString()} cached samples`}
+                    </span>
+                    {isAdmin && (
+                      <button
+                        onClick={syncMalwareBazaarFeed}
+                        disabled={mbSyncing}
+                        title="Refresh the local MalwareBazaar feed cache used for free, automatic hash matching"
+                        className="flex items-center gap-1.5 rounded-md border border-zinc-800 px-2.5 py-1 text-xs text-zinc-400 hover:text-zinc-200 hover:border-zinc-600 disabled:opacity-50"
+                      >
+                        <RefreshCw className={`h-3 w-3 ${mbSyncing ? "animate-spin" : ""}`} /> {mbSyncing ? "Syncing…" : "Sync Now"}
+                      </button>
+                    )}
+                  </div>
+                )}
+                {p.provider === "malwarebazaar" && mbSyncMsg && (
+                  <p className="text-xs text-zinc-500">{mbSyncMsg}</p>
                 )}
               </div>
             ))}

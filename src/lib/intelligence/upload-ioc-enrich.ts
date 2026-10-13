@@ -13,6 +13,7 @@
 import { prisma } from "@/lib/db/prisma";
 import { getEnrichmentQueue } from "@/lib/jobs/queues";
 import { matchUrlhausFeed } from "./urlhaus-feed";
+import { matchMalwareBazaarFeed } from "./malwarebazaar-feed";
 
 const MAX_LIVE_ENRICH_PER_UPLOAD = 100;
 
@@ -54,16 +55,31 @@ export async function enrichUploadIocs(
 
   const allValues = [...byValue.keys()];
 
-  // Tier 1 — free local feed match: url-type values not yet checked against
-  // the URLhaus feed cache, regardless of any other provider's status.
-  const feedCandidates = await prisma.iocRecord.findMany({
-    where: { value: { in: allValues }, type: "url", enrichments: { none: { provider: "urlhaus_feed" } } },
-    select: { id: true, value: true, type: true },
-  });
-  const feedMatches = await matchUrlhausFeed(feedCandidates).catch((err) => {
-    console.warn("[upload-ioc-enrich] URLhaus feed match failed:", err instanceof Error ? err.message : err);
-    return 0;
-  });
+  // Tier 1 — free local feed matches: url-type values not yet checked
+  // against the URLhaus feed cache, hash-type values not yet checked
+  // against the MalwareBazaar feed cache, regardless of any other
+  // provider's status.
+  const [urlFeedCandidates, hashFeedCandidates] = await Promise.all([
+    prisma.iocRecord.findMany({
+      where: { value: { in: allValues }, type: "url", enrichments: { none: { provider: "urlhaus_feed" } } },
+      select: { id: true, value: true, type: true },
+    }),
+    prisma.iocRecord.findMany({
+      where: { value: { in: allValues }, type: "hash", enrichments: { none: { provider: "malwarebazaar_feed" } } },
+      select: { id: true, value: true, type: true },
+    }),
+  ]);
+  const [urlFeedMatches, hashFeedMatches] = await Promise.all([
+    matchUrlhausFeed(urlFeedCandidates).catch((err) => {
+      console.warn("[upload-ioc-enrich] URLhaus feed match failed:", err instanceof Error ? err.message : err);
+      return 0;
+    }),
+    matchMalwareBazaarFeed(hashFeedCandidates).catch((err) => {
+      console.warn("[upload-ioc-enrich] MalwareBazaar feed match failed:", err instanceof Error ? err.message : err);
+      return 0;
+    }),
+  ]);
+  const feedMatches = urlFeedMatches + hashFeedMatches;
 
   // Tier 2 — live providers: values never enriched by anything at all.
   const neverEnriched = await prisma.iocRecord.findMany({

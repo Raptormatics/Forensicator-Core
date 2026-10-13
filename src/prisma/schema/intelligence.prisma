@@ -136,6 +136,28 @@ model UrlhausFeedEntry {
   @@map("urlhaus_feed_entries")
 }
 
+// Local cache of MalwareBazaar's free, keyless csv_recent bulk feed — same
+// role as UrlhausFeedEntry, just for hashes instead of URLs (see
+// src/lib/intelligence/malwarebazaar-feed.ts). A sample can be matched by
+// any of its three hash columns, since IocRecord's hash-type values are
+// algorithm-agnostic.
+model MalwareBazaarFeedEntry {
+  id        String    @id @default(uuid()) @db.Uuid
+  sha256    String    @unique
+  md5       String?
+  sha1      String?
+  fileName  String?   @map("file_name")
+  fileType  String?   @map("file_type")
+  signature String?
+  reporter  String?
+  firstSeen DateTime? @map("first_seen")
+  syncedAt  DateTime  @default(now()) @map("synced_at")
+
+  @@index([md5])
+  @@index([sha1])
+  @@map("malwarebazaar_feed_entries")
+}
+
 // The fifth IOC source pipeline (see src/lib/ioc/scope.ts's own header
 // comment) — links a manually-imported value (POST /api/ioc/import) to the
 // case it was imported into. IocRecord itself stays global/deduplicated
