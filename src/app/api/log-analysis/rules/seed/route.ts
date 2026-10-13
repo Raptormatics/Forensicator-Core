@@ -6,14 +6,10 @@ import { getActorOrThrow, AuthError } from "@/lib/auth/api-guard";
 import { seedBuiltinRules }           from "@/lib/log-analysis/rule-engine/seed";
 
 // ── POST /api/log-analysis/rules/seed ───────────────────────────────────────
-// Admin-only: seed (or re-seed) the bundled starter ruleset into the DB.
+// Seed (or re-seed) the bundled starter ruleset into the DB.
 export async function POST(req: NextRequest) {
   try {
-    const actor = await getActorOrThrow(req);
-
-    if (actor.role !== "platform_admin" && actor.role !== "org_admin") {
-      return NextResponse.json({ error: "forbidden" }, { status: 403 });
-    }
+    await getActorOrThrow(req);
 
     const result = await seedBuiltinRules();
 

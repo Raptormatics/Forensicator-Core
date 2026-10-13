@@ -63,7 +63,7 @@ export default async function DashboardPage() {
   const session = await getServerSession();
   if (!session?.user) redirect("/login");
 
-  const { id: userId, role } = session.user;
+  const { id: userId } = session.user;
 
   // Load actor + org memberships
   const actor = await prisma.user.findUniqueOrThrow({
@@ -74,31 +74,21 @@ export default async function DashboardPage() {
   });
   const orgIds = actor.orgMemberships.map((m) => m.organizationId);
 
-  // Build org scope for investigation-level queries
-  const isPlatformAdmin = role === "platform_admin";
-  const isOrgAdmin = role === "org_admin";
-  const orgScope: { organizationId?: { in: string[] } } =
-    isPlatformAdmin ? {} : { organizationId: { in: orgIds } };
+  // Core is single-user/single-org — scope everything to the sole org.
+  const orgScope: { organizationId?: { in: string[] } } = { organizationId: { in: orgIds } };
 
   // Finding count scope: scoped to investigations in org
-  const findingInvScope = isPlatformAdmin ? {} : { investigation: orgScope };
+  const findingInvScope = { investigation: orgScope };
 
-  // Activity feed scope:
-  //   platform_admin → all activity
-  //   org_admin      → activity on org investigations (or own)
-  //   others         → own activity only
-  const activityWhere = isPlatformAdmin
-    ? {}
-    : isOrgAdmin
-    ? {
-        OR: [
-          { userId: actor.id },
-          { investigation: orgScope },
-        ],
-      }
-    : { userId: actor.id };
+  // Activity feed scope: activity on org investigations (or own)
+  const activityWhere = {
+    OR: [
+      { userId: actor.id },
+      { investigation: orgScope },
+    ],
+  };
 
-  const reportScope = isPlatformAdmin ? {} : { OR: [{ investigation: orgScope }, { case: orgScope }] };
+  const reportScope = { OR: [{ investigation: orgScope }, { case: orgScope }] };
 
   // Trend windows — every delta badge on this page is a real count of
   // timestamped events in the last 24h vs. the 24h before that, never an
@@ -154,7 +144,7 @@ export default async function DashboardPage() {
         generatedBy: { select: { name: true, email: true } },
       },
     }),
-    // Activity feed — scoped by role
+    // Activity feed — scoped to the sole org
     prisma.activityLog.findMany({
       where: activityWhere,
       orderBy: { createdAt: "desc" },
@@ -173,7 +163,7 @@ export default async function DashboardPage() {
     prisma.activityLog.findMany({
       where: {
         action: "status_change", entityType: "finding", createdAt: { gte: prior24hStart },
-        ...(isPlatformAdmin ? {} : { investigation: orgScope }),
+        investigation: orgScope,
       },
       select: { createdAt: true, metadata: true },
     }),
@@ -197,7 +187,7 @@ export default async function DashboardPage() {
           </div>
           <h1 className="mt-2 text-2xl font-semibold text-zinc-50">
             Welcome back, {actor.name ?? actor.email}
-            {!isPlatformAdmin && orgIds.length === 0 && (
+            {orgIds.length === 0 && (
               <span className="ml-3 text-sm font-normal text-yellow-500">(No organization assigned)</span>
             )}
           </h1>
@@ -209,7 +199,7 @@ export default async function DashboardPage() {
         {/* Stat tiles — each links to a pre-filtered view of exactly what it counts */}
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
           {[
-            { label: isPlatformAdmin ? "All Investigations" : "My Investigations", value: totalInvestigations, icon: Shield, color: "text-teal-400", href: "/investigations", trend: <Trend current={invLast24h} previous={invPrior24h} /> },
+            { label: "My Investigations", value: totalInvestigations, icon: Shield, color: "text-teal-400", href: "/investigations", trend: <Trend current={invLast24h} previous={invPrior24h} /> },
             { label: "New Findings",   value: newFindings,       icon: AlertTriangle, color: "text-yellow-400", href: "/findings?status=new", trend: <Trend current={findingsLast24h} previous={findingsPrior24h} /> },
             { label: "Escalated",      value: escalatedFindings, icon: ShieldAlert,   color: "text-orange-400", href: "/findings?status=escalated", trend: <Trend current={escalatedLast24h} previous={escalatedPrior24h} /> },
           ].map(({ label, value, icon: Icon, color, href, trend }) => (
@@ -348,7 +338,7 @@ export default async function DashboardPage() {
         {/* Activity Feed */}
         <section>
           <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-400">
-            {isPlatformAdmin ? "All Activity" : isOrgAdmin ? "Organization Activity" : "My Activity"}
+            Organization Activity
           </h2>
           <div className="max-h-[480px] overflow-y-auto divide-y divide-zinc-800 rounded-lg border border-zinc-800 bg-zinc-900">
             {recentActivity.length === 0 ? (

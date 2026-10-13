@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useSession } from "next-auth/react";
 import {
   AlertCircle, ArrowLeft, CheckCircle2, ChevronDown, ChevronRight,
   Edit2, Lock, Plus, RefreshCw, Shield, Trash2, X, Zap,
@@ -258,8 +257,8 @@ function RuleEditor({
 // ── Page ───────────────────────────────────────────────────────────────────
 
 export default function LogAnalysisRulesPage() {
-  const { data: session } = useSession();
-  const isAdmin = ["platform_admin", "org_admin"].includes((session?.user as { role?: string })?.role ?? "");
+  // Core is single-user/single-role — the sole account always has full access.
+  const isAdmin = true;
 
   const [rules, setRules]       = useState<GroupedRules>({ custom: [], builtin: [] });
   const [loading, setLoading]   = useState(true);

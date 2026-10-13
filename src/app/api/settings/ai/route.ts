@@ -4,7 +4,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { getActorOrThrow, AuthError } from "@/lib/auth/api-guard";
-import { isInstanceAdmin } from "@/lib/auth/session";
 import { encryptSecret } from "@/lib/crypto/secret-box";
 
 const SINGLETON_ID = "singleton";
@@ -39,15 +38,12 @@ const putSchema = z.object({
   ollamaManaged: z.boolean().optional(),
 });
 
-// PUT — instance admin only (platform_admin, or org_admin in appliance mode).
+// PUT — unrestricted (Core's sole user).
 export async function PUT(req: NextRequest) {
   let actor;
   try { actor = await getActorOrThrow(req); }
   catch (e) { if (e instanceof AuthError) return e.toResponse(); throw e; }
 
-  if (!isInstanceAdmin(actor.role)) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
 
   let body;
   try {

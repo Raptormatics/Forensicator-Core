@@ -7,7 +7,6 @@ import path from "path";
 import { createHash, randomUUID } from "crypto";
 import { z } from "zod";
 import { getActorOrThrow, AuthError } from "@/lib/auth/api-guard";
-import { isInstanceAdmin } from "@/lib/auth/session";
 import { currentProgress } from "@/lib/updates/paths";
 import { checkForUpdate, getChannel } from "@/lib/updates/online";
 import { startInstall, actorIp } from "@/lib/updates/install";
@@ -16,8 +15,7 @@ import { containerUpdateBlockedResponse } from "@/lib/updates/container-guard";
 const MAX_PACKAGE_BYTES = 500 * 1024 * 1024;
 const bodySchema = z.object({ allowDowngrade: z.boolean().optional().default(false) });
 
-// POST — platform_admin, or org_admin in appliance mode (see
-// isInstanceAdmin). Downloads the package the update server currently
+// POST — unrestricted (Core's sole user). Downloads the package the update server currently
 // points to (re-resolved here, never trusting a client-supplied URL) and
 // hands it to the same privileged installer the offline upload path uses.
 // The download itself is unprivileged (a plain outbound fetch); only
@@ -28,9 +26,6 @@ export async function POST(req: NextRequest) {
   try { actor = await getActorOrThrow(req); }
   catch (e) { if (e instanceof AuthError) return e.toResponse(); throw e; }
 
-  if (!isInstanceAdmin(actor.role)) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
 
   const blocked = containerUpdateBlockedResponse();
   if (blocked) return blocked;

@@ -5,17 +5,12 @@ import { useSession } from "next-auth/react";
 import Link from "next/link";
 import { Settings2, Globe, FolderOutput, Database, CheckCircle2, AlertCircle, Loader2, BrainCircuit, ArrowRight, Network, MemoryStick } from "lucide-react";
 
-// Mirrors isInstanceAdmin() (src/lib/auth/session.ts), which the API
-// route actually enforces — this only gates the UI, not security. System
-// settings affect the whole shared platform in SaaS mode (every org), so
-// they stay platform_admin-only there; appliance mode never seeds a
-// platform_admin, so org_admin manages their own single instance's copy.
-const IS_APPLIANCE = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "appliance";
-const ADMIN_ROLES = IS_APPLIANCE ? ["platform_admin", "org_admin"] : ["platform_admin"];
+// Core has no RBAC — the sole user always has full access.
 
 export default function SettingsPage() {
   const { data: session } = useSession();
-  const isAdmin = ADMIN_ROLES.includes(session?.user?.role ?? "");
+  // Core is single-user/single-role — the sole account always has full access.
+  const isAdmin = true;
 
   const [appDomain, setAppDomain]   = useState("");
   const [reportsDir, setReportsDir] = useState("");

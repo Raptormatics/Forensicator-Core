@@ -2,12 +2,13 @@
  * Seed the single organization for an appliance instance — no user.
  *
  * Appliance mode is scoped to exactly one Organization (ORG_NAME /
- * ORG_SLUG, set at provision time), but the first user is no longer
- * seeded automatically — they create their own admin account through
- * the mandatory /setup wizard on first visit (POST /api/setup links
- * them to this org as org_admin). This script only ever creates the org
- * itself, so first-boot.sh can run it unattended before the app is ever
- * reachable, with nothing left to transcribe off a console.
+ * ORG_SLUG, set at provision time), but the one user Core ever has is no
+ * longer seeded automatically — they create their own account through
+ * the mandatory /setup wizard on first visit (POST /api/setup links them
+ * to this org — Core has no RBAC, so there's no role to assign). This
+ * script only ever creates the org itself, so first-boot.sh can run it
+ * unattended before the app is ever reachable, with nothing left to
+ * transcribe off a console.
  *
  * Usage:
  *   ORG_NAME="Acme Corp" ORG_SLUG=acme npx tsx scripts/seed-org.ts

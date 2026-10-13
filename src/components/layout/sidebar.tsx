@@ -33,19 +33,24 @@ import { useRef, useState } from "react";
 //
 // The Enterprise overlay replaces this file with an extended version that
 // adds its own remaining Pro-only nav group (Developers) and Pro-only
-// items nested inside Platform/Settings (Webhooks, Retention, SIEM
-// Integrations, Single Sign-On, License) — Intelligence, Log Analysis,
-// PCAP Analysis, and RAM Analysis used to be overlay-only too, now native
-// to Core (custom decoder/rule/signature authoring stays Enterprise-only
-// within those pages). Unlike most of the files the overlay touches, this one's hardcoded
-// href strings aren't a safety boundary — dynamic-import tricks don't
-// apply to a nav list — so a 404 on a stripped route would be the actual
-// failure mode if any Pro href leaked back in here. Keep this list in sync
-// with the actual app route list on every change, both directions.
+// items nested inside Platform/Settings (Organizations, Users, Webhooks,
+// Retention, SIEM Integrations, Single Sign-On, License) — Intelligence,
+// Log Analysis, PCAP Analysis, and RAM Analysis used to be overlay-only
+// too, now native to Core (custom decoder/rule/signature authoring stays
+// Enterprise-only within those pages). Core is permanently single-user/
+// single-org (no RBAC — the one setup account has unrestricted access),
+// so there's no role-based filtering left on this list at all; Enterprise's
+// version restores Organizations/Users and gates them the way role-based
+// nav items here used to. Unlike most of the files the overlay touches,
+// this one's hardcoded href strings aren't a safety boundary — dynamic-
+// import tricks don't apply to a nav list — so a 404 on a stripped route
+// would be the actual failure mode if any Pro href leaked back in here.
+// Keep this list in sync with the actual app route list on every change,
+// both directions.
 
 type NavItem =
-  | { kind: "link";  label: string; href: string; icon: React.ElementType; allowedRoles?: string[] }
-  | { kind: "group"; label: string; icon: React.ElementType; children: { label: string; href: string; allowedRoles?: string[] }[] };
+  | { kind: "link";  label: string; href: string; icon: React.ElementType }
+  | { kind: "group"; label: string; icon: React.ElementType; children: { label: string; href: string }[] };
 
 const NAV: NavItem[] = [
   { kind: "link",  label: "Dashboard",      href: "/dashboard",       icon: LayoutDashboard },
@@ -107,17 +112,15 @@ const NAV: NavItem[] = [
     label: "Platform",
     icon: Globe,
     children: [
-      { label: "Organizations", href: "/organizations", allowedRoles: ["platform_admin", "org_admin"] },
-      { label: "Users",         href: "/users",         allowedRoles: ["platform_admin", "org_admin"] },
-      { label: "Updates",       href: "/settings/updates", allowedRoles: ["platform_admin", "org_admin"] },
-      { label: "Audit Log",     href: "/audit" },
+      { label: "Updates",   href: "/settings/updates" },
+      { label: "Audit Log", href: "/audit" },
     ],
   },
   { kind: "group",  label: "Settings",  icon: Settings, children: [
     { label: "Profile",  href: "/settings/profile" },
     { label: "Security", href: "/settings/security" },
     { label: "API Keys",           href: "/settings/keys" },
-    { label: "AI Analysis",        href: "/settings/ai", allowedRoles: ["platform_admin", "org_admin"] },
+    { label: "AI Analysis",        href: "/settings/ai" },
     { label: "Threat Intel Providers", href: "/settings/threat-intel" },
     { label: "General",            href: "/settings" },
   ]},
@@ -207,10 +210,7 @@ export function Sidebar() {
       {/* Nav */}
       <nav className="flex-1 overflow-y-auto px-2 py-3 space-y-0.5">
         {NAV.map((item) => {
-          const role = session?.user?.role ?? "";
-
           if (item.kind === "link") {
-            if (item.allowedRoles && !item.allowedRoles.includes(role)) return null;
             const active = isActive(item.href);
             const Icon = item.icon;
             return (
@@ -231,14 +231,8 @@ export function Sidebar() {
             );
           }
 
-          // Group with children — filter children by allowedRoles
-          const visibleChildren = item.children.filter(
-            (c) => !c.allowedRoles || c.allowedRoles.includes(role)
-          );
-          if (visibleChildren.length === 0) return null;
-
           const isExpanded = expandedGroups.includes(item.label);
-          const anyChildActive = visibleChildren.some((c) => isActive(c.href));
+          const anyChildActive = item.children.some((c) => isActive(c.href));
           const Icon = item.icon;
 
           return (
@@ -261,7 +255,7 @@ export function Sidebar() {
               </button>
               {isExpanded && (
                 <div className="ml-4 mt-0.5 space-y-0.5 border-l border-zinc-800 pl-3">
-                  {visibleChildren.map((child) => {
+                  {item.children.map((child) => {
                     const childActive = isActive(child.href);
                     return (
                       <Link
@@ -295,7 +289,7 @@ export function Sidebar() {
             </div>
             <div className="min-w-0 flex-1">
               <p className="truncate text-xs font-medium text-zinc-300">{session.user.name ?? session.user.email}</p>
-              <p className="truncate text-[10px] text-zinc-600">{session.user.role}</p>
+              {session.user.name && <p className="truncate text-[10px] text-zinc-600">{session.user.email}</p>}
             </div>
             <div className="flex gap-1">
               <Link href="/settings/profile" className="rounded p-1 text-zinc-600 hover:text-zinc-300" title="Profile">

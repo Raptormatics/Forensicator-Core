@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useSession } from "next-auth/react";
 import {
   AlertCircle, CheckCircle2, ChevronDown, ChevronRight,
   Edit2, Lock, Plus, RefreshCw, Trash2, X, Zap,
@@ -166,8 +165,8 @@ function YaraRuleEditor({
 }
 
 export function YaraRulesSection() {
-  const { data: session } = useSession();
-  const isAdmin = ["platform_admin", "org_admin"].includes((session?.user as { role?: string })?.role ?? "");
+  // Core is single-user/single-role — the sole account always has full access.
+  const isAdmin = true;
 
   const [rules, setRules]       = useState<GroupedRules>({ custom: [], builtin: [] });
   const [loading, setLoading]   = useState(true);

@@ -7,10 +7,8 @@ import {
   Play, Square, PackagePlus, PackageMinus, ShieldOff,
 } from "lucide-react";
 
-// Appliance mode never seeds a platform_admin — org_admin manages their own
-// single instance there too. Mirrors every other instance-level settings page.
-const IS_APPLIANCE = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "appliance";
-const ADMIN_ROLES = IS_APPLIANCE ? ["platform_admin", "org_admin"] : ["platform_admin"];
+// Core has no RBAC — the sole user always has full access, same as every
+// other instance-level settings page.
 
 const PROVIDERS = [
   { value: "ollama", label: "Ollama (local / self-hosted)" },
@@ -59,7 +57,8 @@ function formatBytes(bytes: number): string {
 
 export default function AiSettingsPage() {
   const { data: session } = useSession();
-  const isAdmin = ADMIN_ROLES.includes(session?.user?.role ?? "");
+  // Core is single-user/single-role — the sole account always has full access.
+  const isAdmin = true;
 
   const [settings, setSettings] = useState<AiSettings | null>(null);
   const [apiKeyInput, setApiKeyInput] = useState("");

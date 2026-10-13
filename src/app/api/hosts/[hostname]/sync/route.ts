@@ -95,8 +95,7 @@ export async function POST(req: NextRequest, props: Params) {
   }
 
   const riskScore = computeRiskScore({ criticalCount: critSum, highCount: highSum, iocMatchCount: iocSum, persistenceEvents: persistenceCount, usbActivity: usbCount });
-  // Derive the host's org from its investigations, not the caller's identity
-  // (a platform_admin syncing on another org's behalf shouldn't reassign it).
+  // Derive the host's org from its investigations, not the caller's identity.
   const organizationId = investigations[0].organizationId ?? null;
 
   const profile = await prisma.hostProfile.upsert({

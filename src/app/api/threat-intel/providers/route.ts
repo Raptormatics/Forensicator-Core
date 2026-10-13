@@ -33,15 +33,11 @@ const putSchema = z.object({
   enabled: z.boolean().optional(),
 });
 
-// PUT — org_admin/platform_admin only. Set/replace a key (keyed providers only), and/or toggle enabled (any provider).
+// PUT — unrestricted (Core's sole user). Set/replace a key (keyed providers only), and/or toggle enabled (any provider).
 export async function PUT(req: NextRequest) {
   let actor;
   try { actor = await getActorOrThrow(req); }
   catch (e) { if (e instanceof AuthError) return e.toResponse(); throw e; }
-
-  if (!["platform_admin", "org_admin"].includes(actor.role)) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
 
   const orgId = actor.organizationIds[0];
   if (!orgId) return NextResponse.json({ error: "No organization associated with your account" }, { status: 400 });
@@ -65,15 +61,11 @@ export async function PUT(req: NextRequest) {
 
 const deleteSchema = z.object({ provider: PROVIDER_ENUM });
 
-// DELETE — org_admin/platform_admin only. Clear the org's override (key and/or toggle), reverting to defaults.
+// DELETE — unrestricted (Core's sole user). Clear the org's override (key and/or toggle), reverting to defaults.
 export async function DELETE(req: NextRequest) {
   let actor;
   try { actor = await getActorOrThrow(req); }
   catch (e) { if (e instanceof AuthError) return e.toResponse(); throw e; }
-
-  if (!["platform_admin", "org_admin"].includes(actor.role)) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
 
   const orgId = actor.organizationIds[0];
   if (!orgId) return NextResponse.json({ error: "No organization associated with your account" }, { status: 400 });

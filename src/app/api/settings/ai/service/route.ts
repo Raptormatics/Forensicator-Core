@@ -14,7 +14,6 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getActorOrThrow, AuthError } from "@/lib/auth/api-guard";
-import { isInstanceAdmin } from "@/lib/auth/session";
 import { prisma } from "@/lib/db/prisma";
 import { ollamaProgress, ollamaLastResult, startOllamaCtl, getOllamaCtlStatus } from "@/lib/ai/ollama-service";
 
@@ -23,9 +22,6 @@ export async function GET(req: NextRequest) {
   try { actor = await getActorOrThrow(req); }
   catch (e) { if (e instanceof AuthError) return e.toResponse(); throw e; }
 
-  if (!isInstanceAdmin(actor.role)) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
 
   const progress = ollamaProgress();
   // Skip the sudo status round-trip while an install/uninstall is actively
@@ -51,9 +47,6 @@ export async function POST(req: NextRequest) {
   try { actor = await getActorOrThrow(req); }
   catch (e) { if (e instanceof AuthError) return e.toResponse(); throw e; }
 
-  if (!isInstanceAdmin(actor.role)) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
 
   const { action, purgeModels } = postSchema.parse(await req.json());
 

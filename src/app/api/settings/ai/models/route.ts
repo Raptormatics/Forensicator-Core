@@ -13,7 +13,6 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getActorOrThrow, AuthError } from "@/lib/auth/api-guard";
-import { isInstanceAdmin } from "@/lib/auth/session";
 import { getAiConfig } from "@/lib/settings/system";
 import { ollamaListModels, OllamaError } from "@/lib/ai/ollama";
 import { startModelPull, currentPullStatus, isPulling } from "@/lib/ai/model-pull";
@@ -41,9 +40,6 @@ export async function POST(req: NextRequest) {
   try { actor = await getActorOrThrow(req); }
   catch (e) { if (e instanceof AuthError) return e.toResponse(); throw e; }
 
-  if (!isInstanceAdmin(actor.role)) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
 
   const { model } = postSchema.parse(await req.json());
 

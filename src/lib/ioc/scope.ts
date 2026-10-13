@@ -49,11 +49,10 @@ function mergeSources(
  */
 export async function deriveScopedIocSources(actor: AuthActor, caseId?: string) {
   const scope = orgWhere(actor);
-  const needsScoping = actor.role !== "platform_admin" || !!caseId;
-  if (!needsScoping) return { valueFilter: undefined, sources: new Map<string, Set<string>>(), needsScoping };
+  const needsScoping = true;
 
   const commonWhere = {
-    ...(actor.role !== "platform_admin" ? scope : {}),
+    ...scope,
     ...(caseId ? { caseId } : {}),
   };
 

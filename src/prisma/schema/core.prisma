@@ -324,13 +324,18 @@ model HostProfile {
   @@map("host_profiles")
 }
 
+// No `role` column here — Core is single-user/single-org, so this just
+// links the sole account to the sole org. RBAC's second role axis
+// (OrganizationMember.role, alongside User.role in shared-models.prisma)
+// is an Enterprise-only capability; the Enterprise overlay's own version
+// of this file (a wholesale-replace, despite this being the only model
+// here that differs) restores it.
 model OrganizationMember {
   id             String       @id @default(uuid()) @db.Uuid
   organizationId String       @map("organization_id") @db.Uuid
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   userId         String       @map("user_id") @db.Uuid
   user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  role           String       @default("analyst")  // org_admin | analyst | read_only | auditor
   invitedAt      DateTime?    @map("invited_at")
   joinedAt       DateTime?    @map("joined_at")
   active         Boolean      @default(true)
@@ -341,7 +346,6 @@ model OrganizationMember {
   @@unique([organizationId, userId])
   @@index([organizationId])
   @@index([userId])
-  @@index([role])
   @@map("organization_members")
 }
 

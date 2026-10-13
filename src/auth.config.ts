@@ -10,7 +10,7 @@ import bcrypt from "bcryptjs";
 // Extended user type that includes new auth fields
 // (Prisma types update after `prisma generate` / server restart)
 type AuthUser = {
-  id: string; email: string; name: string | null; role: string;
+  id: string; email: string; name: string | null;
   passwordHash: string | null; isActive: boolean; lastLogin: Date | null;
   failedLoginAttempts: number; lockedUntil: Date | null;
 };
@@ -98,9 +98,8 @@ export const authOptions: NextAuthOptions = {
         });
 
         // No organizationId here, same as the login_failed/login_locked
-        // writes above — orgWhere() (src/lib/auth/api-guard.ts) treats
-        // org_admin in appliance mode the same as platform_admin for
-        // exactly this reason, so it's still visible in the Audit Log.
+        // writes above — orgWhere() (src/lib/auth/api-guard.ts) is always
+        // unrestricted in Core, so this is still visible in the Audit Log.
         await prisma.auditLog.create({
           data: {
             actorId: user.id,
@@ -118,7 +117,6 @@ export const authOptions: NextAuthOptions = {
           id:             user.id,
           email:          user.email,
           name:           user.name ?? user.email,
-          role:           user.role,
         };
       },
     }),
@@ -126,15 +124,13 @@ export const authOptions: NextAuthOptions = {
   callbacks: {
     async jwt({ token, user }) {
       if (user) {
-        token.id   = user.id;
-        token.role = (user as { role?: string }).role ?? "analyst";
+        token.id = user.id;
       }
       return token;
     },
     async session({ session, token }) {
       if (token && session.user) {
-        session.user.id   = token.id as string;
-        session.user.role = token.role as string;
+        session.user.id = token.id as string;
       }
       return session;
     },

@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useSession } from "next-auth/react";
 import {
   AlertCircle, CheckCircle2, ChevronDown, ChevronRight, Code2,
   Copy, Lock, Plus, RefreshCw, Settings, Trash2,
@@ -35,9 +34,6 @@ function extractVendor(name: string): string {
 }
 
 export default function DecodersPage() {
-  const { data: session }                 = useSession();
-  const isPlatformAdmin                   = (session?.user as { role?: string })?.role === "platform_admin";
-
   const [decoders, setDecoders]           = useState<GroupedDecoders>({ custom: [], builtin: [] });
   const [loading, setLoading]             = useState(true);
   const [builtinExpanded, setBuiltinExpanded] = useState(false);
@@ -237,7 +233,7 @@ export default function DecodersPage() {
                         onToggle={toggleEnabled}
                         onDelete={deleteDecoder}
                         onClone={cloneDecoder}
-                        canDelete={isPlatformAdmin}
+                        canDelete={true}
                       />
                     ))
                   )}

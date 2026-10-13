@@ -5,15 +5,13 @@ import { spawn } from "child_process";
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { getActorOrThrow, AuthError } from "@/lib/auth/api-guard";
-import { isInstanceAdmin } from "@/lib/auth/session";
 import { UPDATE_SCRIPT, currentProgress, listBackups } from "@/lib/updates/paths";
 import { actorIp } from "@/lib/updates/install";
 import { containerUpdateBlockedResponse } from "@/lib/updates/container-guard";
 
 const bodySchema = z.object({ backupId: z.string().min(1) });
 
-// POST — platform_admin, or org_admin in appliance mode (see
-// isInstanceAdmin). Restores a prior backup via the same privileged
+// POST — unrestricted (Core's sole user). Restores a prior backup via the same privileged
 // script used for installs (--rollback mode), fire-and-forget for the
 // same reason as the upload route: it restarts this process.
 export async function POST(req: NextRequest) {
@@ -21,9 +19,6 @@ export async function POST(req: NextRequest) {
   try { actor = await getActorOrThrow(req); }
   catch (e) { if (e instanceof AuthError) return e.toResponse(); throw e; }
 
-  if (!isInstanceAdmin(actor.role)) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
 
   const blocked = containerUpdateBlockedResponse();
   if (blocked) return blocked;

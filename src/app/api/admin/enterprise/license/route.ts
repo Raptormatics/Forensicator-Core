@@ -4,39 +4,30 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { getActorOrThrow, AuthError } from "@/lib/auth/api-guard";
-import { isInstanceAdmin } from "@/lib/auth/session";
 import { getActivationState, activateLicense } from "@/lib/license/activation";
 import { InvalidLicenseError } from "@/lib/license/verify";
 import { containerEnterpriseBlockedResponse } from "@/lib/updates/container-guard";
 
-// GET — platform_admin, or org_admin in appliance mode (see
-// isInstanceAdmin). Current Enterprise-overlay entitlement state.
+// GET — unrestricted (Core's sole user). Current Enterprise-overlay entitlement state.
 export async function GET(req: NextRequest) {
   let actor;
   try { actor = await getActorOrThrow(req); }
   catch (e) { if (e instanceof AuthError) return e.toResponse(); throw e; }
 
-  if (!isInstanceAdmin(actor.role)) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
 
   return NextResponse.json(getActivationState());
 }
 
 const bodySchema = z.object({ licContent: z.string().min(1) });
 
-// POST — platform_admin, or org_admin in appliance mode. Verifies and
-// stores a .lic file — this only unlocks downloading/installing the
-// Enterprise overlay (see /settings/updates); it does not itself install
-// anything.
+// POST — unrestricted (Core's sole user). Verifies and stores a .lic
+// file — this only unlocks downloading/installing the Enterprise overlay
+// (see /settings/updates); it does not itself install anything.
 export async function POST(req: NextRequest) {
   let actor;
   try { actor = await getActorOrThrow(req); }
   catch (e) { if (e instanceof AuthError) return e.toResponse(); throw e; }
 
-  if (!isInstanceAdmin(actor.role)) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
 
   const blocked = containerEnterpriseBlockedResponse();
   if (blocked) return blocked;

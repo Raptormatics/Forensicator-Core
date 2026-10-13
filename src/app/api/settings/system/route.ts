@@ -4,7 +4,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { getActorOrThrow, AuthError } from "@/lib/auth/api-guard";
-import { isInstanceAdmin } from "@/lib/auth/session";
 
 const SINGLETON_ID = "singleton";
 
@@ -45,17 +44,12 @@ const putSchema = z.object({
   ramChunkSizeBytes: z.number().int().min(0).optional(),
 });
 
-// PUT — instance admin only (platform_admin, or org_admin in appliance
-// mode — see isInstanceAdmin). Same tier as managing platform updates:
-// this affects the whole shared instance, not just one org.
+// PUT — unrestricted (Core's sole user).
 export async function PUT(req: NextRequest) {
   let actor;
   try { actor = await getActorOrThrow(req); }
   catch (e) { if (e instanceof AuthError) return e.toResponse(); throw e; }
 
-  if (!isInstanceAdmin(actor.role)) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
 
   let body;
   try {

@@ -6,14 +6,10 @@ import { getActorOrThrow, AuthError } from "@/lib/auth/api-guard";
 import { seedBuiltinYaraRules }       from "@/lib/ram-analysis/yara-seed";
 
 // ── POST /api/ram-analysis/yara-rules/seed ──────────────────────────────────
-// Admin-only: seed (or re-seed) the bundled starter Yara signature set into the DB.
+// Seed (or re-seed) the bundled starter Yara signature set into the DB.
 export async function POST(req: NextRequest) {
   try {
-    const actor = await getActorOrThrow(req);
-
-    if (actor.role !== "platform_admin" && actor.role !== "org_admin") {
-      return NextResponse.json({ error: "forbidden" }, { status: 403 });
-    }
+    await getActorOrThrow(req);
 
     const result = await seedBuiltinYaraRules();
 

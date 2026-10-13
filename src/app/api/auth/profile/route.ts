@@ -25,7 +25,7 @@ export async function GET(req: NextRequest) {
       select: {
         id: true, email: true, name: true,
         firstName: true, lastName: true,
-        role: true, isActive: true, lastLogin: true,
+        isActive: true, lastLogin: true,
         createdAt: true,
         _count: { select: { apiKeys: true } },
       },
@@ -72,7 +72,7 @@ export async function PATCH(req: NextRequest) {
     const updated = await prisma.user.update({
       where:  { id: actor.id },
       data,
-      select: { id: true, email: true, name: true, firstName: true, lastName: true, role: true },
+      select: { id: true, email: true, name: true, firstName: true, lastName: true },
     });
     return NextResponse.json({ user: updated });
   } catch (e) {

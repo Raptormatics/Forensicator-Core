@@ -13,10 +13,8 @@ import {
   Container,
 } from "lucide-react";
 
-// Mirrors isInstanceAdmin() (src/lib/auth/session.ts) — Core is always
-// appliance mode, so org_admin manages this too, same tier as Updates.
-const ADMIN_ROLES = ["platform_admin", "org_admin"];
-// A valid license only ever unlocks installing the overlay under
+// Core has no RBAC — the sole user always has full access, same as every
+// other admin-tier page. A valid license only ever unlocks installing the overlay under
 // Settings -> Updates — which is unconditionally blocked in Docker (no
 // sudo/systemd for the installer). Activating one here anyway would be
 // a dead end, so the whole form is replaced with an explanation instead.
@@ -36,7 +34,8 @@ type ActivationState = {
 
 export default function EnterprisePage() {
   const { data: session } = useSession();
-  const isAdmin = ADMIN_ROLES.includes(session?.user?.role ?? "");
+  // Core is single-user/single-role — the sole account always has full access.
+  const isAdmin = true;
 
   const [state, setState] = useState<ActivationState | null>(null);
   const [loading, setLoading] = useState(true);

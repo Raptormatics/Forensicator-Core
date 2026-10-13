@@ -6,15 +6,13 @@ import os from "os";
 import path from "path";
 import { randomUUID } from "crypto";
 import { getActorOrThrow, AuthError } from "@/lib/auth/api-guard";
-import { isInstanceAdmin } from "@/lib/auth/session";
 import { currentProgress } from "@/lib/updates/paths";
 import { startInstall, actorIp } from "@/lib/updates/install";
 import { containerUpdateBlockedResponse } from "@/lib/updates/container-guard";
 
 const MAX_PACKAGE_BYTES = 500 * 1024 * 1024;
 
-// POST — platform_admin, or org_admin in appliance mode (see
-// isInstanceAdmin). Uploads a signed .fpk, hands it to the privileged
+// POST — unrestricted (Core's sole user). Uploads a signed .fpk, hands it to the privileged
 // installer via the scoped sudoers rule, and returns immediately — the
 // installer will restart the very process handling this request, so the
 // Admin UI tracks progress by polling GET .../status.
@@ -23,9 +21,6 @@ export async function POST(req: NextRequest) {
   try { actor = await getActorOrThrow(req); }
   catch (e) { if (e instanceof AuthError) return e.toResponse(); throw e; }
 
-  if (!isInstanceAdmin(actor.role)) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
 
   const blocked = containerUpdateBlockedResponse();
   if (blocked) return blocked;

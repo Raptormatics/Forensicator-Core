@@ -29,8 +29,8 @@ export async function GET(req: NextRequest, props: { params: Promise<{ id: strin
 
     if (!decoder) return NextResponse.json({ error: "not_found" }, { status: 404 });
 
-    // Access check: non-admins can only see builtin + their own org's
-    if (actor.role !== "platform_admin" && !decoder.isBuiltin) {
+    // Access check: non-builtin decoders stay scoped to their own org
+    if (!decoder.isBuiltin) {
       if (!decoder.organizationId || !actor.organizationIds.includes(decoder.organizationId)) {
         return NextResponse.json({ error: "forbidden" }, { status: 403 });
       }
@@ -54,8 +54,8 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ id: str
     const existing = await prisma.logDecoder.findUnique({ where: { id: params.id } });
     if (!existing) return NextResponse.json({ error: "not_found" }, { status: 404 });
 
-    // Access check: must own org or be platform_admin
-    if (actor.role !== "platform_admin" && !existing.isBuiltin) {
+    // Access check: non-builtin decoders stay scoped to their own org
+    if (!existing.isBuiltin) {
       if (!existing.organizationId || !actor.organizationIds.includes(existing.organizationId)) {
         return NextResponse.json({ error: "forbidden" }, { status: 403 });
       }
@@ -106,13 +106,9 @@ export async function DELETE(req: NextRequest, props: { params: Promise<{ id: st
     const existing = await prisma.logDecoder.findUnique({ where: { id: params.id } });
     if (!existing) return NextResponse.json({ error: "not_found" }, { status: 404 });
 
-    // Built-in decoders can only be removed by a platform_admin.
-    // They will be restored the next time "Seed Built-ins" is run.
-    if (existing.isBuiltin && actor.role !== "platform_admin") {
-      return NextResponse.json({ error: "cannot_delete_builtin" }, { status: 403 });
-    }
-
-    if (actor.role !== "platform_admin") {
+    // Deleting a built-in is unrestricted — it's restored the next time
+    // "Seed Built-ins" is run.
+    if (!existing.isBuiltin) {
       if (!existing.organizationId || !actor.organizationIds.includes(existing.organizationId)) {
         return NextResponse.json({ error: "forbidden" }, { status: 403 });
       }

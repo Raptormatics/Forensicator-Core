@@ -25,13 +25,12 @@ export async function GET(req: NextRequest) {
     if (builtinOnly) where.isBuiltin = true;
     if (customOnly)  where.isBuiltin = false;
 
-    // Non-admin users see only their org's custom decoders + all built-ins
-    if (actor.role !== "platform_admin") {
-      where.OR = [
-        { isBuiltin: true },
-        { organizationId: { in: actor.organizationIds } },
-      ];
-    }
+    // Everyone sees their org's custom decoders + all built-ins (Core has
+    // exactly one org, so this isn't really a restriction).
+    where.OR = [
+      { isBuiltin: true },
+      { organizationId: { in: actor.organizationIds } },
+    ];
 
     const decoders = await prisma.logDecoder.findMany({
       where,
@@ -77,7 +76,7 @@ export async function POST(req: NextRequest) {
         description:    def.description ?? null,
         yamlContent:    input.yamlContent,
         enabled:        true,
-        isBuiltin:      actor.role === "platform_admin" && (input.isBuiltin ?? false),
+        isBuiltin:      input.isBuiltin ?? false,
         version:        1,
         createdById:    actor.id,
         organizationId: input.organizationId ?? actor.organizationIds[0] ?? null,

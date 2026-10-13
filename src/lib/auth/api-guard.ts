@@ -8,24 +8,25 @@
  * Returns the User row or throws AuthError (callers can check instanceof).
  *
  * Core-only — no license enforcement here at all; Forensicator Core is free
- * and unrestricted. The Enterprise overlay replaces this file with an
- * extended version that adds a license-validity check in requireAuth(). Keep
- * everything else in this file identical to the overlay's version so that
- * isn't the only thing that differs between editions.
+ * and unrestricted. Core is also single-user/single-org: there is no `role`
+ * field on AuthActor at all here (RBAC — the User.role/OrganizationMember.role
+ * columns, multi-user creation, and every role-based check — is an
+ * Enterprise-only capability; that code doesn't exist in Core, not just a
+ * gated version of it). The Enterprise overlay replaces this file with an
+ * extended version that restores `role`, adds a license-validity check in
+ * requireAuth(), and makes orgWhere() genuinely role-aware again.
  */
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getToken } from "next-auth/jwt";
 import { prisma } from "@/lib/db/prisma";
 import bcrypt from "bcryptjs";
-import { isAppliance } from "@/lib/config/deployment";
 
 export type AuthActor = {
   id:              string;
   email:           string;
   name:            string | null;
-  role:            string;
-  /** All organization IDs this user is a member of. Empty for platform_admin guests. */
+  /** All organization IDs this user is a member of. Core has exactly one. */
   organizationIds: string[];
 };
 
@@ -44,33 +45,19 @@ export class AuthError extends Error {
 }
 
 /**
- * Returns a Prisma `where` fragment that restricts records to the actor's orgs.
- *
- * - platform_admin           → no restriction (sees everything)
- * - org_admin, in appliance  → no restriction either — see below
- * - everyone else            → { organizationId: { in: [...actor.organizationIds] } }
- *                              (empty array → matches nothing → sees nothing)
- *
- * The appliance case matters beyond investigations/cases/etc (where it's
- * a no-op anyway — appliance has exactly one org, so "their org only" and
- * "everything" are the same set): several system-level audit log writes
- * (update_started, enterprise_overlay_started, enterprise_license_activated,
- * system_settings_updated — see src/lib/updates/install.ts and friends)
- * don't set organizationId at all, since they're instance-level events,
- * not tied to one org. SQL `IN` never matches NULL, so without this, an
- * org_admin's own audit log view would silently exclude their own
- * update/license/settings activity — the only admin role an appliance
- * instance ever has. isAppliance() is hardcoded true in Core (see
- * deployment.ts) and reads the real DEPLOYMENT_MODE in the Enterprise
- * overlay, so this stays a no-op for genuine multi-tenant SaaS, where
- * org_admin must still only see their own org.
+ * Returns a Prisma `where` fragment that restricts records to the actor's
+ * orgs. Core is permanently single-user/single-org, so this is always a
+ * no-op — unconditionally no restriction, same shape as every other
+ * edition so the ~25 call sites that splat this into a Prisma `where`
+ * clause (investigations/cases/hosts/reports/etc.) never needed to know
+ * the actual rule changed. The Enterprise overlay replaces this file with
+ * a version that restricts non-platform_admin, non-appliance-org_admin
+ * actors to their own orgs.
  *
  * Use as: `prisma.investigation.findMany({ where: { ...orgWhere(actor), ...rest } })`
  */
-export function orgWhere(actor: AuthActor): { organizationId?: { in: string[] } } {
-  if (actor.role === "platform_admin") return {};
-  if (actor.role === "org_admin" && isAppliance()) return {};
-  return { organizationId: { in: actor.organizationIds } };
+export function orgWhere(_actor: AuthActor): { organizationId?: { in: string[] } } {
+  return {};
 }
 
 /**
@@ -112,7 +99,6 @@ async function resolveActor(request: NextRequest): Promise<AuthActor> {
             id:              key.user.id,
             email:           key.user.email,
             name:            key.user.name,
-            role:            key.user.role,
             organizationIds: key.user.orgMemberships.map((m) => m.organizationId),
           };
         }
@@ -137,7 +123,6 @@ async function resolveActor(request: NextRequest): Promise<AuthActor> {
         id:              user.id,
         email:           user.email,
         name:            user.name,
-        role:            user.role,
         organizationIds: user.orgMemberships.map((m) => m.organizationId),
       };
     }

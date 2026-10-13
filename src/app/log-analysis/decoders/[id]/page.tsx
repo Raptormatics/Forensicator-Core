@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { useSession } from "next-auth/react";
 import Link from "next/link";
 import {
   AlertCircle, ArrowLeft, CheckCircle2, Code2, Copy, Lock, Loader2, Play, Save, Trash2, Wand2, FileCode,
@@ -35,8 +34,6 @@ type ValidationResult = {
 export default function DecoderDetailPage() {
   const { id }    = useParams<{ id: string }>();
   const router    = useRouter();
-  const { data: session } = useSession();
-  const isPlatformAdmin = (session?.user as { role?: string })?.role === "platform_admin";
   const [decoder, setDecoder]         = useState<Decoder | null>(null);
   const [yaml, setYaml]               = useState("");
   const [loading, setLoading]         = useState(true);
@@ -221,10 +218,9 @@ export default function DecoderDetailPage() {
     );
   }
 
-  // Editing built-in YAML is unlocked for everyone — only deleting a
-  // built-in (restored on reseed) stays a platform_admin capability.
+  // Editing and deleting built-ins is unrestricted — Core has no RBAC.
   const isReadonly = false;
-  const canDelete  = !decoder.isBuiltin || isPlatformAdmin;
+  const canDelete  = true;
   const isValid    = validation?.valid !== false;
   const isDirty    = yaml !== decoder.yamlContent;
 

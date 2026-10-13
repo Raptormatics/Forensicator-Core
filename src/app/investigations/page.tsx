@@ -14,19 +14,16 @@ export default async function InvestigationsPage() {
   const session = await getServerSession();
   if (!session?.user) redirect("/login");
 
-  const { id: userId, role } = session.user;
+  const { id: userId } = session.user;
 
-  // Build org scope
-  let orgWhere: { organizationId?: { in: string[] } } = {};
-  if (role !== "platform_admin") {
-    const memberships = await prisma.organizationMember.findMany({
-      where: { userId },
-      select: { organizationId: true },
-    });
-    const orgIds = memberships.map((m) => m.organizationId);
-    // Return nothing if user has no org yet (prevents leaking data)
-    orgWhere = { organizationId: { in: orgIds } };
-  }
+  // Build org scope — Core has exactly one org. Returns nothing if the
+  // user somehow has no org yet (prevents leaking data).
+  const memberships = await prisma.organizationMember.findMany({
+    where: { userId },
+    select: { organizationId: true },
+  });
+  const orgIds = memberships.map((m) => m.organizationId);
+  const orgWhere: { organizationId?: { in: string[] } } = { organizationId: { in: orgIds } };
 
   let investigations: Awaited<ReturnType<typeof getInvestigations>> = [];
   let databaseError: string | null = null;

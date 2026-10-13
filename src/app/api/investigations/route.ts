@@ -12,9 +12,7 @@ export async function GET(req: NextRequest) {
   try {
     const actor = await getActorOrThrow(req);
 
-    const where = actor.role === "platform_admin"
-      ? {}
-      : { organizationId: { in: actor.organizationIds } };
+    const where = { organizationId: { in: actor.organizationIds } };
 
     const { searchParams } = new URL(req.url);
     const q = searchParams.get("q")?.trim();

@@ -17,13 +17,12 @@ export async function GET(req: NextRequest) {
     if (builtinOnly) where.isBuiltin = true;
     if (customOnly)  where.isBuiltin = false;
 
-    // Non-admin users see only their org's custom rules + all built-ins
-    if (actor.role !== "platform_admin") {
-      where.OR = [
-        { isBuiltin: true },
-        { organizationId: { in: actor.organizationIds } },
-      ];
-    }
+    // Everyone sees their org's custom rules + all built-ins (Core has
+    // exactly one org, so this isn't really a restriction).
+    where.OR = [
+      { isBuiltin: true },
+      { organizationId: { in: actor.organizationIds } },
+    ];
 
     const rules = await prisma.ramAnalysisRule.findMany({
       where,

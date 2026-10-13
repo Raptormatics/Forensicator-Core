@@ -6,7 +6,6 @@ import os from "os";
 import path from "path";
 import { createHash, randomUUID } from "crypto";
 import { getActorOrThrow, AuthError } from "@/lib/auth/api-guard";
-import { isInstanceAdmin } from "@/lib/auth/session";
 import { currentProgress } from "@/lib/updates/paths";
 import { checkForOverlay } from "@/lib/updates/overlay";
 import { startOverlayInstall, actorIp } from "@/lib/updates/install";
@@ -14,8 +13,7 @@ import { containerUpdateBlockedResponse } from "@/lib/updates/container-guard";
 
 const MAX_PACKAGE_BYTES = 500 * 1024 * 1024;
 
-// POST — platform_admin, or org_admin in appliance mode (see
-// isInstanceAdmin). Re-resolves the overlay channel here, never trusting
+// POST — unrestricted (Core's sole user). Re-resolves the overlay channel here, never trusting
 // a client-supplied URL — same pattern as the regular online-install
 // route. Requires an activated license (checkForOverlay() returns
 // licensed:false otherwise); the download itself is unprivileged, only
@@ -26,9 +24,6 @@ export async function POST(req: NextRequest) {
   try { actor = await getActorOrThrow(req); }
   catch (e) { if (e instanceof AuthError) return e.toResponse(); throw e; }
 
-  if (!isInstanceAdmin(actor.role)) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
 
   const blocked = containerUpdateBlockedResponse();
   if (blocked) return blocked;

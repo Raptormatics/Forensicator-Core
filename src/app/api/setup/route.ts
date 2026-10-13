@@ -4,7 +4,6 @@ import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
-import { isAppliance } from "@/lib/config/deployment";
 import { isSetupComplete } from "@/lib/setup/status";
 
 const bodySchema = z.object({
@@ -15,12 +14,12 @@ const bodySchema = z.object({
 
 class SetupAlreadyCompleteError extends Error {}
 
-// POST — public, one-time only. Creates the very first user (no user
-// exists at all until this succeeds — see isSetupComplete()). In
-// appliance mode this becomes org_admin of the single org first-boot.sh
-// already seeded (never a user, by design — see scripts/seed-org.ts); in
-// SaaS mode it becomes platform_admin with no organization, matching
-// the existing multi-tenant onboarding model.
+// POST — public, one-time only. Creates the one and only user Core ever
+// has (no user exists at all until this succeeds — see
+// isSetupComplete()), as a member of the single org first-boot.sh
+// already seeded (never a user, by design — see scripts/seed-org.ts).
+// There's no `role` to assign — Core has no RBAC at all (an
+// Enterprise-only capability); this account has unrestricted access.
 export async function POST(req: NextRequest) {
   if (await isSetupComplete()) {
     return NextResponse.json({ error: "Setup has already been completed." }, { status: 409 });
@@ -34,7 +33,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid request body." }, { status: 400 });
   }
 
-  const appliance = isAppliance();
   const passwordHash = await bcrypt.hash(body.password, 12);
 
   try {
@@ -50,27 +48,23 @@ export async function POST(req: NextRequest) {
           name: body.name,
           email: body.email,
           passwordHash,
-          role: appliance ? "org_admin" : "platform_admin",
           isActive: true,
         },
       });
 
-      if (appliance) {
-        const org = await tx.organization.findFirst();
-        if (!org) {
-          throw new Error(
-            "No organization found — provision.sh/first-boot.sh should have seeded one before setup was ever reachable."
-          );
-        }
-        await tx.organizationMember.create({
-          data: {
-            organizationId: org.id,
-            userId: created.id,
-            role: "org_admin",
-            joinedAt: new Date(),
-          },
-        });
+      const org = await tx.organization.findFirst();
+      if (!org) {
+        throw new Error(
+          "No organization found — provision.sh/first-boot.sh should have seeded one before setup was ever reachable."
+        );
       }
+      await tx.organizationMember.create({
+        data: {
+          organizationId: org.id,
+          userId: created.id,
+          joinedAt: new Date(),
+        },
+      });
 
       return created;
     });

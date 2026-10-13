@@ -51,12 +51,7 @@ type OverlayCheckResult =
   | { licensed: true; ok: true; latest: LatestOverlayInfo; updateAvailable: boolean; coreVersionSatisfied: boolean }
   | { licensed: true; ok: false; error: string };
 
-// Appliance mode never seeds a platform_admin — only ever org_admin, who
-// is the sole tenant's own admin — so org_admin manages updates there too.
-// In SaaS mode, updates affect the whole shared platform across every
-// org, so it stays platform_admin-only.
-const IS_APPLIANCE = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "appliance";
-const ADMIN_ROLES = IS_APPLIANCE ? ["platform_admin", "org_admin"] : ["platform_admin"];
+// Core has no RBAC — the sole user always has full access to updates.
 const CHANNELS = ["stable", "beta", "preview"] as const;
 // The update mechanism replaces running files and restarts a systemd
 // unit via `sudo deploy/forensicator-update.sh` — structurally impossible
@@ -72,7 +67,8 @@ function formatBytes(bytes?: number): string {
 
 export default function UpdatesPage() {
   const { data: session } = useSession();
-  const isAdmin = ADMIN_ROLES.includes(session?.user?.role ?? "");
+  // Core is single-user/single-role — the sole account always has full access.
+  const isAdmin = true;
 
   const [status, setStatus]     = useState<Status | null>(null);
   const [loading, setLoading]   = useState(true);

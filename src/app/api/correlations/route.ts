@@ -35,7 +35,7 @@ export async function GET(req: NextRequest) {
   const page    = Math.max(1, Number(searchParams.get("page") ?? 1));
   const limit   = Math.min(100, Math.max(1, Number(searchParams.get("limit") ?? 25)));
 
-  // Scope: platform_admin sees all; others restricted to their org's cases
+  // Scope: restricted to the sole org's cases
   const caseScope = orgWhere(actor);
   const caseFilter = Object.keys(caseScope).length > 0 ? { case: { ...caseScope } } : {};
 
@@ -58,8 +58,8 @@ export async function GET(req: NextRequest) {
   const countsByType = new Map<string, number>();
   for (const g of typeCountGroups.values()) countsByType.set(g.correlationType, (countsByType.get(g.correlationType) ?? 0) + 1);
 
-  // Whitelist lookup — org-scoped (platform_admin sees all orgs' entries).
-  const orgIds = actor.role !== "platform_admin" ? actor.organizationIds : undefined;
+  // Whitelist lookup — org-scoped.
+  const orgIds = actor.organizationIds;
   const whitelist = await prisma.correlationWhitelist.findMany({
     where: orgIds ? { organizationId: { in: orgIds } } : {},
     select: { correlationType: true, value: true, note: true },

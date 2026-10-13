@@ -19,12 +19,12 @@ export async function GET(req: NextRequest) {
     if (builtinOnly) where.isBuiltin = true;
     if (customOnly)  where.isBuiltin = false;
 
-    if (actor.role !== "platform_admin") {
-      where.OR = [
-        { isBuiltin: true },
-        { organizationId: { in: actor.organizationIds } },
-      ];
-    }
+    // Everyone sees their org's custom signatures + all built-ins (Core
+    // has exactly one org, so this isn't really a restriction).
+    where.OR = [
+      { isBuiltin: true },
+      { organizationId: { in: actor.organizationIds } },
+    ];
 
     const rules = await prisma.ramYaraRule.findMany({
       where,

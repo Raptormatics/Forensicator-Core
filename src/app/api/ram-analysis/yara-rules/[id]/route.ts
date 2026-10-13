@@ -8,10 +8,9 @@ import { getVolatilityPath } from "@/lib/settings/system";
 import { validateYaraSource } from "@/lib/ram-analysis/yara";
 import { z } from "zod";
 
-// Built-in signatures stay read-only for everyone, including
-// platform_admin — only `enabled` may be toggled on them. Custom
-// signatures (isBuiltin: false) can have any of these fields edited by
-// their owning org or a platform_admin.
+// Built-in signatures stay read-only even for Core's sole user — only
+// `enabled` may be toggled on them. Custom signatures (isBuiltin: false)
+// can have any of these fields edited.
 const CONTENT_FIELDS = ["name", "description", "severity", "yaraSource", "tags"] as const;
 
 const UpdateSchema = z.object({
@@ -35,7 +34,7 @@ export async function GET(req: NextRequest, props: { params: Promise<{ id: strin
     });
     if (!rule) return NextResponse.json({ error: "not_found" }, { status: 404 });
 
-    if (actor.role !== "platform_admin" && !rule.isBuiltin) {
+    if (!rule.isBuiltin) {
       if (!rule.organizationId || !actor.organizationIds.includes(rule.organizationId)) {
         return NextResponse.json({ error: "forbidden" }, { status: 403 });
       }
@@ -66,7 +65,7 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ id: str
       }, { status: 403 });
     }
 
-    if (actor.role !== "platform_admin" && !existing.isBuiltin) {
+    if (!existing.isBuiltin) {
       if (!existing.organizationId || !actor.organizationIds.includes(existing.organizationId)) {
         return NextResponse.json({ error: "forbidden" }, { status: 403 });
       }
@@ -111,13 +110,9 @@ export async function DELETE(req: NextRequest, props: { params: Promise<{ id: st
     const existing = await prisma.ramYaraRule.findUnique({ where: { id: params.id } });
     if (!existing) return NextResponse.json({ error: "not_found" }, { status: 404 });
 
-    // Built-in signatures can only be removed by a platform_admin. They
-    // will be restored the next time "Seed Built-ins" is run.
-    if (existing.isBuiltin && actor.role !== "platform_admin") {
-      return NextResponse.json({ error: "cannot_delete_builtin" }, { status: 403 });
-    }
-
-    if (actor.role !== "platform_admin" && !existing.isBuiltin) {
+    // Deleting a built-in is unrestricted — it's restored the next time
+    // "Seed Built-ins" is run.
+    if (!existing.isBuiltin) {
       if (!existing.organizationId || !actor.organizationIds.includes(existing.organizationId)) {
         return NextResponse.json({ error: "forbidden" }, { status: 403 });
       }

@@ -24,11 +24,11 @@ const LABEL: Record<string, string> = {
   malwarebazaar: "MalwareBazaar",
 };
 
-const ADMIN_ROLES = ["platform_admin", "org_admin"];
 
 function ThreatIntelSettings() {
   const { data: session } = useSession();
-  const isAdmin = ADMIN_ROLES.includes(session?.user?.role ?? "");
+  // Core is single-user/single-role — the sole account always has full access.
+  const isAdmin = true;
   const focusProvider = useSearchParams().get("provider");
 
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
