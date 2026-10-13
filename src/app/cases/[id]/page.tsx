@@ -107,12 +107,28 @@ export default function CaseDetailPage() {
   // ── Playbooks ────────────────────────────────────────────────────────────
   const [playbooks, setPlaybooks]       = useState<PlaybookOption[]>([]);
   const [applyingPlaybook, setApplyingPlaybook] = useState(false);
+  const [seedingPlaybooks, setSeedingPlaybooks] = useState(false);
 
-  useEffect(() => {
-    fetch("/api/playbooks")
-      .then(r => r.ok ? r.json() : { playbooks: [] })
-      .then(d => setPlaybooks(d.playbooks ?? []));
-  }, []);
+  async function loadPlaybooks() {
+    const res = await fetch("/api/playbooks");
+    if (res.ok) setPlaybooks((await res.json()).playbooks ?? []);
+  }
+
+  useEffect(() => { loadPlaybooks(); }, []);
+
+  // Playbooks don't come pre-seeded on a fresh install — same as every
+  // other built-in content type (log-analysis rules, decoders, RAM/PCAP
+  // rules) — so this is offered right on the selector rather than a
+  // dedicated page, since Core has no other playbook-management surface.
+  async function seedPlaybooks() {
+    setSeedingPlaybooks(true);
+    try {
+      await fetch("/api/playbooks/seed", { method: "POST" });
+      await loadPlaybooks();
+    } finally {
+      setSeedingPlaybooks(false);
+    }
+  }
 
   async function applyPlaybook() {
     if (!c?.incidentType) return;
@@ -358,6 +374,17 @@ export default function CaseDetailPage() {
             <option value="">Unset</option>
             {playbooks.map((p) => <option key={p.incidentType} value={p.incidentType}>{p.name}</option>)}
           </select>
+          {playbooks.length === 0 && (
+            <button
+              onClick={seedPlaybooks}
+              disabled={seedingPlaybooks}
+              title="Load the built-in playbooks (Ransomware, BEC, Insider Threat, Phishing)"
+              className="flex items-center gap-1.5 rounded-md border border-zinc-700 px-2 py-1.5 text-xs text-zinc-400 hover:text-zinc-200 hover:border-zinc-600 disabled:opacity-50"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${seedingPlaybooks ? "animate-spin" : ""}`} />
+              {seedingPlaybooks ? "Loading…" : "Load Playbooks"}
+            </button>
+          )}
           <button onClick={load} className="p-2 rounded-md border border-zinc-800 text-zinc-500 hover:text-zinc-300">
             <RefreshCw className="h-4 w-4" />
           </button>
