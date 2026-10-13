@@ -28,7 +28,7 @@ export async function GET(_req: NextRequest, props: Params) {
 export async function PATCH(req: NextRequest, props: Params) {
   const params = await props.params;
   const body = await req.json();
-  const { title, description, status, severity, tags, assigneeId } = body;
+  const { title, description, status, severity, tags, assigneeId, incidentType } = body;
 
   if (assigneeId !== undefined) {
     const kase = await prisma.case.findUnique({ where: { id: params.id }, select: { status: true } });
@@ -47,6 +47,7 @@ export async function PATCH(req: NextRequest, props: Params) {
       ...(severity    !== undefined ? { severity }    : {}),
       ...(tags        !== undefined ? { tags }        : {}),
       ...(assigneeId  !== undefined ? { assigneeId }  : {}),
+      ...(incidentType !== undefined ? { incidentType: incidentType || null } : {}),
     },
   });
   return NextResponse.json({ case: c });

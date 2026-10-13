@@ -1,0 +1,33 @@
+// Case playbooks — a built-in checklist template for a given incident type
+// (ransomware, BEC, etc.) that gets stamped into a case's real CaseTask rows
+// on demand. Core ships a fixed set of built-in playbooks (seeded via
+// seedBuiltinPlaybooks(), same wipe-and-recreate pattern as
+// src/lib/log-analysis/rule-engine/seed.ts) with no create/edit routes —
+// authoring custom playbooks is an Enterprise-only addition.
+
+model Playbook {
+  id           String   @id @default(uuid()) @db.Uuid
+  name         String
+  incidentType String   @unique @map("incident_type")
+  description  String?  @db.Text
+  isBuiltin    Boolean  @default(true) @map("is_builtin")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  tasks PlaybookTask[]
+
+  @@map("playbooks")
+}
+
+model PlaybookTask {
+  id         String   @id @default(uuid()) @db.Uuid
+  playbookId String   @map("playbook_id") @db.Uuid
+  playbook   Playbook @relation(fields: [playbookId], references: [id], onDelete: Cascade)
+
+  title    String
+  notes    String? @db.Text
+  priority String  @default("medium") // critical | high | medium | low
+  order    Int     @default(0)
+
+  @@index([playbookId])
+  @@map("playbook_tasks")
+}

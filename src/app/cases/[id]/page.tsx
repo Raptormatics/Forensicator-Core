@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Link2, Search, Trash2, RefreshCw, ListChecks, ChevronDown, ChevronUp, Plus, X } from "lucide-react";
+import { ArrowLeft, Link2, Search, Trash2, RefreshCw, ListChecks, ChevronDown, ChevronUp, Plus, X, ClipboardList } from "lucide-react";
 import { formatCaseNumber } from "@/lib/cases/case-number";
 import { ReportGenerator } from "@/components/reports/report-generator";
 import { AssigneePanel } from "@/components/shared/assignee-panel";
@@ -17,6 +17,7 @@ type CaseDetail = {
   description: string | null;
   status: string;
   severity: string;
+  incidentType: string | null;
   tags: string[];
   createdAt: string;
   updatedAt: string;
@@ -71,6 +72,8 @@ const SEV_OPTS = [
   { value: "informational", label: "Informational", desc: "No immediate action required" },
 ];
 
+type PlaybookOption = { id: string; name: string; incidentType: string; description: string | null; taskCount: number };
+
 export default function CaseDetailPage() {
   const { id }                = useParams<{ id: string }>();
   const [c, setC]             = useState<CaseDetail | null>(null);
@@ -100,6 +103,31 @@ export default function CaseDetailPage() {
   const [findingSearch, setFindingSearch]             = useState("");
   const [findingResults, setFindingResults]           = useState<RelatedFinding[]>([]);
   const [findingSearchLoading, setFindingSearchLoading] = useState(false);
+
+  // ── Playbooks ────────────────────────────────────────────────────────────
+  const [playbooks, setPlaybooks]       = useState<PlaybookOption[]>([]);
+  const [applyingPlaybook, setApplyingPlaybook] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/playbooks")
+      .then(r => r.ok ? r.json() : { playbooks: [] })
+      .then(d => setPlaybooks(d.playbooks ?? []));
+  }, []);
+
+  async function applyPlaybook() {
+    if (!c?.incidentType) return;
+    const playbook = playbooks.find((p) => p.incidentType === c.incidentType);
+    if (!playbook) return;
+    if (!confirm(`Apply the "${playbook.name}" playbook? This adds ${playbook.taskCount} task${playbook.taskCount !== 1 ? "s" : ""} to this case's checklist.`)) return;
+    setApplyingPlaybook(true);
+    await fetch(`/api/cases/${id}/playbooks/apply`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ incidentType: c.incidentType }),
+    });
+    setApplyingPlaybook(false);
+    loadTasks();
+  }
 
   useEffect(() => {
     if (!pickerOpen) return;
@@ -320,6 +348,16 @@ export default function CaseDetailPage() {
           >
             {SEV_OPTS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
           </select>
+          {/* Incident Type selector — drives which built-in playbook can be applied */}
+          <label className="text-xs text-zinc-500 hidden sm:block">Incident Type:</label>
+          <select
+            value={c.incidentType ?? ""}
+            onChange={(e) => patch({ incidentType: e.target.value || null })}
+            className="rounded-md border border-zinc-700 bg-zinc-800 px-2 py-1.5 text-sm text-zinc-200"
+          >
+            <option value="">Unset</option>
+            {playbooks.map((p) => <option key={p.incidentType} value={p.incidentType}>{p.name}</option>)}
+          </select>
           <button onClick={load} className="p-2 rounded-md border border-zinc-800 text-zinc-500 hover:text-zinc-300">
             <RefreshCw className="h-4 w-4" />
           </button>
@@ -455,9 +493,21 @@ export default function CaseDetailPage() {
 
           {/* Tasks */}
           <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
-            <h2 className="text-sm font-semibold text-zinc-300 mb-3 flex items-center gap-2">
-              <ListChecks className="h-4 w-4 text-zinc-500" /> Tasks ({tasks.length})
-            </h2>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-semibold text-zinc-300 flex items-center gap-2">
+                <ListChecks className="h-4 w-4 text-zinc-500" /> Tasks ({tasks.length})
+              </h2>
+              {c.incidentType && (
+                <button
+                  onClick={applyPlaybook}
+                  disabled={applyingPlaybook}
+                  title={`Add the ${playbooks.find(p => p.incidentType === c.incidentType)?.name ?? ""} playbook's tasks to this case`}
+                  className="flex items-center gap-1.5 rounded-md border border-zinc-800 px-2.5 py-1.5 text-xs font-medium text-zinc-400 hover:text-zinc-200 hover:border-zinc-600 disabled:opacity-50"
+                >
+                  <ClipboardList className="h-3.5 w-3.5" /> {applyingPlaybook ? "Applying…" : "Apply Playbook"}
+                </button>
+              )}
+            </div>
 
             {tasks.length === 0 ? (
               <p className="text-sm text-zinc-600 mb-3">No tasks yet. Add investigator actions below.</p>

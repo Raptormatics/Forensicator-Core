@@ -129,6 +129,7 @@ model Case {
   description String?  @db.Text
   status      String   @default("open")   // open | active | monitoring | resolved | closed
   severity    String   @default("medium") // critical | high | medium | low
+  incidentType String? @map("incident_type") // matches Playbook.incidentType when a playbook's been applied
   tags        String[] @default([])
 
   createdById String   @map("created_by_id") @db.Uuid
