@@ -19,7 +19,6 @@ import { getRedisConnection } from "./redis";
 const REPORT_QUEUE      = "forensicator-reports";
 const AI_QUEUE           = "forensicator-ai";
 const ENRICHMENT_QUEUE   = "forensicator-enrichment";
-const URLHAUS_SYNC_QUEUE = "forensicator-urlhaus-sync";
 const PCAP_QUEUE         = "forensicator-pcap";
 const RAM_QUEUE          = "forensicator-ram";
 const RAM_SESSION_CLEANUP_QUEUE = "forensicator-ram-session-cleanup";
@@ -45,8 +44,6 @@ export type EnrichmentJobData = {
   /** Org whose provider keys to prefer — falls back to global env keys when absent. */
   organizationId?: string;
 };
-
-export type UrlhausSyncJobData = Record<string, never>;
 
 export type PcapJobData = {
   pcapUploadId: string;
@@ -82,13 +79,6 @@ export function getEnrichmentQueue() {
   return new Queue<EnrichmentJobData>(ENRICHMENT_QUEUE, {
     connection: getRedisConnection(),
     defaultJobOptions: { attempts: 2, backoff: { type: "fixed", delay: 10000 } },
-  });
-}
-
-export function getUrlhausSyncQueue() {
-  return new Queue<UrlhausSyncJobData>(URLHAUS_SYNC_QUEUE, {
-    connection: getRedisConnection(),
-    defaultJobOptions: { attempts: 2, backoff: { type: "exponential", delay: 30000 } },
   });
 }
 

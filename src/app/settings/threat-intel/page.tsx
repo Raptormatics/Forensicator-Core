@@ -2,7 +2,7 @@
 import { useEffect, useState, useRef, Suspense } from "react";
 import { useSession } from "next-auth/react";
 import { useSearchParams } from "next/navigation";
-import { KeyRound, Radio, ShieldOff, Trash2 } from "lucide-react";
+import { KeyRound, Radio, RefreshCw, ShieldOff, Trash2 } from "lucide-react";
 
 interface ProviderStatus {
   provider: string;
@@ -40,6 +40,16 @@ function ThreatIntelSettings() {
   const cardRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const inputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
+  // URLhaus is the only free feed with a local bulk-cache to refresh — see
+  // src/lib/intelligence/urlhaus-feed.ts. Core syncs it manually only
+  // (POST /api/intelligence/urlhaus-sync, no schedule); the Enterprise
+  // overlay restores a 6-hour auto-sync on top of this same action.
+  // ThreatFox and MalwareBazaar are plain per-value live API lookups, same
+  // as VirusTotal/AbuseIPDB/OTX — no feed to sync, so no button for them.
+  const [feedStatus, setFeedStatus] = useState<{ lastSyncedAt: string | null; totalEntries: number } | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState<string | null>(null);
+
   async function load() {
     setLoading(true);
     const r = await fetch("/api/threat-intel/providers");
@@ -48,7 +58,32 @@ function ThreatIntelSettings() {
     setLoading(false);
   }
 
-  useEffect(() => { load(); }, []);
+  async function loadFeedStatus() {
+    const r = await fetch("/api/intelligence/urlhaus-sync");
+    if (r.ok) setFeedStatus(await r.json());
+  }
+
+  async function syncUrlhausFeed() {
+    setSyncing(true);
+    setSyncMsg(null);
+    try {
+      const r = await fetch("/api/intelligence/urlhaus-sync", { method: "POST" });
+      const d = await r.json().catch(() => ({}));
+      setSyncMsg(r.ok ? `Synced — ${d.added} new indicator${d.added !== 1 ? "s" : ""} of ${d.total} total in the feed.` : (d.message ?? "Sync failed."));
+      if (r.ok) loadFeedStatus();
+    } catch {
+      setSyncMsg("Sync failed — check your connection.");
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  function formatLastSynced(value: string | null): string {
+    if (!value) return "Never synced";
+    return `Last synced ${new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value))}`;
+  }
+
+  useEffect(() => { load(); loadFeedStatus(); }, []);
 
   // Deep-link support for "Configure"/"Add Key" buttons elsewhere (e.g. the
   // Threat Intelligence dashboard's provider cards) — jump straight to and
@@ -199,20 +234,44 @@ function ThreatIntelSettings() {
           <section className="space-y-4">
             <h2 className="text-sm font-semibold text-zinc-300">Free feeds (no key required)</h2>
             {keyless.map((p) => (
-              <div key={p.provider} className="flex items-center justify-between rounded-lg border border-zinc-800 bg-zinc-900 p-4">
-                <div className="flex items-center gap-2">
-                  <Radio className="h-4 w-4 text-zinc-500" />
-                  <span className="font-medium text-zinc-200">{LABEL[p.provider]}</span>
-                  <span className={`rounded-full px-2 py-0.5 text-xs ${p.enabled ? "bg-teal-900/50 text-teal-400" : "bg-zinc-800 text-zinc-500"}`}>
-                    {p.enabled ? "Active" : "Disabled"}
-                  </span>
+              <div key={p.provider} className="rounded-lg border border-zinc-800 bg-zinc-900 p-4 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Radio className="h-4 w-4 text-zinc-500" />
+                    <span className="font-medium text-zinc-200">{LABEL[p.provider]}</span>
+                    <span className={`rounded-full px-2 py-0.5 text-xs ${p.enabled ? "bg-teal-900/50 text-teal-400" : "bg-zinc-800 text-zinc-500"}`}>
+                      {p.enabled ? "Active" : "Disabled"}
+                    </span>
+                  </div>
+                  {isAdmin && (
+                    <label className="flex items-center gap-1.5 text-xs text-zinc-500">
+                      <input type="checkbox" checked={p.enabled} disabled={saving === p.provider}
+                        onChange={(e) => toggle(p.provider, e.target.checked)} />
+                      Enabled
+                    </label>
+                  )}
                 </div>
-                {isAdmin && (
-                  <label className="flex items-center gap-1.5 text-xs text-zinc-500">
-                    <input type="checkbox" checked={p.enabled} disabled={saving === p.provider}
-                      onChange={(e) => toggle(p.provider, e.target.checked)} />
-                    Enabled
-                  </label>
+
+                {p.provider === "urlhaus" && (
+                  <div className="flex items-center justify-between border-t border-zinc-800 pt-2">
+                    <span className="text-xs text-zinc-500">
+                      {formatLastSynced(feedStatus?.lastSyncedAt ?? null)}
+                      {feedStatus && feedStatus.totalEntries > 0 && ` · ${feedStatus.totalEntries.toLocaleString()} cached indicators`}
+                    </span>
+                    {isAdmin && (
+                      <button
+                        onClick={syncUrlhausFeed}
+                        disabled={syncing}
+                        title="Refresh the local URLhaus feed cache used for free, automatic URL matching"
+                        className="flex items-center gap-1.5 rounded-md border border-zinc-800 px-2.5 py-1 text-xs text-zinc-400 hover:text-zinc-200 hover:border-zinc-600 disabled:opacity-50"
+                      >
+                        <RefreshCw className={`h-3 w-3 ${syncing ? "animate-spin" : ""}`} /> {syncing ? "Syncing…" : "Sync Now"}
+                      </button>
+                    )}
+                  </div>
+                )}
+                {p.provider === "urlhaus" && syncMsg && (
+                  <p className="text-xs text-zinc-500">{syncMsg}</p>
                 )}
               </div>
             ))}
