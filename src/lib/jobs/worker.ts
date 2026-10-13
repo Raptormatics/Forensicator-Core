@@ -23,14 +23,16 @@ import { startEnrichmentWorker } from "./enrichment-worker";
 import { startPcapWorker } from "./pcap-worker";
 import { startRamWorker } from "./ram-worker";
 import { startRamSessionCleanupWorker, scheduleRamSessionCleanup } from "./ram-session-cleanup-worker";
+import { startWinArtifactsWorker } from "./winartifacts-worker";
 
 const reportWorker = startReportWorker();
 const enrichmentWorker = startEnrichmentWorker();
 const pcapWorker = startPcapWorker();
 const ramWorker = startRamWorker();
 const ramSessionCleanupWorker = startRamSessionCleanupWorker();
+const winArtifactsWorker = startWinArtifactsWorker();
 
-console.log("[workers] Report, enrichment, PCAP analysis, and RAM analysis workers started.");
+console.log("[workers] Report, enrichment, PCAP analysis, RAM analysis, and Windows Artifact Analysis workers started.");
 
 scheduleRamSessionCleanup().catch((err) => console.error("[workers] Failed to schedule RAM session cleanup:", err));
 
@@ -39,6 +41,7 @@ async function gracefulShutdown() {
   await Promise.all([
     reportWorker.close(), enrichmentWorker.close(),
     pcapWorker.close(), ramWorker.close(), ramSessionCleanupWorker.close(),
+    winArtifactsWorker.close(),
   ]);
   process.exit(0);
 }

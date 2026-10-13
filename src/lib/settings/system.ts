@@ -118,6 +118,31 @@ export async function getRamChunkSize(): Promise<number> {
   return envVal > 0 ? envVal : 40 * 1024 * 1024;
 }
 
+/** DB override > WIN_ARTIFACTS_DIR env var > default ./winartifacts-storage under the project root. */
+export async function getWinArtifactsDir(): Promise<string> {
+  const settings = await getSystemSettings();
+  return (
+    settings?.winArtifactsDir ??
+    process.env.WIN_ARTIFACTS_DIR ??
+    path.join(process.cwd(), "winartifacts-storage")
+  );
+}
+
+/**
+ * DB override > WIN_ARTIFACTS_PYTHON_PATH env var > <APP_DIR>/.venvs/winartifacts/bin/python3.
+ * Windows Artifact Analysis's registry/Prefetch/shell-item parsers (regipy
+ * etc.) live in their own venv, separate from Volatility3's — no runtime
+ * relationship between the two toolsets, see deploy/provision.sh.
+ */
+export async function getWinArtifactsPythonPath(): Promise<string> {
+  const settings = await getSystemSettings();
+  return (
+    settings?.winArtifactsPythonPath ??
+    process.env.WIN_ARTIFACTS_PYTHON_PATH ??
+    path.join(process.cwd(), ".venvs", "winartifacts", "bin", "python3")
+  );
+}
+
 /**
  * Forensicator AI provider config — DB-backed, schema defaults cover an
  * unconfigured instance. Decrypts the stored API key (if any) so callers

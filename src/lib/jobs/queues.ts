@@ -22,6 +22,7 @@ const ENRICHMENT_QUEUE   = "forensicator-enrichment";
 const PCAP_QUEUE         = "forensicator-pcap";
 const RAM_QUEUE          = "forensicator-ram";
 const RAM_SESSION_CLEANUP_QUEUE = "forensicator-ram-session-cleanup";
+const WIN_ARTIFACTS_QUEUE = "forensicator-winartifacts";
 
 // ── Job data shapes ──────────────────────────────────────────────────────────
 
@@ -54,6 +55,10 @@ export type RamJobData = {
 };
 
 export type RamSessionCleanupJobData = Record<string, never>;
+
+export type WinArtifactJobData = {
+  winArtifactFileId: string;
+};
 
 // ── Queue factories ───────────────────────────────────────────────────────────
 
@@ -109,5 +114,15 @@ export function getRamSessionCleanupQueue() {
   return new Queue<RamSessionCleanupJobData>(RAM_SESSION_CLEANUP_QUEUE, {
     connection: getRedisConnection(),
     defaultJobOptions: { attempts: 2, backoff: { type: "exponential", delay: 30000 } },
+  });
+}
+
+export function getWinArtifactsQueue() {
+  return new Queue<WinArtifactJobData>(WIN_ARTIFACTS_QUEUE, {
+    connection: getRedisConnection(),
+    // One job per file (not per collection) — a registry hive is small and
+    // fast to parse, so a transient failure is worth one retry, unlike
+    // RAM's long-running per-plugin runs.
+    defaultJobOptions: { attempts: 2, backoff: { type: "exponential", delay: 10000 } },
   });
 }

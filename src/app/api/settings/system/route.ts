@@ -26,6 +26,8 @@ export async function GET(req: NextRequest) {
     volatilityPath: settings?.volatilityPath ?? null,
     volatilitySymbolsDir: settings?.volatilitySymbolsDir ?? null,
     ramChunkSizeBytes: settings?.ramChunkSizeBytes ?? null,
+    winArtifactsDir: settings?.winArtifactsDir ?? null,
+    winArtifactsPythonPath: settings?.winArtifactsPythonPath ?? null,
   });
 }
 
@@ -42,6 +44,8 @@ const putSchema = z.object({
   // 0 clears the override (falls back to env var / 40MB default) — distinct
   // from omitting the field, which leaves it unchanged.
   ramChunkSizeBytes: z.number().int().min(0).optional(),
+  winArtifactsDir: z.union([z.string().min(1).max(500), z.literal("")]).optional(),
+  winArtifactsPythonPath: z.union([z.string().min(1).max(500), z.literal("")]).optional(),
 });
 
 // PUT — unrestricted (Core's sole user).
@@ -62,6 +66,7 @@ export async function PUT(req: NextRequest) {
   const data: {
     appDomain?: string | null; reportsDir?: string | null; pcapDir?: string | null; tsharkPath?: string | null;
     ramDir?: string | null; volatilityPath?: string | null; volatilitySymbolsDir?: string | null; ramChunkSizeBytes?: number | null;
+    winArtifactsDir?: string | null; winArtifactsPythonPath?: string | null;
   } = {};
   if (body.appDomain !== undefined) {
     // Strip a trailing slash so callers can safely do `${appDomain}/api` etc.
@@ -87,6 +92,12 @@ export async function PUT(req: NextRequest) {
   }
   if (body.ramChunkSizeBytes !== undefined) {
     data.ramChunkSizeBytes = body.ramChunkSizeBytes === 0 ? null : body.ramChunkSizeBytes;
+  }
+  if (body.winArtifactsDir !== undefined) {
+    data.winArtifactsDir = body.winArtifactsDir === "" ? null : body.winArtifactsDir.trim();
+  }
+  if (body.winArtifactsPythonPath !== undefined) {
+    data.winArtifactsPythonPath = body.winArtifactsPythonPath === "" ? null : body.winArtifactsPythonPath.trim();
   }
 
   const settings = await prisma.systemSettings.upsert({
@@ -114,5 +125,7 @@ export async function PUT(req: NextRequest) {
     volatilityPath: settings.volatilityPath,
     volatilitySymbolsDir: settings.volatilitySymbolsDir,
     ramChunkSizeBytes: settings.ramChunkSizeBytes,
+    winArtifactsDir: settings.winArtifactsDir,
+    winArtifactsPythonPath: settings.winArtifactsPythonPath,
   });
 }

@@ -6,6 +6,7 @@ import {
   ChevronDown,
   ChevronRight,
   Crosshair,
+  FileSearch,
   FileText,
   Folder,
   Globe,
@@ -105,6 +106,15 @@ const NAV: NavItem[] = [
       { label: "Uploads",       href: "/ram-analysis" },
       { label: "Symbol Tables", href: "/ram-analysis/symbols" },
       { label: "Rules",         href: "/ram-analysis/rules" },
+    ],
+  },
+  {
+    kind: "group",
+    label: "Windows Artifacts",
+    icon: FileSearch,
+    children: [
+      { label: "Uploads", href: "/windows-artifacts" },
+      { label: "Rules",   href: "/windows-artifacts/rules" },
     ],
   },
   { kind: "link",  label: "Reports",         href: "/reports",         icon: FileText },

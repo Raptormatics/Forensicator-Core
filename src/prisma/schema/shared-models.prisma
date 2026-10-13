@@ -62,6 +62,8 @@ model User {
   ramAnalysisRules       RamAnalysisRule[]      @relation("ramRuleAuthor")
   ramYaraRules           RamYaraRule[]          @relation("ramYaraRuleAuthor")
   ramSymbolTables        RamSymbolTable[]
+  windowsArtifactUploads WindowsArtifactUpload[]
+  windowsArtifactRules   WindowsArtifactRule[]  @relation("winArtifactRuleAuthor")
   importedIocs           ImportedIoc[]
   caseKnownHashes        CaseKnownHash[]
 
@@ -147,6 +149,7 @@ model Case {
   pcapUploads        PcapUpload[]
   ramUploads         RamUpload[]
   ramUploadSessions  RamUploadSession[]
+  windowsArtifactUploads WindowsArtifactUpload[]
   importedIocs       ImportedIoc[]
   caseKnownHashes    CaseKnownHash[]
 
@@ -198,6 +201,8 @@ model Organization {
   ramAnalysisRules RamAnalysisRule[]
   ramYaraRules   RamYaraRule[]
   ramSymbolTables RamSymbolTable[]
+  windowsArtifactUploads WindowsArtifactUpload[]
+  windowsArtifactRules   WindowsArtifactRule[]
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -274,6 +279,16 @@ model SystemSettings {
   // resolves to the env var, then a 40MB default — safely under even
   // Cloudflare's most restrictive (Free/Pro, 100MB) tier.
   ramChunkSizeBytes Int? @map("ram_chunk_size_bytes")
+
+  // Overrides WIN_ARTIFACTS_DIR when set — same read-fresh-per-job,
+  // no-restart-needed pattern as pcapDir/ramDir. Raw uploaded registry
+  // hives/Prefetch/LNK files are kept on disk here.
+  winArtifactsDir String? @map("win_artifacts_dir")
+  // Absolute path to the Windows Artifact Analysis venv's python3. Null
+  // resolves to WIN_ARTIFACTS_PYTHON_PATH env var, then
+  // <APP_DIR>/.venvs/winartifacts/bin/python3 — its own venv, not shared
+  // with Volatility3's (see deploy/provision.sh).
+  winArtifactsPythonPath String? @map("win_artifacts_python_path")
 
   // Critical-finding email alerts — one channel, one recipient address.
   // Off by default (no SMTP server is assumed to exist). Read fresh per

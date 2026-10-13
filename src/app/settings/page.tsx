@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
 import Link from "next/link";
-import { Settings2, Globe, FolderOutput, Database, CheckCircle2, AlertCircle, Loader2, BrainCircuit, ArrowRight, Network, MemoryStick, Bell } from "lucide-react";
+import { Settings2, Globe, FolderOutput, Database, CheckCircle2, AlertCircle, Loader2, BrainCircuit, ArrowRight, Network, MemoryStick, Bell, FileSearch } from "lucide-react";
 
 // Core has no RBAC — the sole user always has full access.
 
@@ -21,6 +21,9 @@ export default function SettingsPage() {
   const [volatilityPath, setVolatilityPath]             = useState("");
   const [volatilitySymbolsDir, setVolatilitySymbolsDir] = useState("");
   const [volatilityStatus, setVolatilityStatus] = useState<{ available: boolean; path: string; version: string | null } | null>(null);
+  const [winArtifactsDir, setWinArtifactsDir]             = useState("");
+  const [winArtifactsPythonPath, setWinArtifactsPythonPath] = useState("");
+  const [winArtifactsStatus, setWinArtifactsStatus] = useState<{ available: boolean; path: string; version: string | null } | null>(null);
   const [loading, setLoading]       = useState(true);
   const [saving, setSaving]         = useState(false);
   const [error, setError]           = useState("");
@@ -37,6 +40,8 @@ export default function SettingsPage() {
         setRamDir(d.ramDir ?? "");
         setVolatilityPath(d.volatilityPath ?? "");
         setVolatilitySymbolsDir(d.volatilitySymbolsDir ?? "");
+        setWinArtifactsDir(d.winArtifactsDir ?? "");
+        setWinArtifactsPythonPath(d.winArtifactsPythonPath ?? "");
       })
       .finally(() => setLoading(false));
 
@@ -49,6 +54,11 @@ export default function SettingsPage() {
       .then(r => r.json())
       .then(setVolatilityStatus)
       .catch(() => setVolatilityStatus(null));
+
+    fetch("/api/settings/winartifacts/python-status")
+      .then(r => r.json())
+      .then(setWinArtifactsStatus)
+      .catch(() => setWinArtifactsStatus(null));
   }, []);
 
   async function handleSave(e: React.FormEvent) {
@@ -68,6 +78,8 @@ export default function SettingsPage() {
           ramDir: ramDir.trim(),
           volatilityPath: volatilityPath.trim(),
           volatilitySymbolsDir: volatilitySymbolsDir.trim(),
+          winArtifactsDir: winArtifactsDir.trim(),
+          winArtifactsPythonPath: winArtifactsPythonPath.trim(),
         }),
       });
       const data = await res.json();
@@ -82,6 +94,8 @@ export default function SettingsPage() {
       setRamDir(data.ramDir ?? "");
       setVolatilityPath(data.volatilityPath ?? "");
       setVolatilitySymbolsDir(data.volatilitySymbolsDir ?? "");
+      setWinArtifactsDir(data.winArtifactsDir ?? "");
+      setWinArtifactsPythonPath(data.winArtifactsPythonPath ?? "");
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
     } catch {
@@ -254,6 +268,52 @@ export default function SettingsPage() {
             Optional local symbol-table cache directory. Leave blank to let Volatility3 use its own bundled cache and,
             for unseen Windows builds, fetch from the public symbol server over the network. Pre-staging this speeds up
             repeat analysis and helps air-gapped deployments.
+          </p>
+        </div>
+
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-4 space-y-2">
+          <div className="flex items-center gap-2">
+            <FileSearch className="h-4 w-4 text-teal-400" />
+            <h2 className="text-sm font-semibold text-zinc-200">Windows Artifact Storage Directory</h2>
+          </div>
+          <p className="text-xs text-zinc-500">
+            Where uploaded registry hives, Prefetch, and LNK/Jump List files are stored on disk for analysis. Leave
+            blank to use the <code className="text-zinc-400">WIN_ARTIFACTS_DIR</code> environment variable, or{" "}
+            <code className="text-zinc-400">./winartifacts-storage</code> if that&apos;s not set either.
+          </p>
+          <input
+            type="text"
+            disabled={!isAdmin}
+            value={winArtifactsDir}
+            onChange={e => setWinArtifactsDir(e.target.value)}
+            placeholder="/var/lib/forensicator/winartifacts"
+            className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500/30 disabled:opacity-60"
+          />
+          <div className="flex items-center gap-2 pt-1 text-xs">
+            {winArtifactsStatus === null ? (
+              <span className="flex items-center gap-1.5 text-zinc-500"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Checking regipy…</span>
+            ) : winArtifactsStatus.available ? (
+              <span className="flex items-center gap-1.5 text-teal-400">
+                <CheckCircle2 className="h-3.5 w-3.5" /> regipy available{winArtifactsStatus.version ? ` (v${winArtifactsStatus.version})` : ""}
+              </span>
+            ) : (
+              <span className="flex items-center gap-1.5 text-red-400">
+                <AlertCircle className="h-3.5 w-3.5" /> regipy not found at &quot;{winArtifactsStatus.path}&quot; — install it (see deploy/provision.sh) or set the path below.
+              </span>
+            )}
+          </div>
+          <input
+            type="text"
+            disabled={!isAdmin}
+            value={winArtifactsPythonPath}
+            onChange={e => setWinArtifactsPythonPath(e.target.value)}
+            placeholder="/opt/forensicator/.venvs/winartifacts/bin/python3"
+            className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500/30 disabled:opacity-60"
+          />
+          <p className="text-xs text-zinc-600">
+            Path to the Windows Artifact Analysis venv&apos;s <code className="text-zinc-500">python3</code>. Leave blank to use the{" "}
+            <code className="text-zinc-500">WIN_ARTIFACTS_PYTHON_PATH</code> environment variable, or the bundled venv at{" "}
+            <code className="text-zinc-500">.venvs/winartifacts/bin/python3</code> if that&apos;s not set either.
           </p>
         </div>
 
