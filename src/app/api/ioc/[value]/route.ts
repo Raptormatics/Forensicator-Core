@@ -5,13 +5,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db/prisma";
 import { getActorOrThrow, AuthError } from "@/lib/auth/api-guard";
+import { deriveScopedIocSources, sourcesForValues, labelSources } from "@/lib/ioc/scope";
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   props: { params: Promise<{ value: string }> }
 ) {
   const params = await props.params;
+  let actor;
+  try { actor = await getActorOrThrow(req); }
+  catch (e) { if (e instanceof AuthError) return e.toResponse(); throw e; }
+
   const value = decodeURIComponent(params.value);
+  const caseId = req.nextUrl.searchParams.get("caseId") ?? undefined;
 
   const record = await prisma.iocRecord.findUnique({
     where: { value },
@@ -45,8 +51,19 @@ export async function GET(
     }),
   ]);
 
+  // "Seen via" sources — case-scoped when caseId is given (consistent with
+  // the list/export routes), otherwise the full unscoped breakdown. The
+  // enrichment data above (record.reputation/threatType/etc.) stays
+  // unscoped either way — that's third-party threat intel about the
+  // indicator itself, not case-crossing observational data.
+  const sourcesMap = caseId
+    ? (await deriveScopedIocSources(actor, caseId)).sources
+    : await sourcesForValues([value]);
+  const sources = labelSources(sourcesMap.get(value), record.enrichments.length);
+
   return NextResponse.json({
     record,
+    sources,
     stats: {
       evidenceHits,
       investigationCount: investigations.length,

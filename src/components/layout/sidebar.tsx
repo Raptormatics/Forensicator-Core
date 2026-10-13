@@ -34,7 +34,10 @@ import { useRef, useState } from "react";
 // The Enterprise overlay replaces this file with an extended version that
 // adds its own remaining Pro-only nav group (Developers) and Pro-only
 // items nested inside Platform/Settings (Organizations, Users, Webhooks,
-// Retention, SIEM Integrations, Single Sign-On, License) — Intelligence,
+// Retention, SIEM Integrations, Single Sign-On, License), plus IOCs/
+// Threat Intel back under Intelligence here (the cross-case view — Core's
+// IOC Management is case-scoped, reached from a case's own page instead,
+// see src/components/cases/case-threat-intel-section.tsx) — Intelligence,
 // Log Analysis, PCAP Analysis, and RAM Analysis used to be overlay-only
 // too, now native to Core (custom decoder/rule/signature authoring stays
 // Enterprise-only within those pages). Core is permanently single-user/
@@ -71,10 +74,8 @@ const NAV: NavItem[] = [
     label: "Intelligence",
     icon: Crosshair,
     children: [
-      { label: "IOCs",             href: "/intelligence/iocs" },
       { label: "Sigma Detections", href: "/intelligence/sigma" },
       { label: "Correlations",     href: "/intelligence/correlations" },
-      { label: "Threat Intel",     href: "/intelligence/threat-intel" },
     ],
   },
   {

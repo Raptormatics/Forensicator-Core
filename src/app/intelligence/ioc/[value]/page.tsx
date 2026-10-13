@@ -14,7 +14,7 @@ export const dynamic = "force-dynamic";
 
 type Props = {
   params: Promise<{ value: string }>;
-  searchParams: Promise<{ page?: string }>;
+  searchParams: Promise<{ page?: string; caseId?: string }>;
 };
 
 const LIMIT = 50;
@@ -24,6 +24,12 @@ export default async function IocPage(props: Props) {
   const searchParams = await props.searchParams;
   const ioc = decodeURIComponent(params.value).trim();
   const page = Math.max(1, Number(searchParams.page ?? 1));
+  // Reached from a case's own Threat Intel section — scope the evidence
+  // shown here to that case, so clicking into an indicator from one
+  // investigation doesn't surface hostnames/command lines/usernames from a
+  // completely unrelated case. Reached without caseId (Enterprise's
+  // cross-case view), every case this indicator touches is shown, as today.
+  const caseId = searchParams.caseId;
 
   // Determine best-match IOC fields.
   const isIp = /^\d{1,3}(\.\d{1,3}){3}$/.test(ioc);
@@ -48,10 +54,12 @@ export default async function IocPage(props: Props) {
         { searchableText: { contains: ioc, mode: "insensitive" as const } },
       ];
 
+  const evidenceWhere = { OR: iocWhere, ...(caseId ? { investigation: { caseId } } : {}) };
+
   const [total, rows, stats] = await Promise.all([
-    prisma.evidence.count({ where: { OR: iocWhere } }),
+    prisma.evidence.count({ where: evidenceWhere }),
     prisma.evidence.findMany({
-      where: { OR: iocWhere },
+      where: evidenceWhere,
       select: {
         id: true,
         type: true,
@@ -74,7 +82,7 @@ export default async function IocPage(props: Props) {
       take: LIMIT,
     }),
     prisma.evidence.aggregate({
-      where: { OR: iocWhere },
+      where: evidenceWhere,
       _min: { timestamp: true },
       _max: { timestamp: true },
     }),
@@ -284,7 +292,7 @@ export default async function IocPage(props: Props) {
               <div className="mt-4 flex items-center justify-between">
                 {page > 1 ? (
                   <Link
-                    href={`/intelligence/ioc/${encodeURIComponent(ioc)}?page=${page - 1}`}
+                    href={`/intelligence/ioc/${encodeURIComponent(ioc)}?page=${page - 1}${caseId ? `&caseId=${caseId}` : ""}`}
                     className="inline-flex items-center gap-1 rounded border border-zinc-800 px-3 py-1.5 text-xs text-zinc-400 hover:text-teal-200"
                   >
                     ← Prev
@@ -293,7 +301,7 @@ export default async function IocPage(props: Props) {
                 <span className="text-xs text-zinc-600">{page} / {pages}</span>
                 {page < pages ? (
                   <Link
-                    href={`/intelligence/ioc/${encodeURIComponent(ioc)}?page=${page + 1}`}
+                    href={`/intelligence/ioc/${encodeURIComponent(ioc)}?page=${page + 1}${caseId ? `&caseId=${caseId}` : ""}`}
                     className="inline-flex items-center gap-1 rounded border border-zinc-800 px-3 py-1.5 text-xs text-zinc-400 hover:text-teal-200"
                   >
                     Next →

@@ -6,8 +6,8 @@ import { prisma } from "@/lib/db/prisma";
 import { getActorOrThrow, AuthError } from "@/lib/auth/api-guard";
 import { deriveScopedIocSources, sourcesForValues, labelSources } from "@/lib/ioc/scope";
 
-// GET /api/ioc/list — paginated list of IocRecords scoped to the user's org
-// (and optionally a case), annotated with which module(s) surfaced each one.
+// GET /api/ioc/list — paginated list of IocRecords scoped to a case,
+// annotated with which module(s) surfaced each one.
 export async function GET(req: NextRequest) {
   let actor;
   try { actor = await getActorOrThrow(req); }
@@ -19,6 +19,9 @@ export async function GET(req: NextRequest) {
   const offset = Number(searchParams.get("offset") ?? 0);
   const type   = searchParams.get("type") ?? undefined;
   const caseId = searchParams.get("caseId") ?? undefined;
+  if (!caseId) {
+    return NextResponse.json({ error: "missing_case", message: "caseId is required." }, { status: 400 });
+  }
   const minReputationParam = searchParams.get("minReputation");
   const minReputation = minReputationParam !== null ? Number(minReputationParam) : undefined;
   const maxReputationParam = searchParams.get("maxReputation");

@@ -61,6 +61,7 @@ model User {
   ramAnalysisRules       RamAnalysisRule[]      @relation("ramRuleAuthor")
   ramYaraRules           RamYaraRule[]          @relation("ramYaraRuleAuthor")
   ramSymbolTables        RamSymbolTable[]
+  importedIocs           ImportedIoc[]
 
   @@map("users")
 }
@@ -143,6 +144,7 @@ model Case {
   pcapUploads        PcapUpload[]
   ramUploads         RamUpload[]
   ramUploadSessions  RamUploadSession[]
+  importedIocs       ImportedIoc[]
 
   organizationId String?  @map("organization_id") @db.Uuid
   organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)

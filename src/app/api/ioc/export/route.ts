@@ -10,7 +10,7 @@ import { buildXlsxBuffer } from "@/lib/reports/xlsx-export";
 const EXPORT_CAP = 20000;
 
 // GET /api/ioc/export — every IocRecord matching the current filters
-// (q/type/caseId, same as /api/ioc/list) as a single-sheet Excel workbook.
+// (q/type, scoped to caseId) as a single-sheet Excel workbook.
 export async function GET(req: NextRequest) {
   let actor;
   try { actor = await getActorOrThrow(req); }
@@ -20,6 +20,9 @@ export async function GET(req: NextRequest) {
   const q      = searchParams.get("q") ?? undefined;
   const type   = searchParams.get("type") ?? undefined;
   const caseId = searchParams.get("caseId") ?? undefined;
+  if (!caseId) {
+    return NextResponse.json({ error: "missing_case", message: "caseId is required." }, { status: 400 });
+  }
   const minReputationParam = searchParams.get("minReputation");
   const minReputation = minReputationParam !== null ? Number(minReputationParam) : undefined;
   const maxReputationParam = searchParams.get("maxReputation");

@@ -18,7 +18,7 @@ const MAX_LIVE_ENRICH_PER_CLICK = 500;
  * the single-IOC "Enrich IOC" button) still gets checked against the free
  * local URLhaus feed, which is a different thing from "never enriched at
  * all" (the only case that queues costed/rate-limited live providers).
- * Body: { caseId?: string }.
+ * Body: { caseId: string }.
  */
 export async function POST(req: NextRequest) {
   let actor;
@@ -27,6 +27,9 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json().catch(() => ({}));
   const caseId = typeof body.caseId === "string" ? body.caseId : undefined;
+  if (!caseId) {
+    return NextResponse.json({ error: "missing_case", message: "caseId is required." }, { status: 400 });
+  }
 
   const { valueFilter } = await deriveScopedIocSources(actor, caseId);
   if (valueFilter && valueFilter.in.length === 0) {

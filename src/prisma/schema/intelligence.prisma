@@ -135,3 +135,25 @@ model UrlhausFeedEntry {
   @@index([url], type: Hash)
   @@map("urlhaus_feed_entries")
 }
+
+// The fifth IOC source pipeline (see src/lib/ioc/scope.ts's own header
+// comment) — links a manually-imported value (POST /api/ioc/import) to the
+// case it was imported into. IocRecord itself stays global/deduplicated
+// (so enrichment is never wasted re-querying a value already known from
+// another case); this table only scopes *visibility* of a manual import,
+// the same role Evidence/LogIoc/PcapIoc/RamIoc already play for their own
+// pipelines.
+model ImportedIoc {
+  id          String   @id @default(uuid()) @db.Uuid
+  caseId      String   @map("case_id") @db.Uuid
+  case        Case     @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  value       String
+  type        String   // ip | hash | url | domain
+  createdById String   @map("created_by_id") @db.Uuid
+  createdBy   User     @relation(fields: [createdById], references: [id])
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@unique([caseId, value])
+  @@index([caseId])
+  @@map("imported_iocs")
+}

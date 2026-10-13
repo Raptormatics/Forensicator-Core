@@ -32,9 +32,10 @@ function classify(line: string): { type: "ip" | "hash" | "url" | "domain"; value
 
 /**
  * POST /api/ioc/import — bulk-add IOCs (hash/URL/IPv4/domain, one per line)
- * from an uploaded plaintext file. Lines starting with # and blank lines are
- * ignored; anything that doesn't parse as one of those four types is
- * reported back as skipped rather than silently dropped.
+ * from an uploaded plaintext file, into a specific case. Lines starting
+ * with # and blank lines are ignored; anything that doesn't parse as one
+ * of those four types is reported back as skipped rather than silently
+ * dropped.
  */
 export async function POST(req: NextRequest) {
   let actor;
@@ -48,6 +49,10 @@ export async function POST(req: NextRequest) {
   }
   if (file.size > MAX_FILE_BYTES) {
     return NextResponse.json({ error: "file_too_large", message: "File is limited to 5MB." }, { status: 413 });
+  }
+  const caseId = formData.get("caseId");
+  if (typeof caseId !== "string" || !caseId) {
+    return NextResponse.json({ error: "missing_case", message: "caseId is required." }, { status: 400 });
   }
   const queueEnrichment = formData.get("queueEnrichment") === "true";
 
@@ -90,6 +95,16 @@ export async function POST(req: NextRequest) {
     });
   }
 
+  // Link every hit (not just newly-seen values) to this case — a value
+  // already known globally from a different case still needs its own
+  // ImportedIoc row here to become visible in *this* case's IOC list.
+  if (hits.length > 0) {
+    await prisma.importedIoc.createMany({
+      data: hits.map((h) => ({ caseId, value: h.value, type: h.type, createdById: actor.id })),
+      skipDuplicates: true,
+    });
+  }
+
   let queuedCount = 0;
   if (queueEnrichment && newHits.length > 0) {
     const toQueue = newHits.slice(0, MAX_ENRICH_QUEUE);
@@ -118,7 +133,7 @@ export async function POST(req: NextRequest) {
       entityType: "ioc",
       entityId: "bulk",
       metadata: {
-        filename: file.name, added: newHits.length, existing: hits.length - newHits.length,
+        filename: file.name, caseId, added: newHits.length, existing: hits.length - newHits.length,
         skipped, queuedEnrichment: queuedCount,
       } as never,
     },

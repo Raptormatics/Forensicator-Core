@@ -3,12 +3,13 @@
  * IOC list (paginated) and the Excel export (unpaginated) routes.
  *
  * IocRecord is a global, org-agnostic dedup table (unique by value) fed by
- * four independent pipelines: Investigation uploads (via Evidence), Log
- * Analysis (LogIoc), PCAP Analysis (PcapIoc), and RAM Analysis (RamIoc) —
- * the latter three all the same shape. None of those carry an orgId/caseId
- * of their own, so scoping and "which module(s) surfaced this value" are
- * both derived by joining through Investigation/LogUpload/PcapUpload/
- * RamUpload, which do.
+ * five independent pipelines: Investigation uploads (via Evidence), Log
+ * Analysis (LogIoc), PCAP Analysis (PcapIoc), RAM Analysis (RamIoc), and
+ * manual imports (ImportedIoc, POST /api/ioc/import) — the middle three all
+ * the same shape. Evidence/LogIoc/PcapIoc/RamIoc carry no orgId/caseId of
+ * their own, so their scoping is derived by joining through
+ * Investigation/LogUpload/PcapUpload/RamUpload, which do; ImportedIoc
+ * carries caseId directly (it has no parent upload row to join through).
  */
 import { prisma } from "@/lib/db/prisma";
 import type { AuthActor } from "@/lib/auth/api-guard";
@@ -23,6 +24,7 @@ function mergeSources(
   logRows: ValueRow[],
   pcapRows: ValueRow[],
   ramRows: ValueRow[],
+  importedRows: ValueRow[],
 ) {
   const add = (value: string | null | undefined, label: string) => {
     if (!value) return;
@@ -38,6 +40,7 @@ function mergeSources(
   for (const r of logRows) add(r.value, "Log Analysis");
   for (const r of pcapRows) add(r.value, "PCAP Analysis");
   for (const r of ramRows) add(r.value, "RAM Analysis");
+  for (const r of importedRows) add(r.value, "Manual Import");
 }
 
 /**
@@ -67,7 +70,14 @@ export async function deriveScopedIocSources(actor: AuthActor, caseId?: string) 
   const pcapUploadIds    = pcapUploads.map((u) => u.id);
   const ramUploadIds     = ramUploads.map((u) => u.id);
 
-  const [evidenceRows, logIocRows, pcapIocRows, ramIocRows] = await Promise.all([
+  // ImportedIoc carries caseId directly (no parent upload to join through),
+  // so it needs its own where clause rather than the upload-table commonWhere.
+  const importedWhere = {
+    ...(caseId ? { caseId } : {}),
+    ...(Object.keys(scope).length > 0 ? { case: scope } : {}),
+  };
+
+  const [evidenceRows, logIocRows, pcapIocRows, ramIocRows, importedRows] = await Promise.all([
     investigationIds.length
       ? prisma.evidence.findMany({
           where: {
@@ -86,10 +96,11 @@ export async function deriveScopedIocSources(actor: AuthActor, caseId?: string) 
     ramUploadIds.length
       ? prisma.ramIoc.findMany({ where: { uploadId: { in: ramUploadIds } }, select: { value: true } })
       : [],
+    prisma.importedIoc.findMany({ where: importedWhere, select: { value: true } }),
   ]);
 
   const sources = new Map<string, Set<string>>();
-  mergeSources(sources, evidenceRows, logIocRows, pcapIocRows, ramIocRows);
+  mergeSources(sources, evidenceRows, logIocRows, pcapIocRows, ramIocRows, importedRows);
 
   const valueFilter = sources.size > 0 ? { in: Array.from(sources.keys()) } : { in: [] };
   return { valueFilter, sources, needsScoping };
@@ -99,7 +110,7 @@ export async function deriveScopedIocSources(actor: AuthActor, caseId?: string) 
 export async function sourcesForValues(values: string[]): Promise<Map<string, Set<string>>> {
   const sources = new Map<string, Set<string>>();
   if (values.length === 0) return sources;
-  const [evidenceRows, logIocRows, pcapIocRows, ramIocRows] = await Promise.all([
+  const [evidenceRows, logIocRows, pcapIocRows, ramIocRows, importedRows] = await Promise.all([
     prisma.evidence.findMany({
       where: { OR: [{ ip: { in: values } }, { url: { in: values } }, { hash: { in: values } }, { domain: { in: values } }] },
       select: { ip: true, url: true, hash: true, domain: true },
@@ -107,8 +118,9 @@ export async function sourcesForValues(values: string[]): Promise<Map<string, Se
     prisma.logIoc.findMany({ where: { value: { in: values } }, select: { value: true } }),
     prisma.pcapIoc.findMany({ where: { value: { in: values } }, select: { value: true } }),
     prisma.ramIoc.findMany({ where: { value: { in: values } }, select: { value: true } }),
+    prisma.importedIoc.findMany({ where: { value: { in: values } }, select: { value: true } }),
   ]);
-  mergeSources(sources, evidenceRows, logIocRows, pcapIocRows, ramIocRows);
+  mergeSources(sources, evidenceRows, logIocRows, pcapIocRows, ramIocRows, importedRows);
   return sources;
 }
 

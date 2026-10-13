@@ -7,6 +7,7 @@ import { ArrowLeft, Link2, Search, Trash2, RefreshCw, ListChecks, ChevronDown, C
 import { formatCaseNumber } from "@/lib/cases/case-number";
 import { ReportGenerator } from "@/components/reports/report-generator";
 import { AssigneePanel } from "@/components/shared/assignee-panel";
+import { CaseThreatIntelSection } from "@/components/cases/case-threat-intel-section";
 
 type CaseDetail = {
   id: string;
@@ -650,6 +651,11 @@ export default function CaseDetailPage() {
 
           {/* Reports */}
           <ReportGenerator caseId={c.id} />
+
+          {/* Threat Intel */}
+          <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
+            <CaseThreatIntelSection caseId={c.id} />
+          </section>
         </div>
 
         {/* Right — Notes + Meta */}

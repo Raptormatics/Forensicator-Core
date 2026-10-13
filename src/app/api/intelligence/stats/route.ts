@@ -2,22 +2,26 @@ export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db/prisma";
-import { getActorOrThrow, AuthError, orgWhere } from "@/lib/auth/api-guard";
+import { getActorOrThrow, AuthError } from "@/lib/auth/api-guard";
 import { listOrgProviderStatus } from "@/lib/intelligence/org-providers";
+import { deriveScopedIocSources } from "@/lib/ioc/scope";
 
 export async function GET(req: NextRequest) {
   let actor;
   try { actor = await getActorOrThrow(req); }
   catch (e) { if (e instanceof AuthError) return (e as AuthError).toResponse(); throw e; }
 
-  // Scope IOC queries to the org's investigations via Evidence
-  const scope = orgWhere(actor);
+  const caseId = req.nextUrl.searchParams.get("caseId") ?? undefined;
+  if (!caseId) {
+    return NextResponse.json({ error: "missing_case", message: "caseId is required." }, { status: 400 });
+  }
+
+  // Scope IOC queries to this case, across every pipeline (Investigation,
+  // Log/PCAP/RAM Analysis, manual imports) — not just Investigation/Evidence.
+  const { valueFilter } = await deriveScopedIocSources(actor, caseId);
   let iocValueWhere: { value?: { in: string[] } } = {};
-  const orgInvestigationIds = await prisma.investigation.findMany({
-    where: scope, select: { id: true },
-  }).then((rows) => rows.map((r) => r.id));
 
-  if (orgInvestigationIds.length === 0) {
+  if (!valueFilter || valueFilter.in.length === 0) {
     return NextResponse.json({
       totalIocs: 0, enrichedIocs: 0, pendingIocs: 0,
       maliciousCount: 0, suspiciousCount: 0, cleanCount: 0,
@@ -25,33 +29,7 @@ export async function GET(req: NextRequest) {
       providerStatus: await buildProviderStatus(actor.organizationIds[0]),
     });
   }
-
-  const vals = await prisma.evidence.findMany({
-    where: {
-      investigationId: { in: orgInvestigationIds },
-      OR: [{ ip: { not: null } }, { url: { not: null } }, { hash: { not: null } }, { domain: { not: null } }],
-    },
-    select: { ip: true, url: true, hash: true, domain: true },
-  }).then((rows) => {
-    const s = new Set<string>();
-    for (const r of rows) {
-      if (r.ip)     s.add(r.ip);
-      if (r.url)    s.add(r.url);
-      if (r.hash)   s.add(r.hash);
-      if (r.domain) s.add(r.domain);
-    }
-    return Array.from(s);
-  });
-
-  if (vals.length === 0) {
-    return NextResponse.json({
-      totalIocs: 0, enrichedIocs: 0, pendingIocs: 0,
-      maliciousCount: 0, suspiciousCount: 0, cleanCount: 0,
-      byProvider: {}, recentEnrichments: [],
-      providerStatus: await buildProviderStatus(actor.organizationIds[0]),
-    });
-  }
-  iocValueWhere = { value: { in: vals } };
+  iocValueWhere = { value: valueFilter };
 
   const sp = req.nextUrl.searchParams;
   const logProvider = sp.get("provider") || undefined;
