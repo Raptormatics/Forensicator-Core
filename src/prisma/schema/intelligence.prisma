@@ -157,3 +157,38 @@ model ImportedIoc {
   @@index([caseId])
   @@map("imported_iocs")
 }
+
+// Known-good file hash allowlisting (NSRL-style) — Evidence.hash is a
+// single untyped field (no separate md5/sha1/sha256 columns, see
+// core.prisma's Evidence model), so matching is plain string equality
+// regardless of algorithm. Same global-dedup + case-scoped-visibility
+// split as IocRecord/ImportedIoc above: KnownHash is deduplicated across
+// every case (so importing the same NSRL set twice never doubles storage),
+// CaseKnownHash scopes which case actually treats a hash as known-good.
+model KnownHash {
+  id        String   @id @default(uuid()) @db.Uuid
+  hash      String   @unique
+  source    String   @default("custom") // nsrl | custom
+  note      String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  cases     CaseKnownHash[]
+
+  @@index([source])
+  @@map("known_hashes")
+}
+
+model CaseKnownHash {
+  id          String    @id @default(uuid()) @db.Uuid
+  caseId      String    @map("case_id") @db.Uuid
+  case        Case      @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  knownHashId String    @map("known_hash_id") @db.Uuid
+  knownHash   KnownHash @relation(fields: [knownHashId], references: [id], onDelete: Cascade)
+  createdById String    @map("created_by_id") @db.Uuid
+  createdBy   User      @relation(fields: [createdById], references: [id])
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  @@unique([caseId, knownHashId])
+  @@index([caseId])
+  @@map("case_known_hashes")
+}

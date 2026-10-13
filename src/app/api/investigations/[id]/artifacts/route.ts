@@ -10,6 +10,7 @@ const querySchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(50),
   sort: z.enum(["timestamp", "type", "processName", "ip", "url", "createdAt"]).default("createdAt"),
   dir: z.enum(["asc", "desc"]).default("desc"),
+  hideKnownGood: z.coerce.boolean().default(false),
 });
 
 export async function GET(request: NextRequest, props: { params: Promise<{ id: string }> }) {
@@ -20,7 +21,7 @@ export async function GET(request: NextRequest, props: { params: Promise<{ id: s
 
   const investigation = await prisma.investigation.findFirst({
     where: { id: params.id, ...orgWhere(actor) },
-    select: { id: true },
+    select: { id: true, caseId: true },
   });
   if (!investigation) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
@@ -35,11 +36,24 @@ export async function GET(request: NextRequest, props: { params: Promise<{ id: s
     );
   }
 
-  const { type, q, page, limit, sort, dir } = parsed.data;
+  const { type, q, page, limit, sort, dir, hideKnownGood } = parsed.data;
+
+  // Known-good hashes are scoped to the investigation's case (see
+  // src/prisma/schema/intelligence.prisma's KnownHash/CaseKnownHash) —
+  // an investigation with no case has nothing to filter against.
+  let knownGoodHashes: string[] = [];
+  if (investigation.caseId) {
+    const links = await prisma.caseKnownHash.findMany({
+      where: { caseId: investigation.caseId },
+      select: { knownHash: { select: { hash: true } } },
+    });
+    knownGoodHashes = links.map((l) => l.knownHash.hash);
+  }
 
   const where = {
     investigationId: params.id,
     ...(type ? { type: { equals: type, mode: "insensitive" as const } } : {}),
+    ...(hideKnownGood && knownGoodHashes.length > 0 ? { NOT: { hash: { in: knownGoodHashes } } } : {}),
     ...(q
       ? {
           OR: [
@@ -97,5 +111,7 @@ export async function GET(request: NextRequest, props: { params: Promise<{ id: s
     limit,
     pages: Math.ceil(total / limit),
     types: types.map((t) => t.type),
+    caseId: investigation.caseId,
+    knownGoodCount: knownGoodHashes.length,
   });
 }

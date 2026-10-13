@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronLeft, ChevronRight, Search, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, EyeOff, Search, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -30,6 +30,8 @@ type ArtifactResponse = {
   limit: number;
   pages: number;
   types: string[];
+  caseId: string | null;
+  knownGoodCount: number;
 };
 
 type ArtifactExplorerProps = {
@@ -45,15 +47,17 @@ export function ArtifactExplorer({ investigationId }: ArtifactExplorerProps) {
   const [query, setQuery] = useState(sp.get("q") ?? "");
   const [activeType, setActiveType] = useState(sp.get("type") ?? "");
   const [page, setPage] = useState(Number(sp.get("page") ?? 1));
+  const [hideKnownGood, setHideKnownGood] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const fetchData = useCallback(
-    async (q: string, type: string, p: number) => {
+    async (q: string, type: string, p: number, hideGood: boolean) => {
       setLoading(true);
       const params = new URLSearchParams({ page: String(p), limit: "50" });
       if (q) params.set("q", q);
       if (type) params.set("type", type);
+      if (hideGood) params.set("hideKnownGood", "true");
       const res = await fetch(
         `/api/investigations/${investigationId}/artifacts?${params}`
       );
@@ -68,10 +72,10 @@ export function ArtifactExplorer({ investigationId }: ArtifactExplorerProps) {
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
-      fetchData(query, activeType, page);
+      fetchData(query, activeType, page, hideKnownGood);
     }, 300);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, activeType, page]);
+  }, [query, activeType, page, hideKnownGood]);
 
   function handleTypeChange(type: string) {
     setActiveType(type);
@@ -114,13 +118,27 @@ export function ArtifactExplorer({ investigationId }: ArtifactExplorerProps) {
         <ArtifactTypeEnrichButton investigationId={investigationId} type={activeType || undefined} />
       </div>
 
-      {/* Count */}
-      {data && (
-        <p className="text-xs text-zinc-500">
-          {data.total.toLocaleString()} evidence row{data.total !== 1 ? "s" : ""}
-          {data.pages > 1 ? ` · page ${data.page} of ${data.pages}` : ""}
-        </p>
-      )}
+      {/* Count + known-good filter */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        {data && (
+          <p className="text-xs text-zinc-500">
+            {data.total.toLocaleString()} evidence row{data.total !== 1 ? "s" : ""}
+            {data.pages > 1 ? ` · page ${data.page} of ${data.pages}` : ""}
+          </p>
+        )}
+        {data && data.caseId && data.knownGoodCount > 0 && (
+          <label className="flex items-center gap-1.5 text-xs text-zinc-400">
+            <input
+              type="checkbox"
+              checked={hideKnownGood}
+              onChange={(e) => { setHideKnownGood(e.target.checked); setPage(1); }}
+              className="rounded border-zinc-700 bg-zinc-900"
+            />
+            <EyeOff className="h-3.5 w-3.5 text-zinc-500" />
+            Hide known-good ({data.knownGoodCount.toLocaleString()} hashes in this case)
+          </label>
+        )}
+      </div>
 
       {/* Table */}
       <div className="overflow-x-auto rounded-lg border border-zinc-800">
