@@ -26,7 +26,7 @@ Two extraction strategies, deliberately split:
 
 2. Autoruns (Run/RunOnce/Winlogon/AppInit/Services) and UserAssist — hand
    -rolled against regipy's generic, documented key/value API
-   (get_key/get_subkeys/get_values), not a plugin, since "autoruns" isn't
+   (get_key/iter_subkeys/get_values), not a plugin, since "autoruns" isn't
    one regipy plugin's job — it's a curated list of persistence-relevant
    paths this tool cares about, and the generic traversal API is the part
    of regipy's surface that's actually been confirmed stable across
@@ -51,14 +51,25 @@ def emit(obj):
 
 
 def filetime_to_iso(raw: bytes):
-    """Decodes a little-endian 8-byte Windows FILETIME into an ISO 8601 string."""
+    """Decodes a little-endian 8-byte Windows FILETIME into a UTC ISO 8601
+    string. FILETIME is always UTC by definition, but datetime(1601, 1, 1)
+    + timedelta(...) produces a naive (tzinfo=None) object, so .isoformat()
+    omits any offset — e.g. "2012-04-03T22:06:58.124282" with no "Z". A
+    consumer like JS `new Date(...)` on a 'T'-separated string with no
+    offset treats it as LOCAL time, not UTC, silently shifting it by
+    whatever timezone the Node process runs in (confirmed via direct
+    testing: a server running in a non-UTC zone shifts these by several
+    hours with no visible error). Appending "Z" here fixes it at the
+    source for every consumer, instead of needing to audit every call
+    site that turns this string into a Date.
+    """
     if not raw or len(raw) < 8:
         return None
     try:
         value = struct.unpack("<Q", raw[:8])[0]
         if value == 0:
             return None
-        return (datetime(1601, 1, 1) + timedelta(microseconds=value / 10)).isoformat()
+        return (datetime(1601, 1, 1) + timedelta(microseconds=value / 10)).isoformat() + "Z"
     except Exception:
         return None
 
@@ -92,21 +103,31 @@ def run_plugins(reg):
 # Services (SYSTEM) and Winlogon/AppInit_DLLs (SOFTWARE) are handled
 # separately below since they're single-value or per-subkey reads, not a
 # flat value-list dump.
+#
+# Every path below carries a LEADING BACKSLASH — confirmed required by
+# reading regipy's own RegistryHive.get_key() source directly: it splits
+# the path on "\\" and drops the FIRST element
+# (`key_path.split("\\")[1:]`), which silently discards the real first
+# path component on any path that doesn't start with "\\". Without the
+# leading slash, every one of these lookups would raise
+# RegistryKeyNotFoundException (caught below, so it fails silently —
+# Autoruns/UserAssist would just always come back empty with no visible
+# error). Confirmed by installing regipy and reading registry.py directly
+# while building this feature; not a guess.
 AUTORUN_PATHS = {
     "software_hive": [
-        (r"Microsoft\Windows\CurrentVersion\Run", "run"),
-        (r"Microsoft\Windows\CurrentVersion\RunOnce", "runonce"),
-        (r"WOW6432Node\Microsoft\Windows\CurrentVersion\Run", "run"),
-        (r"WOW6432Node\Microsoft\Windows\CurrentVersion\RunOnce", "runonce"),
+        (r"\Microsoft\Windows\CurrentVersion\Run", "run"),
+        (r"\Microsoft\Windows\CurrentVersion\RunOnce", "runonce"),
+        (r"\WOW6432Node\Microsoft\Windows\CurrentVersion\Run", "run"),
+        (r"\WOW6432Node\Microsoft\Windows\CurrentVersion\RunOnce", "runonce"),
     ],
     "ntuser_hive": [
-        (r"Software\Microsoft\Windows\CurrentVersion\Run", "run"),
-        (r"Software\Microsoft\Windows\CurrentVersion\RunOnce", "runonce"),
+        (r"\Software\Microsoft\Windows\CurrentVersion\Run", "run"),
+        (r"\Software\Microsoft\Windows\CurrentVersion\RunOnce", "runonce"),
     ],
 }
-WINLOGON_KEY = r"Microsoft\Windows NT\CurrentVersion\Winlogon"
-APPINIT_KEY = r"Microsoft\Windows NT\CurrentVersion\Windows"
-SERVICES_KEY_SYSTEM = r"ControlSet001\Services"
+WINLOGON_KEY = r"\Microsoft\Windows NT\CurrentVersion\Winlogon"
+APPINIT_KEY = r"\Microsoft\Windows NT\CurrentVersion\Windows"
 
 
 def emit_autorun(hive_source, key_path, value_name, value_data, category):
@@ -169,28 +190,40 @@ def run_autoruns_ntuser(reg):
 def run_autoruns_system(reg):
     # Services — ImagePath + Start for every service, flagged non-default
     # ImagePath locations by the Core rule engine, not filtered here.
+    # Uses regipy's own get_control_sets() rather than a hardcoded
+    # "ControlSet001" — a hive's ACTIVE control set isn't always 1, and
+    # get_control_sets() checks both ControlSet001 and ControlSet002,
+    # returning whichever actually exist (same helper regipy's own
+    # shimcache/bam plugins use) — confirmed via registry.py's source.
     try:
-        services_key = reg.get_key(SERVICES_KEY_SYSTEM)
-    except Exception:
-        return
-    try:
-        for subkey in services_key.get_subkeys():
-            try:
-                values = {getattr(v, "name", None) or v.get("name"):
-                          (getattr(v, "value", None) if hasattr(v, "value") else v.get("value"))
-                          for v in subkey.get_values(as_json=True)}
-            except Exception:
-                continue
-            image_path = values.get("ImagePath")
-            if image_path:
-                emit_autorun("system", f"{SERVICES_KEY_SYSTEM}\\{subkey.name}", "ImagePath", image_path, "service")
+        services_paths = reg.get_control_sets("Services")
     except Exception as e:
-        emit({"type": "error", "message": f"service enumeration failed: {e}"})
+        emit({"type": "error", "message": f"could not resolve control sets: {e}"})
+        return
+
+    for services_path in services_paths:
+        try:
+            services_key = reg.get_key(services_path)
+        except Exception:
+            continue
+        try:
+            for subkey in services_key.iter_subkeys() or []:
+                try:
+                    values = {getattr(v, "name", None) or v.get("name"):
+                              (getattr(v, "value", None) if hasattr(v, "value") else v.get("value"))
+                              for v in subkey.get_values(as_json=True)}
+                except Exception:
+                    continue
+                image_path = values.get("ImagePath")
+                if image_path:
+                    emit_autorun("system", f"{services_path}\\{subkey.name}", "ImagePath", image_path, "service")
+        except Exception as e:
+            emit({"type": "error", "message": f"service enumeration failed at {services_path}: {e}"})
 
 
 # ── UserAssist — ROT13-decoded value names, FILETIME blob decode ───────────
 
-USERASSIST_ROOT = r"Software\Microsoft\Windows\CurrentVersion\Explorer\UserAssist"
+USERASSIST_ROOT = r"\Software\Microsoft\Windows\CurrentVersion\Explorer\UserAssist"
 
 
 def run_userassist(reg):
@@ -200,7 +233,7 @@ def run_userassist(reg):
         return  # no UserAssist data in this hive — not an error, just absent
 
     try:
-        guid_keys = list(root.get_subkeys())
+        guid_keys = list(root.iter_subkeys() or [])
     except Exception as e:
         emit({"type": "error", "message": f"UserAssist GUID enumeration failed: {e}"})
         return
@@ -223,21 +256,32 @@ def run_userassist(reg):
 
                 run_count, last_executed, focus_count, focus_time_ms = None, None, None, None
                 blob = raw_value if isinstance(raw_value, (bytes, bytearray)) else None
-                if blob and len(blob) >= 16:
+                # Exact-length checks, not >= thresholds — both real formats
+                # are fixed-size (72 and 16 bytes respectively); confirmed
+                # against regipy's own WIN7_USER_ASSIST/WIN_XP_USER_ASSIST
+                # construct.Struct definitions while building this feature.
+                if blob and len(blob) == 72:
                     # Vista+ format: u32 session(unused) @0, u32 run_count @4,
-                    # u32 focus_count @8, u32 focus_time_ms @12, FILETIME @60.
+                    # u32 focus_count @8, u32 focus_time_ms @12, 44 unknown
+                    # bytes @16, FILETIME @60.
                     try:
                         run_count = struct.unpack("<I", blob[4:8])[0]
                         focus_count = struct.unpack("<I", blob[8:12])[0]
                         focus_time_ms = struct.unpack("<I", blob[12:16])[0]
-                        if len(blob) >= 68:
-                            last_executed = filetime_to_iso(blob[60:68])
+                        last_executed = filetime_to_iso(blob[60:68])
                     except Exception:
                         pass
-                elif blob and len(blob) >= 8:
-                    # XP format: u32 run_count @4 (no focus/time fields).
+                elif blob and len(blob) == 16:
+                    # XP format: u32 session @0, u32 run_count @4, FILETIME @8.
+                    # The stored run_count is 5 higher than the real execution
+                    # count on this format (the first 5 "sessions" are internal
+                    # bookkeeping, not real runs) — confirmed against regipy's
+                    # own `parsed_entry.run_counter - 5`; this is a documented
+                    # Windows XP UserAssist quirk, not a guess.
                     try:
-                        run_count = struct.unpack("<I", blob[4:8])[0]
+                        raw_run_count = struct.unpack("<I", blob[4:8])[0]
+                        run_count = max(raw_run_count - 5, 0)
+                        last_executed = filetime_to_iso(blob[8:16])
                     except Exception:
                         pass
 

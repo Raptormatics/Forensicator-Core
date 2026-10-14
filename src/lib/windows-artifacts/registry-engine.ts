@@ -174,11 +174,20 @@ export function mapShimcacheEntries(entries: RegistryPluginEntry[]): ShimcacheRo
     .map((e, i) => {
       const path = str(pick(e.data, ["path", "entry", "name", "cached_file_path"]));
       if (!path) return null;
+      // regipy's ShimCacheParser yields exec_flag as the literal string
+      // "True"/"False" (not a JSON boolean) on OS versions where it's
+      // present at all — confirmed by reading the vendored
+      // ShimCacheParser.py source directly. `Boolean("False")` would be
+      // `true`, so this needs an explicit string comparison, not a cast.
       const execRaw = pick(e.data, ["executed", "execution_flag", "exec_flag"]);
+      let executionFlag: boolean | null;
+      if (typeof execRaw === "boolean") executionFlag = execRaw;
+      else if (typeof execRaw === "string") executionFlag = execRaw.toLowerCase() === "true";
+      else executionFlag = null;
       return {
         path,
         lastModified: str(pick(e.data, ["last_modified", "last_mod_date", "last_mod_time", "modification_time"])),
-        executionFlag: typeof execRaw === "boolean" ? execRaw : execRaw != null ? Boolean(execRaw) : null,
+        executionFlag,
         order: num(pick(e.data, ["index", "order", "entry_order"])) ?? i,
       };
     })
@@ -201,7 +210,7 @@ export function mapAmcacheEntries(entries: RegistryPluginEntry[]): AmcacheRow[] 
         path,
         sha1,
         fileSizeBytes: sizeRaw != null && !Number.isNaN(Number(sizeRaw)) ? BigInt(Math.trunc(Number(sizeRaw))) : null,
-        firstSeen: str(pick(e.data, ["first_seen", "key_last_write", "install_date", "link_date"])),
+        firstSeen: str(pick(e.data, ["first_seen", "created_timestamp", "timestamp", "key_last_write", "install_date", "link_date"])),
         publisher: str(pick(e.data, ["publisher", "product_name"])),
       };
     })
@@ -210,9 +219,16 @@ export function mapAmcacheEntries(entries: RegistryPluginEntry[]): AmcacheRow[] 
 
 export function mapBamEntries(entries: RegistryPluginEntry[]): BamRow[] {
   return entries
-    .filter((e) => e.plugin.toLowerCase().includes("bam") || e.plugin.toLowerCase().includes("dam"))
+    // regipy's actual plugin name is "background_activity_moderator" — no
+    // "bam" substring — confirmed by reading bam.py's NAME constant
+    // directly. Matched on "activity_moderator" plus the historical "bam"/
+    // "dam" aliases in case of a future regipy rename.
+    .filter((e) => {
+      const p = e.plugin.toLowerCase();
+      return p.includes("activity_moderator") || p.includes("bam") || p.includes("dam");
+    })
     .map((e) => {
-      const path = str(pick(e.data, ["path", "application", "name"]));
+      const path = str(pick(e.data, ["executable", "path", "application", "name"]));
       if (!path) return null;
       return {
         sid: str(pick(e.data, ["sid", "user_sid"])) ?? "unknown",
