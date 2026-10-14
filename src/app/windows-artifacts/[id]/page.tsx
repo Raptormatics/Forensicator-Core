@@ -409,13 +409,13 @@ function SimpleTable<T extends { id: string }>({
         <p className="text-sm text-zinc-600 py-12 text-center rounded-xl border border-dashed border-zinc-800">No rows match your search.</p>
       ) : (
         <div className="overflow-x-auto rounded-lg border border-zinc-800">
-          <table className="w-full table-fixed text-sm">
+          <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-zinc-800 bg-zinc-950/80">
                 {columns.map((c) => (
                   <th
                     key={c.header}
-                    className={`px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide text-zinc-500 ${c.wrap ? "w-auto" : "w-px whitespace-nowrap"}`}
+                    className={`px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide text-zinc-500 ${c.wrap ? "" : "whitespace-nowrap"}`}
                   >
                     {c.header}
                   </th>
