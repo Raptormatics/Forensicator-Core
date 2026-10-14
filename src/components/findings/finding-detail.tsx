@@ -1,7 +1,7 @@
 "use client";
 
-import { Clock3, Database, Fingerprint, PanelRightClose, PanelRightOpen, ShieldAlert, UserCheck2 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { Clock3, Database, Fingerprint, ShieldAlert, UserCheck2 } from "lucide-react";
+import type { ReactNode } from "react";
 import { EvidenceTable } from "@/components/tables/evidence-table";
 import { Badge } from "@/components/ui/badge";
 import { KeyValueGrid } from "@/components/findings/key-value-grid";
@@ -28,8 +28,6 @@ type FindingDetailProps = {
 };
 
 export function FindingDetail({ finding, findingDbId, assigneeId, workflowStatus, aiStatus, aiSummary, aiConfidence, aiModel }: FindingDetailProps) {
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-
   const title = stringValue(finding.summary?.title) ?? finding.finding_type;
   const description = stringValue(finding.summary?.description);
   const riskScore = numberValue(finding.risk?.score);
@@ -39,7 +37,7 @@ export function FindingDetail({ finding, findingDbId, assigneeId, workflowStatus
   return (
     <article className="space-y-5">
       <header className="rounded-lg border border-zinc-800 bg-zinc-950/55 p-5 shadow-analyst">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div className="flex flex-col gap-4">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <SeverityBadge severity={finding.severity ?? "Informational"} />
@@ -51,7 +49,7 @@ export function FindingDetail({ finding, findingDbId, assigneeId, workflowStatus
             <h1 className="mt-3 text-2xl font-semibold tracking-normal text-zinc-50">{title}</h1>
             {description ? <p className="mt-2 max-w-4xl text-sm leading-6 text-zinc-400">{description}</p> : null}
           </div>
-          <div className="grid grid-cols-2 gap-2 text-xs text-zinc-400 sm:grid-cols-3 lg:min-w-[26rem]">
+          <div className="grid grid-cols-3 gap-2 text-xs text-zinc-400 sm:max-w-md">
             <Metric label="Evidence" value={finding.evidence.length.toLocaleString()} />
             <Metric label="MITRE" value={(finding.mitre?.length ?? 0).toLocaleString()} />
             <Metric label="Timeline" value={(finding.timeline?.length ?? 0).toLocaleString()} />
@@ -59,68 +57,46 @@ export function FindingDetail({ finding, findingDbId, assigneeId, workflowStatus
         </div>
       </header>
 
-      {/* ── Evidence — the primary content, shown first ── */}
-      <section className={`grid gap-5 ${sidebarOpen ? "lg:grid-cols-[minmax(0,1fr)_26rem]" : "lg:grid-cols-[minmax(0,1fr)_auto]"}`}>
-        <div className="space-y-5">
-          <EvidenceTable rows={finding.evidence} />
-          <Panel title="Timeline" icon={<Clock3 className="h-4 w-4" />}>
-            <TimelineList timeline={finding.timeline ?? []} />
-          </Panel>
-        </div>
+      {/* ── Primary content — Evidence, Timeline, MITRE — full width, most important first ── */}
+      <EvidenceTable rows={finding.evidence} />
 
-        {sidebarOpen ? (
-          <aside className="space-y-5">
-            <button
-              onClick={() => setSidebarOpen(false)}
-              title="Collapse panel"
-              className="flex w-full items-center justify-between rounded-md border border-zinc-800 bg-zinc-950/55 px-3 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 hover:text-zinc-200"
-            >
-              Analyst &amp; Risk
-              <PanelRightClose className="h-3.5 w-3.5" />
-            </button>
+      <Panel title="Timeline" icon={<Clock3 className="h-4 w-4" />}>
+        <TimelineList timeline={finding.timeline ?? []} />
+      </Panel>
 
-            <Panel title="Analyst" icon={<UserCheck2 className="h-4 w-4" />}>
-              <AssigneeWorkflowPanel
-                findingId={findingDbId}
-                initialAssigneeId={assigneeId}
-                initialStatus={workflowStatus as "new" | "under_review" | "confirmed" | "false_positive" | "escalated" | "resolved"}
-              />
-            </Panel>
-
-            <AiAnalysisPanel
-              findingDbId={findingDbId}
-              initialStatus={aiStatus}
-              initialSummary={aiSummary}
-              initialConfidence={aiConfidence}
-              initialModel={aiModel}
-              initialAnalysis={asAiAnalysis(finding.ai_analysis)}
-            />
-
-            <RiskMeter level={riskLevel ?? finding.severity} score={riskScore} reason={riskReason} />
-
-            {finding.source ? (
-              <Panel title="Source" icon={<Database className="h-4 w-4" />}>
-                <KeyValueGrid data={finding.source} />
-              </Panel>
-            ) : null}
-          </aside>
-        ) : (
-          <button
-            onClick={() => setSidebarOpen(true)}
-            title="Show analyst panel"
-            className="flex h-fit items-center justify-center rounded-md border border-zinc-800 bg-zinc-950/55 p-2 text-zinc-500 hover:text-zinc-200"
-          >
-            <PanelRightOpen className="h-4 w-4" />
-          </button>
-        )}
-      </section>
-
-      {/* ── MITRE mappings — secondary, tucked below ── */}
       {(finding.mitre?.length ?? 0) > 0 && (
         <Panel title="MITRE" icon={<Fingerprint className="h-4 w-4" />}>
           <MitreList mitre={finding.mitre ?? []} />
         </Panel>
       )}
+
+      {/* ── Secondary — analyst workflow, AI, risk, source — below the forensic content ── */}
+      <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
+        <Panel title="Analyst" icon={<UserCheck2 className="h-4 w-4" />}>
+          <AssigneeWorkflowPanel
+            findingId={findingDbId}
+            initialAssigneeId={assigneeId}
+            initialStatus={workflowStatus as "new" | "under_review" | "confirmed" | "false_positive" | "escalated" | "resolved"}
+          />
+        </Panel>
+
+        <AiAnalysisPanel
+          findingDbId={findingDbId}
+          initialStatus={aiStatus}
+          initialSummary={aiSummary}
+          initialConfidence={aiConfidence}
+          initialModel={aiModel}
+          initialAnalysis={asAiAnalysis(finding.ai_analysis)}
+        />
+
+        <RiskMeter level={riskLevel ?? finding.severity} score={riskScore} reason={riskReason} />
+
+        {finding.source ? (
+          <Panel title="Source" icon={<Database className="h-4 w-4" />}>
+            <KeyValueGrid data={finding.source} />
+          </Panel>
+        ) : null}
+      </div>
     </article>
   );
 }
