@@ -336,6 +336,13 @@ def main():
         run_autoruns_system(reg)
     elif role == "software_hive":
         run_autoruns_software(reg)
+    elif role == "security_hive":
+        # No hand-rolled extraction — SECURITY mainly holds LSA secrets,
+        # which regipy doesn't decrypt (needs the SYSTEM hive's bootkey,
+        # out of scope here). run_plugins() still runs whatever regipy
+        # plugins declare themselves compatible with this hive type; zero
+        # matches is a normal, non-error outcome, same as any other role.
+        run_plugins(reg)
     elif role == "ntuser_hive":
         # run_plugins() picks up regipy's ntuser_shellbag_plugin (Shellbags
         # — requires the `regipy[full]` extra for pyfwsi/pyfwps; degrades

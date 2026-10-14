@@ -8,7 +8,7 @@
 import { spawn } from "child_process";
 import path from "path";
 
-export type RegistryRole = "system_hive" | "software_hive" | "ntuser_hive" | "amcache_hive" | "usrclass_hive";
+export type RegistryRole = "system_hive" | "software_hive" | "security_hive" | "ntuser_hive" | "amcache_hive" | "usrclass_hive";
 
 export interface RegistryPluginEntry {
   plugin: string;

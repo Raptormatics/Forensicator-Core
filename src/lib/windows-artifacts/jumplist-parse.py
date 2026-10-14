@@ -39,7 +39,19 @@ Emits one JSON object per line to stdout:
 """
 import sys
 import json
+import re
 import struct
+
+# Numbered LNK-stream names only — matches the OLE stream naming convention
+# documented above ("^[1-9a-f][0-9a-f]*$"). Everything else in the container
+# is structural, not an embedded shortcut: "DestList" (handled separately
+# above) and, in Windows 10/11-written files, "DestListPropertyStore" (a
+# property-store blob holding no LNK structure at all) — confirmed via a
+# real Windows 11 automaticDestinations-ms sample, where attempting
+# LnkParse3 against DestListPropertyStore throws immediately. Matching by
+# pattern rather than name-listing both known non-numbered streams avoids
+# the same failure for any future non-numbered stream Microsoft adds.
+_LNK_STREAM_NAME_RE = re.compile(r"^[1-9a-f][0-9a-f]*$")
 
 
 def emit(obj):
@@ -190,7 +202,7 @@ def main():
 
     for entry in streams:
         stream_name = "/".join(entry)
-        if stream_name.lower() == "destlist":
+        if not _LNK_STREAM_NAME_RE.match(stream_name.lower()):
             continue
         try:
             stream_bytes = ole.openstream(entry).read()

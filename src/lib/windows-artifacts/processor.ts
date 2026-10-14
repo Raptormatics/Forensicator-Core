@@ -31,7 +31,7 @@ import { isEnriched, type IocLookupMap } from "@/lib/rule-engine/ioc-lookup";
 import { autoEnrichNewIocs, type NewIocRecord } from "@/lib/intelligence/auto-enrich";
 import { notifyCriticalFindings } from "@/lib/notifications/critical-finding-alert";
 
-const REGISTRY_ROLES: RegistryRole[] = ["system_hive", "software_hive", "ntuser_hive", "amcache_hive", "usrclass_hive"];
+const REGISTRY_ROLES: RegistryRole[] = ["system_hive", "software_hive", "security_hive", "ntuser_hive", "amcache_hive", "usrclass_hive"];
 const LNK_ROLES: LnkRole[] = ["lnk", "jumplist_custom"];
 
 export async function processWindowsArtifactFile(fileId: string, filePath: string): Promise<void> {
