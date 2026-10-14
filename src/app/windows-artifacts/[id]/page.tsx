@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import {
-  AlertCircle, ArrowLeft, CheckCircle2, Clock, Loader2, FileSearch, RefreshCw,
+  AlertCircle, ArrowLeft, CheckCircle2, Clock, Loader2, FileSearch, RefreshCw, Search, Download,
 } from "lucide-react";
 import { formatCaseNumber } from "@/lib/cases/case-number";
 import { formatDateTime } from "@/lib/utils";
@@ -57,6 +57,20 @@ const SEVERITY_BADGE: Record<string, string> = {
   low:      "bg-blue-900/40 text-blue-400 border-blue-900",
   info:     "bg-zinc-800 text-zinc-400 border-zinc-700",
 };
+
+function downloadBlob(filename: string, content: string, mime: string) {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function csvEscape(v: string): string {
+  return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+}
 
 export default function WindowsArtifactDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -161,11 +175,12 @@ export default function WindowsArtifactDetailPage() {
         {tab === "shimcache" && (
           <SimpleTable
             rows={shimcache}
+            exportName={`windows-artifacts-${id}-shimcache`}
             empty="No Shimcache entries — upload a SYSTEM hive to populate this tab."
             columns={[
-              { header: "Path", render: (r) => <span className="font-mono text-xs">{r.path}</span> },
-              { header: "Last Modified", render: (r) => r.lastModified ? formatDateTime(new Date(r.lastModified)) : "—" },
-              { header: "Executed", render: (r) => r.executionFlag === null ? "—" : r.executionFlag ? "Yes" : "No" },
+              { header: "Path", wrap: true, csv: (r) => r.path, render: (r) => <span className="font-mono text-xs">{r.path}</span> },
+              { header: "Last Modified", csv: (r) => r.lastModified ? formatDateTime(new Date(r.lastModified)) : "", render: (r) => r.lastModified ? formatDateTime(new Date(r.lastModified)) : "—" },
+              { header: "Executed", csv: (r) => r.executionFlag === null ? "" : r.executionFlag ? "Yes" : "No", render: (r) => r.executionFlag === null ? "—" : r.executionFlag ? "Yes" : "No" },
             ]}
           />
         )}
@@ -173,11 +188,12 @@ export default function WindowsArtifactDetailPage() {
         {tab === "amcache" && (
           <SimpleTable
             rows={amcache}
+            exportName={`windows-artifacts-${id}-amcache`}
             empty="No Amcache entries — upload Amcache.hve to populate this tab."
             columns={[
-              { header: "Path", render: (r) => <span className="font-mono text-xs">{r.path}</span> },
-              { header: "SHA1", render: (r) => r.sha1 ? <Link href={`/intelligence/ioc/${encodeURIComponent(r.sha1)}`} className="font-mono text-xs text-amber-300 hover:underline">{r.sha1}</Link> : "—" },
-              { header: "First Seen", render: (r) => r.firstSeen ? formatDateTime(new Date(r.firstSeen)) : "—" },
+              { header: "Path", wrap: true, csv: (r) => r.path, render: (r) => <span className="font-mono text-xs">{r.path}</span> },
+              { header: "SHA1", wrap: true, csv: (r) => r.sha1 ?? "", render: (r) => r.sha1 ? <Link href={`/intelligence/ioc/${encodeURIComponent(r.sha1)}`} className="font-mono text-xs text-amber-300 hover:underline">{r.sha1}</Link> : "—" },
+              { header: "First Seen", csv: (r) => r.firstSeen ? formatDateTime(new Date(r.firstSeen)) : "", render: (r) => r.firstSeen ? formatDateTime(new Date(r.firstSeen)) : "—" },
             ]}
           />
         )}
@@ -185,11 +201,12 @@ export default function WindowsArtifactDetailPage() {
         {tab === "userassist" && (
           <SimpleTable
             rows={userAssist}
+            exportName={`windows-artifacts-${id}-userassist`}
             empty="No UserAssist entries — upload an NTUSER.DAT to populate this tab."
             columns={[
-              { header: "Program", render: (r) => <span className="font-mono text-xs">{r.programPath}</span> },
-              { header: "Run Count", render: (r) => r.runCount ?? "—" },
-              { header: "Last Executed", render: (r) => r.lastExecuted ? formatDateTime(new Date(r.lastExecuted)) : "—" },
+              { header: "Program", wrap: true, csv: (r) => r.programPath, render: (r) => <span className="font-mono text-xs">{r.programPath}</span> },
+              { header: "Run Count", csv: (r) => String(r.runCount ?? ""), render: (r) => r.runCount ?? "—" },
+              { header: "Last Executed", csv: (r) => r.lastExecuted ? formatDateTime(new Date(r.lastExecuted)) : "", render: (r) => r.lastExecuted ? formatDateTime(new Date(r.lastExecuted)) : "—" },
             ]}
           />
         )}
@@ -197,11 +214,12 @@ export default function WindowsArtifactDetailPage() {
         {tab === "bam" && (
           <SimpleTable
             rows={bam}
+            exportName={`windows-artifacts-${id}-bam`}
             empty="No BAM/DAM entries — upload a SYSTEM hive to populate this tab."
             columns={[
-              { header: "Path", render: (r) => <span className="font-mono text-xs">{r.path}</span> },
-              { header: "SID", render: (r) => <span className="font-mono text-xs text-zinc-500">{r.sid}</span> },
-              { header: "Last Executed", render: (r) => r.lastExecuted ? formatDateTime(new Date(r.lastExecuted)) : "—" },
+              { header: "Path", wrap: true, csv: (r) => r.path, render: (r) => <span className="font-mono text-xs">{r.path}</span> },
+              { header: "SID", wrap: true, csv: (r) => r.sid, render: (r) => <span className="font-mono text-xs text-zinc-500">{r.sid}</span> },
+              { header: "Last Executed", csv: (r) => r.lastExecuted ? formatDateTime(new Date(r.lastExecuted)) : "", render: (r) => r.lastExecuted ? formatDateTime(new Date(r.lastExecuted)) : "—" },
             ]}
           />
         )}
@@ -209,11 +227,13 @@ export default function WindowsArtifactDetailPage() {
         {tab === "autoruns" && (
           <SimpleTable
             rows={autoruns}
+            exportName={`windows-artifacts-${id}-autoruns`}
             empty="No Autorun entries — upload a SYSTEM, SOFTWARE, or NTUSER.DAT hive to populate this tab."
+            filter={{ label: "Category", getValue: (r) => r.category }}
             columns={[
-              { header: "Category", render: (r) => <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-xs text-zinc-400">{r.category}</span> },
-              { header: "Key", render: (r) => <span className="font-mono text-xs">{r.keyPath}{r.valueName ? `\\${r.valueName}` : ""}</span> },
-              { header: "Value", render: (r) => <span className="font-mono text-xs truncate max-w-[300px] inline-block align-bottom">{r.valueData}</span> },
+              { header: "Category", csv: (r) => r.category, render: (r) => <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-xs text-zinc-400">{r.category}</span> },
+              { header: "Key", wrap: true, csv: (r) => r.keyPath + (r.valueName ? `\\${r.valueName}` : ""), render: (r) => <span className="font-mono text-xs">{r.keyPath}{r.valueName ? `\\${r.valueName}` : ""}</span> },
+              { header: "Value", wrap: true, csv: (r) => r.valueData, render: (r) => <span className="font-mono text-xs">{r.valueData}</span> },
             ]}
           />
         )}
@@ -221,13 +241,14 @@ export default function WindowsArtifactDetailPage() {
         {tab === "prefetch" && (
           <SimpleTable
             rows={prefetch}
+            exportName={`windows-artifacts-${id}-prefetch`}
             empty="No Prefetch entries — upload one or more .pf files to populate this tab."
             columns={[
-              { header: "Executable", render: (r) => <span className="font-mono text-xs">{r.executableName}</span> },
-              { header: "Run Count", render: (r) => r.runCount ?? "—" },
-              { header: "First Run", render: (r) => r.firstRunTime ? formatDateTime(new Date(r.firstRunTime)) : "—" },
-              { header: "Last Run", render: (r) => r.lastRunTimes.length > 0 ? formatDateTime(new Date(r.lastRunTimes[0])) : "—" },
-              { header: "Referenced Files", render: (r) => <span className="text-xs text-zinc-500">{r.referencedFiles.length}</span> },
+              { header: "Executable", wrap: true, csv: (r) => r.executableName, render: (r) => <span className="font-mono text-xs">{r.executableName}</span> },
+              { header: "Run Count", csv: (r) => String(r.runCount ?? ""), render: (r) => r.runCount ?? "—" },
+              { header: "First Run", csv: (r) => r.firstRunTime ? formatDateTime(new Date(r.firstRunTime)) : "", render: (r) => r.firstRunTime ? formatDateTime(new Date(r.firstRunTime)) : "—" },
+              { header: "Last Run", csv: (r) => r.lastRunTimes.length > 0 ? formatDateTime(new Date(r.lastRunTimes[0])) : "", render: (r) => r.lastRunTimes.length > 0 ? formatDateTime(new Date(r.lastRunTimes[0])) : "—" },
+              { header: "Referenced Files", csv: (r) => String(r.referencedFiles.length), render: (r) => <span className="text-xs text-zinc-500">{r.referencedFiles.length}</span> },
             ]}
           />
         )}
@@ -235,13 +256,14 @@ export default function WindowsArtifactDetailPage() {
         {tab === "lnk" && (
           <SimpleTable
             rows={lnk}
+            exportName={`windows-artifacts-${id}-lnk`}
             empty="No LNK entries — upload one or more .lnk files to populate this tab."
             columns={[
-              { header: "Target", render: (r) => <span className="font-mono text-xs">{r.targetPath ?? "—"}</span> },
-              { header: "Created", render: (r) => r.creationTime ? formatDateTime(new Date(r.creationTime)) : "—" },
-              { header: "Accessed", render: (r) => r.accessTime ? formatDateTime(new Date(r.accessTime)) : "—" },
-              { header: "Volume Serial", render: (r) => <span className="font-mono text-xs text-zinc-500">{r.driveSerialNumber ?? r.netName ?? "—"}</span> },
-              { header: "Machine ID", render: (r) => <span className="font-mono text-xs text-zinc-500">{r.machineId ?? "—"}</span> },
+              { header: "Target", wrap: true, csv: (r) => r.targetPath ?? "", render: (r) => <span className="font-mono text-xs">{r.targetPath ?? "—"}</span> },
+              { header: "Created", csv: (r) => r.creationTime ? formatDateTime(new Date(r.creationTime)) : "", render: (r) => r.creationTime ? formatDateTime(new Date(r.creationTime)) : "—" },
+              { header: "Accessed", csv: (r) => r.accessTime ? formatDateTime(new Date(r.accessTime)) : "", render: (r) => r.accessTime ? formatDateTime(new Date(r.accessTime)) : "—" },
+              { header: "Volume Serial", wrap: true, csv: (r) => r.driveSerialNumber ?? r.netName ?? "", render: (r) => <span className="font-mono text-xs text-zinc-500">{r.driveSerialNumber ?? r.netName ?? "—"}</span> },
+              { header: "Machine ID", wrap: true, csv: (r) => r.machineId ?? "", render: (r) => <span className="font-mono text-xs text-zinc-500">{r.machineId ?? "—"}</span> },
             ]}
           />
         )}
@@ -249,14 +271,16 @@ export default function WindowsArtifactDetailPage() {
         {tab === "jumplist" && (
           <SimpleTable
             rows={jumpList}
+            exportName={`windows-artifacts-${id}-jumplist`}
             empty="No Jump List entries — upload one or more .automaticDestinations-ms/.customDestinations-ms files to populate this tab."
+            filter={{ label: "Source", getValue: (r) => r.source }}
             columns={[
-              { header: "Target", render: (r) => <span className="font-mono text-xs">{r.targetPath ?? "—"}</span> },
-              { header: "Source", render: (r) => <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-xs text-zinc-400 capitalize">{r.source}</span> },
-              { header: "App ID", render: (r) => <span className="font-mono text-xs text-zinc-500">{r.appId ?? "—"}</span> },
-              { header: "Last Accessed", render: (r) => r.lastAccessed ? formatDateTime(new Date(r.lastAccessed)) : "—" },
-              { header: "Rank", render: (r) => r.accessRank ?? "—" },
-              { header: "Pinned", render: (r) => r.pinned === null ? "—" : r.pinned ? "Yes" : "No" },
+              { header: "Target", wrap: true, csv: (r) => r.targetPath ?? "", render: (r) => <span className="font-mono text-xs">{r.targetPath ?? "—"}</span> },
+              { header: "Source", csv: (r) => r.source, render: (r) => <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-xs text-zinc-400 capitalize">{r.source}</span> },
+              { header: "App ID", wrap: true, csv: (r) => r.appId ?? "", render: (r) => <span className="font-mono text-xs text-zinc-500">{r.appId ?? "—"}</span> },
+              { header: "Last Accessed", csv: (r) => r.lastAccessed ? formatDateTime(new Date(r.lastAccessed)) : "", render: (r) => r.lastAccessed ? formatDateTime(new Date(r.lastAccessed)) : "—" },
+              { header: "Rank", csv: (r) => String(r.accessRank ?? ""), render: (r) => r.accessRank ?? "—" },
+              { header: "Pinned", csv: (r) => r.pinned === null ? "" : r.pinned ? "Yes" : "No", render: (r) => r.pinned === null ? "—" : r.pinned ? "Yes" : "No" },
             ]}
           />
         )}
@@ -264,13 +288,14 @@ export default function WindowsArtifactDetailPage() {
         {tab === "shellbags" && (
           <SimpleTable
             rows={shellbags}
+            exportName={`windows-artifacts-${id}-shellbags`}
             empty="No Shellbag entries — upload a UsrClass.dat to populate this tab."
             columns={[
-              { header: "Path", render: (r) => <span className="font-mono text-xs">{r.path}</span> },
-              { header: "Type", render: (r) => <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-xs text-zinc-400">{r.itemType ?? "—"}</span> },
-              { header: "Created", render: (r) => r.creationTime ? formatDateTime(new Date(r.creationTime)) : "—" },
-              { header: "Accessed", render: (r) => r.accessTime ? formatDateTime(new Date(r.accessTime)) : "—" },
-              { header: "Modified", render: (r) => r.lastModified ? formatDateTime(new Date(r.lastModified)) : "—" },
+              { header: "Path", wrap: true, csv: (r) => r.path, render: (r) => <span className="font-mono text-xs">{r.path}</span> },
+              { header: "Type", csv: (r) => r.itemType ?? "", render: (r) => <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-xs text-zinc-400">{r.itemType ?? "—"}</span> },
+              { header: "Created", csv: (r) => r.creationTime ? formatDateTime(new Date(r.creationTime)) : "", render: (r) => r.creationTime ? formatDateTime(new Date(r.creationTime)) : "—" },
+              { header: "Accessed", csv: (r) => r.accessTime ? formatDateTime(new Date(r.accessTime)) : "", render: (r) => r.accessTime ? formatDateTime(new Date(r.accessTime)) : "—" },
+              { header: "Modified", csv: (r) => r.lastModified ? formatDateTime(new Date(r.lastModified)) : "", render: (r) => r.lastModified ? formatDateTime(new Date(r.lastModified)) : "—" },
             ]}
           />
         )}
@@ -288,7 +313,7 @@ export default function WindowsArtifactDetailPage() {
                     {f.matchCount > 1 && <span className="text-xs text-zinc-500">×{f.matchCount}</span>}
                   </div>
                   {f.description && <p className="mt-1 text-xs text-zinc-500">{f.description}</p>}
-                  {f.matchedValue && <p className="mt-1 font-mono text-xs text-teal-400 truncate">{f.matchedValue}</p>}
+                  {f.matchedValue && <p className="mt-1 font-mono text-xs text-teal-400 break-all">{f.matchedValue}</p>}
                 </div>
               ))
             )}
@@ -300,31 +325,146 @@ export default function WindowsArtifactDetailPage() {
 }
 
 function SimpleTable<T extends { id: string }>({
-  rows, columns, empty,
+  rows, columns, empty, exportName, filter,
 }: {
   rows: T[];
-  columns: { header: string; render: (row: T) => React.ReactNode }[];
+  columns: { header: string; render: (row: T) => React.ReactNode; csv: (row: T) => string; wrap?: boolean }[];
   empty: string;
+  exportName: string;
+  filter?: { label: string; getValue: (row: T) => string };
 }) {
+  const [query, setQuery] = useState("");
+  const [filterValue, setFilterValue] = useState("all");
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 50;
+
+  const filterOptions = useMemo(
+    () => (filter ? Array.from(new Set(rows.map(filter.getValue))).sort((a, b) => a.localeCompare(b)) : []),
+    [rows, filter]
+  );
+
+  const filtered = useMemo(() => {
+    let r = rows;
+    if (filter && filterValue !== "all") r = r.filter((row) => filter.getValue(row) === filterValue);
+    const q = query.trim().toLowerCase();
+    if (q) r = r.filter((row) => columns.some((c) => c.csv(row).toLowerCase().includes(q)));
+    return r;
+  }, [rows, query, filterValue, filter, columns]);
+
+  useEffect(() => { setPage(1); }, [query, filterValue]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const paged = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+
+  function exportCsv() {
+    const lines = [
+      columns.map((c) => csvEscape(c.header)).join(","),
+      ...filtered.map((row) => columns.map((c) => csvEscape(c.csv(row))).join(",")),
+    ];
+    downloadBlob(`${exportName}.csv`, lines.join("\r\n"), "text/csv");
+  }
+
   if (rows.length === 0) {
     return <p className="text-sm text-zinc-600 py-12 text-center rounded-xl border border-dashed border-zinc-800">{empty}</p>;
   }
+
   return (
-    <div className="overflow-x-auto rounded-lg border border-zinc-800">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="border-b border-zinc-800 bg-zinc-950/80">
-            {columns.map((c) => <th key={c.header} className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide text-zinc-500">{c.header}</th>)}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => (
-            <tr key={row.id} className="border-b border-zinc-800/40 hover:bg-zinc-900/40">
-              {columns.map((c) => <td key={c.header} className="px-4 py-2 text-zinc-200">{c.render(row)}</td>)}
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <div>
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <div className="flex min-w-[220px] flex-1 items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2">
+          <Search className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search this table…"
+            className="flex-1 bg-transparent text-sm text-zinc-200 placeholder-zinc-600 outline-none"
+          />
+          {query && (
+            <button onClick={() => setQuery("")} className="text-zinc-600 hover:text-zinc-300">&times;</button>
+          )}
+        </div>
+        {filter && (
+          <select
+            value={filterValue}
+            onChange={(e) => setFilterValue(e.target.value)}
+            className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-300 outline-none"
+          >
+            <option value="all">All {filter.label}</option>
+            {filterOptions.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+          </select>
+        )}
+        <span className="text-xs text-zinc-500">
+          {filtered.length === rows.length ? `${rows.length} rows` : `${filtered.length} of ${rows.length} rows`}
+        </span>
+        <button
+          onClick={exportCsv}
+          className="flex items-center gap-1.5 rounded-lg border border-zinc-700 px-3 py-2 text-xs font-medium text-zinc-300 hover:bg-zinc-800 transition-colors"
+        >
+          <Download className="h-3.5 w-3.5" /> Export CSV
+        </button>
+      </div>
+
+      {filtered.length === 0 ? (
+        <p className="text-sm text-zinc-600 py-12 text-center rounded-xl border border-dashed border-zinc-800">No rows match your search.</p>
+      ) : (
+        <div className="overflow-x-auto rounded-lg border border-zinc-800">
+          <table className="w-full table-fixed text-sm">
+            <thead>
+              <tr className="border-b border-zinc-800 bg-zinc-950/80">
+                {columns.map((c) => (
+                  <th
+                    key={c.header}
+                    className={`px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide text-zinc-500 ${c.wrap ? "w-auto" : "w-px whitespace-nowrap"}`}
+                  >
+                    {c.header}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {paged.map((row) => (
+                <tr key={row.id} className="border-b border-zinc-800/40 hover:bg-zinc-900/40">
+                  {columns.map((c) => (
+                    <td
+                      key={c.header}
+                      title={c.wrap ? c.csv(row) : undefined}
+                      className={`px-4 py-2 align-top text-zinc-200 ${c.wrap ? "break-all" : "whitespace-nowrap"}`}
+                    >
+                      {c.render(row)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {filtered.length > PAGE_SIZE && (
+        <div className="mt-3 flex items-center justify-between">
+          <span className="text-xs text-zinc-500">
+            Showing {(currentPage - 1) * PAGE_SIZE + 1}–{Math.min(currentPage * PAGE_SIZE, filtered.length)} of {filtered.length}
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={currentPage === 1}
+              className="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40 transition-colors"
+            >
+              Previous
+            </button>
+            <span className="text-xs text-zinc-500">Page {currentPage} of {totalPages}</span>
+            <button
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={currentPage === totalPages}
+              className="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40 transition-colors"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

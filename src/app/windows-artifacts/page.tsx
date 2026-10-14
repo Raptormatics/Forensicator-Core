@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
-  AlertCircle, CheckCircle2, Clock, Loader2, FileSearch,
+  AlertCircle, CheckCircle2, ChevronDown, ChevronUp, Clock, Loader2, FileSearch,
   Plus, RefreshCw, Shield, Trash2,
 } from "lucide-react";
 import { formatCaseNumber } from "@/lib/cases/case-number";
@@ -161,14 +161,7 @@ export default function WindowsArtifactsPage() {
                       </Link>
                     </td>
                     <td className="px-4 py-3">
-                      <div className="flex flex-wrap gap-1.5">
-                        {u.files.map((f) => (
-                          <span key={f.id} title={f.filename} className="flex items-center gap-1 rounded border border-zinc-800 bg-zinc-900 px-1.5 py-0.5 text-xs text-zinc-400">
-                            {STATUS_ICON[f.status] ?? <Clock className="h-3.5 w-3.5 text-zinc-500" />}
-                            {ROLE_LABEL[f.role] ?? f.role}
-                          </span>
-                        ))}
-                      </div>
+                      <FileSummaryCell files={u.files} />
                     </td>
                     <td className="px-4 py-3 text-right">
                       <span className={u.findingCount > 0 ? "text-orange-400 font-medium" : "text-zinc-500"}>{u.findingCount}</span>
@@ -193,6 +186,78 @@ export default function WindowsArtifactsPage() {
           </div>
         )}
       </section>
+    </div>
+  );
+}
+
+const STATUS_PRIORITY: Record<string, number> = { failed: 0, processing: 1, queued: 2, ready: 3 };
+
+function FileSummaryCell({ files }: { files: FileRow[] }) {
+  const [expanded, setExpanded] = useState(false);
+
+  const groups = useMemo(() => {
+    const byRole = new Map<string, FileRow[]>();
+    for (const f of files) {
+      const list = byRole.get(f.role) ?? [];
+      list.push(f);
+      byRole.set(f.role, list);
+    }
+    return Array.from(byRole.entries()).map(([role, group]) => {
+      const status = group.map((f) => f.status).sort((a, b) => (STATUS_PRIORITY[a] ?? 9) - (STATUS_PRIORITY[b] ?? 9))[0];
+      return { role, files: group, status };
+    });
+  }, [files]);
+
+  const hasMore = files.length > groups.length;
+
+  return (
+    <div>
+      <div className="flex flex-wrap items-center gap-1.5">
+        {groups.map((g) => (
+          <span
+            key={g.role}
+            className={`flex items-center gap-1 rounded border px-1.5 py-0.5 text-xs ${
+              g.status === "failed" ? "border-red-900 bg-red-900/20 text-red-300" : "border-zinc-800 bg-zinc-900 text-zinc-400"
+            }`}
+          >
+            {STATUS_ICON[g.status] ?? <Clock className="h-3.5 w-3.5 text-zinc-500" />}
+            {ROLE_LABEL[g.role] ?? g.role}
+            {g.files.length > 1 && <span className="text-zinc-500">×{g.files.length}</span>}
+          </span>
+        ))}
+        {hasMore && (
+          <button
+            onClick={() => setExpanded((e) => !e)}
+            className="flex items-center gap-0.5 text-xs text-zinc-500 hover:text-zinc-300"
+          >
+            {expanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+            {expanded ? "Hide files" : `${files.length} files`}
+          </button>
+        )}
+      </div>
+      {expanded && (
+        <div className="mt-2 space-y-2 border-t border-zinc-800 pt-2">
+          {groups.map((g) => (
+            <div key={g.role}>
+              <p className="mb-1 text-[10px] uppercase tracking-wide text-zinc-600">{ROLE_LABEL[g.role] ?? g.role}</p>
+              <div className="flex flex-wrap gap-1.5">
+                {g.files.map((f) => (
+                  <span
+                    key={f.id}
+                    title={f.filename}
+                    className={`flex items-center gap-1 rounded border px-1.5 py-0.5 text-xs ${
+                      f.status === "failed" ? "border-red-900 bg-red-900/10 text-red-300" : "border-zinc-800 bg-zinc-900 text-zinc-400"
+                    }`}
+                  >
+                    {STATUS_ICON[f.status] ?? <Clock className="h-3.5 w-3.5 text-zinc-500" />}
+                    {f.filename}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
