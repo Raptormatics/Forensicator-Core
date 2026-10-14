@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """
-Parses a single Windows registry hive (SYSTEM, SOFTWARE, NTUSER.DAT, or
-Amcache.hve) via regipy (https://github.com/mkorman90/regipy), routed by
-the `role` argument the caller already determined at upload time (the same
-role the file was uploaded under — see WindowsArtifactFile.role in
-schema.prisma). Invoked as: registry-parse.py <hive_path> <role>
-role is one of: system_hive | software_hive | ntuser_hive | amcache_hive
+Parses a single Windows registry hive (SYSTEM, SOFTWARE, NTUSER.DAT,
+Amcache.hve, or UsrClass.dat) via regipy (https://github.com/mkorman90/regipy,
+installed as the `regipy[full]` pip extra so pyfwsi/pyfwps are available
+for Shellbags), routed by the `role` argument the caller already
+determined at upload time (the same role the file was uploaded under —
+see WindowsArtifactFile.role in schema.prisma). Invoked as:
+registry-parse.py <hive_path> <role>
+role is one of: system_hive | software_hive | ntuser_hive | amcache_hive | usrclass_hive
 
 Two extraction strategies, deliberately split:
 
-1. Shimcache / Amcache / BAM — regipy's built-in plugin system
+1. Shimcache / Amcache / BAM / Shellbags — regipy's built-in plugin system
    (regipy.plugins.utils.run_relevant_plugins) auto-detects applicable
    plugins for the hive and returns {plugin_name: [entry_dict, ...]}.
    Each entry_dict's exact key names depend on the installed regipy
@@ -309,8 +311,21 @@ def main():
         emit({"type": "not_installed"})
         sys.exit(0)
 
+    # Pass the hive type explicitly rather than relying on regipy's own
+    # auto-detection (identify_hive_type(), keyed off the ORIGINAL absolute
+    # path embedded in the hive's own REGF header by Windows at write time
+    # — e.g. requires an exact "\microsoft\windows\usrclass.dat" suffix for
+    # UsrClass.dat). That's fragile: the embedded path depends on how the
+    # analyst's collection tool preserved it, and our own on-disk storage
+    # filename (a random UUID) never matches these patterns at all. We
+    # already know the hive type for certain — it's the upload's own
+    # `role` — so pass it straight through instead of gambling on
+    # detection succeeding. role strings map 1:1 to regipy's hive_type
+    # constants by just dropping the "_hive" suffix (confirmed against
+    # regipy/hive_types.py: system/software/security/ntuser/amcache/usrclass).
+    hive_type = role[:-5] if role.endswith("_hive") else None
     try:
-        reg = RegistryHive(hive_path)
+        reg = RegistryHive(hive_path, hive_type=hive_type)
     except Exception as e:
         emit({"type": "error", "message": f"failed to open hive: {e}"})
         sys.exit(1)
@@ -322,9 +337,23 @@ def main():
     elif role == "software_hive":
         run_autoruns_software(reg)
     elif role == "ntuser_hive":
+        # run_plugins() picks up regipy's ntuser_shellbag_plugin (Shellbags
+        # — requires the `regipy[full]` extra for pyfwsi/pyfwps; degrades
+        # to just skipping that one plugin's entries if not installed,
+        # same graceful-degradation posture as everywhere else) alongside
+        # whatever else regipy auto-detects for this hive type. Harmless
+        # overlap with the hand-rolled UserAssist/Autoruns below — any
+        # plugin_entry types the TS mapper doesn't recognize are just
+        # ignored, not an error.
+        run_plugins(reg)
         run_userassist(reg)
         run_autoruns_ntuser(reg)
     elif role == "amcache_hive":
+        if not run_plugins(reg):
+            sys.exit(0)
+    elif role == "usrclass_hive":
+        # Shellbags live here (regipy's usrclass_shellbag_plugin) — same
+        # plugin-forwarding mechanism as every other role, nothing hand-rolled.
         if not run_plugins(reg):
             sys.exit(0)
     else:

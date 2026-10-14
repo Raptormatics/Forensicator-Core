@@ -30,13 +30,16 @@ export async function GET(req: NextRequest, props: Params) {
 
     const fileIds = upload.files.map((f) => f.id);
 
-    const [shimcache, amcache, userAssist, bam, autoruns, prefetch, findings] = await Promise.all([
+    const [shimcache, amcache, userAssist, bam, autoruns, prefetch, lnk, jumpList, shellbags, findings] = await Promise.all([
       prisma.shimcacheEntry.findMany({ where: { fileId: { in: fileIds } }, orderBy: { order: "asc" }, take: ROW_CAP }),
       prisma.amcacheEntry.findMany({ where: { fileId: { in: fileIds } }, orderBy: { createdAt: "asc" }, take: ROW_CAP }),
       prisma.userAssistEntry.findMany({ where: { fileId: { in: fileIds } }, orderBy: { lastExecuted: "desc" }, take: ROW_CAP }),
       prisma.bamEntry.findMany({ where: { fileId: { in: fileIds } }, orderBy: { lastExecuted: "desc" }, take: ROW_CAP }),
       prisma.autorunEntry.findMany({ where: { fileId: { in: fileIds } }, orderBy: { category: "asc" }, take: ROW_CAP }),
       prisma.prefetchEntry.findMany({ where: { fileId: { in: fileIds } }, orderBy: { firstRunTime: "desc" }, take: ROW_CAP }),
+      prisma.lnkEntry.findMany({ where: { fileId: { in: fileIds } }, orderBy: { createdAt: "asc" }, take: ROW_CAP }),
+      prisma.jumpListEntry.findMany({ where: { fileId: { in: fileIds } }, orderBy: { accessRank: "asc" }, take: ROW_CAP }),
+      prisma.shellbagEntry.findMany({ where: { fileId: { in: fileIds } }, orderBy: { path: "asc" }, take: ROW_CAP }),
       prisma.windowsArtifactFinding.findMany({
         where: { fileId: { in: fileIds } },
         orderBy: { matchCount: "desc" },
@@ -55,6 +58,9 @@ export async function GET(req: NextRequest, props: Params) {
       bam,
       autoruns,
       prefetch,
+      lnk,
+      jumpList,
+      shellbags,
       findings,
     });
   } catch (err: unknown) {

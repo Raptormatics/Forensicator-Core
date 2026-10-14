@@ -35,6 +35,9 @@ const ROLE_LABEL: Record<string, string> = {
   amcache_hive: "Amcache.hve",
   usrclass_hive: "UsrClass.dat",
   prefetch: "Prefetch",
+  lnk: "LNK File",
+  jumplist_automatic: "Jump List (Auto)",
+  jumplist_custom: "Jump List (Custom)",
 };
 
 export default function WindowsArtifactsPage() {

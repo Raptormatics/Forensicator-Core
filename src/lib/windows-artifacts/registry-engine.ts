@@ -8,7 +8,7 @@
 import { spawn } from "child_process";
 import path from "path";
 
-export type RegistryRole = "system_hive" | "software_hive" | "ntuser_hive" | "amcache_hive";
+export type RegistryRole = "system_hive" | "software_hive" | "ntuser_hive" | "amcache_hive" | "usrclass_hive";
 
 export interface RegistryPluginEntry {
   plugin: string;
@@ -237,4 +237,38 @@ export function mapBamEntries(entries: RegistryPluginEntry[]): BamRow[] {
       };
     })
     .filter((r): r is BamRow => r !== null);
+}
+
+export interface ShellbagRow {
+  path: string;
+  nodeName: string;
+  nodeSlot: string;
+  depth: number;
+  itemType: string | null;
+  creationTime: string | null;
+  accessTime: string | null;
+  lastModified: string | null;
+}
+
+export function mapShellbagEntries(entries: RegistryPluginEntry[]): ShellbagRow[] {
+  return entries
+    // regipy's plugin names are "ntuser_shellbag_plugin"/"usrclass_shellbag_plugin"
+    // — confirmed via source, live-tested against a real NTUSER_BAGMRU.DAT
+    // fixture (102 real entries decoded end-to-end).
+    .filter((e) => e.plugin.toLowerCase().includes("shellbag"))
+    .map((e) => {
+      const path = str(pick(e.data, ["path", "value"]));
+      if (!path) return null;
+      return {
+        path,
+        nodeName: str(pick(e.data, ["value"])) ?? "",
+        nodeSlot: str(pick(e.data, ["node_slot"])) ?? "",
+        depth: (path.match(/\\/g) ?? []).length, // display proxy, not a literal registry-tree depth
+        itemType: str(pick(e.data, ["shell_type"])),
+        creationTime: str(pick(e.data, ["creation_time"])),
+        accessTime: str(pick(e.data, ["access_time"])),
+        lastModified: str(pick(e.data, ["modification_time"])),
+      };
+    })
+    .filter((r): r is ShellbagRow => r !== null);
 }

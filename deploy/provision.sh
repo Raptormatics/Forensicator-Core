@@ -140,16 +140,22 @@ if [[ ! -x "${APP_DIR}/.venvs/volatility3/bin/vol" ]]; then
     || echo "WARNING: yara-python install failed — custom Yara signatures will be unavailable until installed manually"
 fi
 
-echo "==> Installing regipy (Windows Artifact Analysis dependency)"
-# Its own venv, not shared with Volatility3's — registry-hive parsing has
-# no runtime relationship to Volatility3/yara-python, see
-# src/lib/settings/system.ts's getWinArtifactsPythonPath().
+echo "==> Installing regipy, LnkParse3, olefile (Windows Artifact Analysis dependencies)"
+# Its own venv, not shared with Volatility3's — registry-hive/LNK/Jump-List
+# parsing has no runtime relationship to Volatility3/yara-python, see
+# src/lib/settings/system.ts's getWinArtifactsPythonPath(). regipy[full]
+# (not bare regipy) pulls in pyfwsi/pyfwps — libyal's own shell-item
+# bindings, needed for Shellbags (regipy's ntuser_shellbag_plugin/
+# usrclass_shellbag_plugin) — confirmed these ship as prebuilt manylinux
+# wheels, no system library needed, same as LnkParse3/olefile (both pure
+# Python). None of this phase's new dependencies need a system package,
+# unlike Phase 2's pyscca (see python3-libscca above).
 if [[ ! -x "${APP_DIR}/.venvs/winartifacts/bin/python3" ]]; then
   runuser -u "$SERVICE_USER" -- bash -lc "
     python3 -m venv '${APP_DIR}/.venvs/winartifacts' &&
     '${APP_DIR}/.venvs/winartifacts/bin/pip' install --upgrade pip &&
-    '${APP_DIR}/.venvs/winartifacts/bin/pip' install regipy
-  " || echo "WARNING: regipy install failed — Windows Artifact Analysis will be unavailable until installed manually"
+    '${APP_DIR}/.venvs/winartifacts/bin/pip' install 'regipy[full]' LnkParse3 olefile
+  " || echo "WARNING: regipy/LnkParse3/olefile install failed — Windows Artifact Analysis will be unavailable until installed manually"
 fi
 
 if [[ "$IMAGE_BUILD" == "1" ]]; then

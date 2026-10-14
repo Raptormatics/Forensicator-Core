@@ -72,6 +72,9 @@ model WindowsArtifactFile {
   bamEntries        BamEntry[]
   autorunEntries    AutorunEntry[]
   prefetchEntries   PrefetchEntry[]
+  lnkEntries        LnkEntry[]
+  jumpListEntries   JumpListEntry[]
+  shellbagEntries   ShellbagEntry[]
   findings          WindowsArtifactFinding[]
 
   createdAt DateTime  @default(now()) @map("created_at")
@@ -192,6 +195,108 @@ model PrefetchEntry {
   @@index([fileId])
   @@index([executableName])
   @@map("prefetch_entries")
+}
+
+// Phase 3 — one row per standalone .lnk upload (role: "lnk") AND one row
+// per embedded LNK inside a .customDestinations-ms (role: "jumplist_custom"
+// — those have no DestList-equivalent index, just concatenated raw LNKs).
+model LnkEntry {
+  id     String              @id @default(uuid()) @db.Uuid
+  fileId String              @map("file_id") @db.Uuid
+  file   WindowsArtifactFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  // Resolution priority: LinkInfo local base path + common path suffix ->
+  // UNC net_name + common path suffix -> StringData relative_path ->
+  // best-effort shell-item chain name. Mirrors MS-SHLLINK's own target
+  // resolution precedence (LinkInfo first, when present).
+  targetPath       String? @map("target_path") @db.Text
+  arguments        String? @db.Text
+  workingDirectory String? @map("working_directory") @db.Text
+  iconLocation     String? @map("icon_location") @db.Text
+
+  creationTime     DateTime? @map("creation_time")
+  accessTime       DateTime? @map("access_time")
+  modificationTime DateTime? @map("modification_time")
+  fileSize         Int?      @map("file_size")
+
+  driveSerialNumber String? @map("drive_serial_number") // LnkParse3 returns this as a "0x........" string, not an int
+  driveType         String? @map("drive_type")
+  volumeLabel       String? @map("volume_label")
+  netName           String? @map("net_name") // UNC target only
+  deviceName        String? @map("device_name") // UNC target only
+
+  machineId String? @map("machine_id") // Distributed Link Tracker block's machine_identifier (NetBIOS name) — lateral-movement relevant
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([fileId])
+  @@index([targetPath])
+  @@map("lnk_entries")
+}
+
+// Phase 3 — one row per jump-list entry, covering BOTH jumplist_automatic
+// (DestList-backed, richer metadata) and jumplist_custom (no DestList,
+// metadata fields below just come back null) sources in one table — same
+// conceptual artifact ("this app recently opened this file") either way.
+model JumpListEntry {
+  id     String              @id @default(uuid()) @db.Uuid
+  fileId String              @map("file_id") @db.Uuid
+  file   WindowsArtifactFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  source String // automatic | custom
+
+  // The AppID hash taken from the uploaded file's own filename (e.g.
+  // "5f7b5f1e01b83767") — not resolved to a friendly app name; no attempt
+  // at hand-maintaining the public AppID-to-app lookup table.
+  appId            String? @map("app_id")
+  targetPath       String? @map("target_path") @db.Text
+  arguments        String? @db.Text
+  workingDirectory String? @map("working_directory") @db.Text
+
+  lastAccessed DateTime? @map("last_accessed")
+  // Position within the DestList stream's own entry order, which is
+  // itself MRU-ordered (confirmed against real sample data: position 0 is
+  // the most-recently-used entry) — automatic only, null for custom.
+  accessRank   Int?      @map("access_rank")
+  pinned       Boolean?  @map("pinned") // DestList pin_status != -1 — automatic only
+  machineName  String?   @map("machine_name") // automatic only
+  streamNumber String?   @map("stream_number") // automatic only — cross-refs the raw OLE stream this came from
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([fileId])
+  @@index([targetPath])
+  @@map("jump_list_entries")
+}
+
+// Phase 3 — one row per BagMRU tree node (not just leaves — every node is
+// itself a "this folder was accessed" artifact), decoded via regipy's own
+// ntuser_shellbag_plugin/usrclass_shellbag_plugin (pyfwsi/pyfwps — libyal's
+// authoritative shell-item bindings, pulled in via the `regipy[full]` pip
+// extra), forwarded through the same plugin_entry mechanism as
+// Shimcache/Amcache/BAM.
+model ShellbagEntry {
+  id     String              @id @default(uuid()) @db.Uuid
+  fileId String              @map("file_id") @db.Uuid
+  file   WindowsArtifactFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  path     String @db.Text // full reconstructed path, accumulated root-to-node
+  nodeName String @map("node_name") @db.Text // this node's own decoded shell-item name, before concatenation
+  nodeSlot String @map("node_slot") // the registry subkey name at this level, e.g. "0", "3"
+  depth    Int // derived from the reconstructed path's backslash count — a display proxy, not a literal registry-tree depth
+
+  // The shell-item class name, e.g. "Directory" | "Network Location" |
+  // "Root Folder" — distinguishes removable/network/local.
+  itemType     String?   @map("item_type")
+  creationTime DateTime? @map("creation_time") // from the shell item's extension block, when present
+  accessTime   DateTime? @map("access_time")   // from the shell item's extension block, when present
+  lastModified DateTime? @map("last_modified")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([fileId])
+  @@index([path])
+  @@map("shellbag_entries")
 }
 
 model WindowsArtifactFinding {

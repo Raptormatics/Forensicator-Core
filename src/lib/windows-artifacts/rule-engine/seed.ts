@@ -83,6 +83,17 @@ export const BUILTIN_RULES: BuiltinRuleDef[] = [
     ],
   },
   {
+    name: "LNK/Jump List/Shellbag Target on Removable or Network Path",
+    description: "A shortcut, jump-list entry, or shellbag-reconstructed folder path points to a non-system local drive letter (removable media) or a UNC network share",
+    severity: "medium",
+    logic: "OR",
+    tags: ["lateral-movement", "removable-media"],
+    conditions: [
+      cond("path", "regex", "^[D-Zd-z]:\\\\", "c1"),
+      cond("path", "starts_with", "\\\\", "c2"),
+    ],
+  },
+  {
     name: "AppInit_DLLs Configured",
     description: "AppInit_DLLs is set — a DLL-injection persistence vector affecting every process that loads user32.dll",
     severity: "high",

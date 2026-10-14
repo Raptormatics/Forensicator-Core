@@ -22,6 +22,9 @@ type UserAssistRow = { id: string; fileId: string; programPath: string; runCount
 type BamRow = { id: string; fileId: string; sid: string; path: string; lastExecuted: string | null };
 type AutorunRow = { id: string; fileId: string; hiveSource: string; keyPath: string; valueName: string | null; valueData: string; category: string };
 type PrefetchRow = { id: string; fileId: string; executableName: string; runCount: number | null; lastRunTimes: string[]; firstRunTime: string | null; volumeSerials: string[]; referencedFiles: string[] };
+type LnkRow = { id: string; fileId: string; targetPath: string | null; arguments: string | null; workingDirectory: string | null; creationTime: string | null; accessTime: string | null; modificationTime: string | null; driveSerialNumber: string | null; netName: string | null; machineId: string | null };
+type JumpListRow = { id: string; fileId: string; source: string; appId: string | null; targetPath: string | null; lastAccessed: string | null; accessRank: number | null; pinned: boolean | null; machineName: string | null };
+type ShellbagRow = { id: string; fileId: string; path: string; itemType: string | null; lastModified: string | null; creationTime: string | null; accessTime: string | null };
 type Finding = { id: string; title: string; description: string | null; severity: string; matchCount: number; matchedField: string | null; matchedValue: string | null; rule: { id: string; name: string } | null };
 
 type Detail = {
@@ -32,10 +35,13 @@ type Detail = {
   bam: BamRow[];
   autoruns: AutorunRow[];
   prefetch: PrefetchRow[];
+  lnk: LnkRow[];
+  jumpList: JumpListRow[];
+  shellbags: ShellbagRow[];
   findings: Finding[];
 };
 
-type Tab = "overview" | "shimcache" | "amcache" | "userassist" | "bam" | "autoruns" | "prefetch" | "findings";
+type Tab = "overview" | "shimcache" | "amcache" | "userassist" | "bam" | "autoruns" | "prefetch" | "lnk" | "jumplist" | "shellbags" | "findings";
 
 const STATUS_ICON: Record<string, React.ReactNode> = {
   ready:      <CheckCircle2 className="h-3.5 w-3.5 text-teal-400" />,
@@ -77,7 +83,7 @@ export default function WindowsArtifactDetailPage() {
   if (loading) return <div className="p-8 text-zinc-500">Loading…</div>;
   if (!data) return <div className="p-8 text-red-400">Collection not found.</div>;
 
-  const { upload, shimcache, amcache, userAssist, bam, autoruns, prefetch, findings } = data;
+  const { upload, shimcache, amcache, userAssist, bam, autoruns, prefetch, lnk, jumpList, shellbags, findings } = data;
 
   const TABS: { key: Tab; label: string; count: number }[] = [
     { key: "overview", label: "Overview", count: upload.files.length },
@@ -87,6 +93,9 @@ export default function WindowsArtifactDetailPage() {
     { key: "bam", label: "BAM/DAM", count: bam.length },
     { key: "autoruns", label: "Autoruns", count: autoruns.length },
     { key: "prefetch", label: "Prefetch", count: prefetch.length },
+    { key: "lnk", label: "LNK Files", count: lnk.length },
+    { key: "jumplist", label: "Jump Lists", count: jumpList.length },
+    { key: "shellbags", label: "Shellbags", count: shellbags.length },
     { key: "findings", label: "Findings", count: findings.length },
   ];
 
@@ -219,6 +228,49 @@ export default function WindowsArtifactDetailPage() {
               { header: "First Run", render: (r) => r.firstRunTime ? formatDateTime(new Date(r.firstRunTime)) : "—" },
               { header: "Last Run", render: (r) => r.lastRunTimes.length > 0 ? formatDateTime(new Date(r.lastRunTimes[0])) : "—" },
               { header: "Referenced Files", render: (r) => <span className="text-xs text-zinc-500">{r.referencedFiles.length}</span> },
+            ]}
+          />
+        )}
+
+        {tab === "lnk" && (
+          <SimpleTable
+            rows={lnk}
+            empty="No LNK entries — upload one or more .lnk files to populate this tab."
+            columns={[
+              { header: "Target", render: (r) => <span className="font-mono text-xs">{r.targetPath ?? "—"}</span> },
+              { header: "Created", render: (r) => r.creationTime ? formatDateTime(new Date(r.creationTime)) : "—" },
+              { header: "Accessed", render: (r) => r.accessTime ? formatDateTime(new Date(r.accessTime)) : "—" },
+              { header: "Volume Serial", render: (r) => <span className="font-mono text-xs text-zinc-500">{r.driveSerialNumber ?? r.netName ?? "—"}</span> },
+              { header: "Machine ID", render: (r) => <span className="font-mono text-xs text-zinc-500">{r.machineId ?? "—"}</span> },
+            ]}
+          />
+        )}
+
+        {tab === "jumplist" && (
+          <SimpleTable
+            rows={jumpList}
+            empty="No Jump List entries — upload one or more .automaticDestinations-ms/.customDestinations-ms files to populate this tab."
+            columns={[
+              { header: "Target", render: (r) => <span className="font-mono text-xs">{r.targetPath ?? "—"}</span> },
+              { header: "Source", render: (r) => <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-xs text-zinc-400 capitalize">{r.source}</span> },
+              { header: "App ID", render: (r) => <span className="font-mono text-xs text-zinc-500">{r.appId ?? "—"}</span> },
+              { header: "Last Accessed", render: (r) => r.lastAccessed ? formatDateTime(new Date(r.lastAccessed)) : "—" },
+              { header: "Rank", render: (r) => r.accessRank ?? "—" },
+              { header: "Pinned", render: (r) => r.pinned === null ? "—" : r.pinned ? "Yes" : "No" },
+            ]}
+          />
+        )}
+
+        {tab === "shellbags" && (
+          <SimpleTable
+            rows={shellbags}
+            empty="No Shellbag entries — upload a UsrClass.dat to populate this tab."
+            columns={[
+              { header: "Path", render: (r) => <span className="font-mono text-xs">{r.path}</span> },
+              { header: "Type", render: (r) => <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-xs text-zinc-400">{r.itemType ?? "—"}</span> },
+              { header: "Created", render: (r) => r.creationTime ? formatDateTime(new Date(r.creationTime)) : "—" },
+              { header: "Accessed", render: (r) => r.accessTime ? formatDateTime(new Date(r.accessTime)) : "—" },
+              { header: "Modified", render: (r) => r.lastModified ? formatDateTime(new Date(r.lastModified)) : "—" },
             ]}
           />
         )}

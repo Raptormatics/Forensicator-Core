@@ -9,10 +9,12 @@
 import { applyOperator } from "@/lib/rule-engine/operators";
 import { isIocRuleField, resolveIoc, getIocFieldValue, type IocLookupMap, type IocRuleField } from "@/lib/rule-engine/ioc-lookup";
 import type { WinArtifactField, WinArtifactRuleCondition } from "./types";
-import type { ShimcacheRow, AmcacheRow, UserAssistRow, BamRow, AutorunRow } from "./registry-engine";
+import type { ShimcacheRow, AmcacheRow, UserAssistRow, BamRow, AutorunRow, ShellbagRow } from "./registry-engine";
 import type { PrefetchEntryRow } from "./prefetch-engine";
+import type { LnkEntryRow } from "./lnk-engine";
+import type { JumpListEntryRow } from "./jumplist-engine";
 
-export type WinArtifactSubjectKind = "shimcache" | "amcache" | "userassist" | "bam" | "autorun" | "prefetch" | "prefetch_reference";
+export type WinArtifactSubjectKind = "shimcache" | "amcache" | "userassist" | "bam" | "autorun" | "prefetch" | "prefetch_reference" | "lnk" | "jumplist" | "shellbag";
 
 export interface WinArtifactRuleSubject {
   kind: WinArtifactSubjectKind;
@@ -33,6 +35,9 @@ export function buildSubjects(data: {
   bam: BamRow[];
   autoruns: AutorunRow[];
   prefetch?: PrefetchEntryRow[];
+  lnk?: LnkEntryRow[];
+  jumplist?: JumpListEntryRow[];
+  shellbag?: ShellbagRow[];
 }): WinArtifactRuleSubject[] {
   const subjects: WinArtifactRuleSubject[] = [];
 
@@ -71,6 +76,20 @@ export function buildSubjects(data: {
     for (const ref of p.referencedFiles) {
       subjects.push({ kind: "prefetch_reference", refKey: `${p.executableName}:${ref}`, path: ref, sha1: null, runCount: null, category: null, valueName: null, keyPath: null, sid: null });
     }
+  }
+  // Reuses the existing LOLBin/Temp-Downloads built-ins (via `path`) and
+  // the new removable/network-path built-in (see rule-engine/seed.ts) —
+  // no LNK/JumpList/Shellbag-specific built-in rules needed beyond that one.
+  for (const l of data.lnk ?? []) {
+    if (!l.targetPath) continue;
+    subjects.push({ kind: "lnk", refKey: l.targetPath, path: l.targetPath, sha1: null, runCount: null, category: null, valueName: null, keyPath: null, sid: null });
+  }
+  for (const j of data.jumplist ?? []) {
+    if (!j.targetPath) continue;
+    subjects.push({ kind: "jumplist", refKey: `${j.streamNumber}:${j.targetPath}`, path: j.targetPath, sha1: null, runCount: null, category: null, valueName: null, keyPath: null, sid: null });
+  }
+  for (const s of data.shellbag ?? []) {
+    subjects.push({ kind: "shellbag", refKey: s.path, path: s.path, sha1: null, runCount: null, category: s.itemType, valueName: null, keyPath: null, sid: null });
   }
 
   return subjects;

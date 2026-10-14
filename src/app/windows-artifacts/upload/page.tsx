@@ -42,6 +42,9 @@ export default function UploadWindowsArtifactsPage() {
   const [ntuserFiles, setNtuserFiles] = useState<ProfileFile[]>([makeProfileFile()]);
   const [usrclassFiles, setUsrclassFiles] = useState<ProfileFile[]>([]);
   const [prefetchFiles, setPrefetchFiles] = useState<File[]>([]);
+  const [lnkFiles, setLnkFiles] = useState<File[]>([]);
+  const [jumplistAutomaticFiles, setJumplistAutomaticFiles] = useState<File[]>([]);
+  const [jumplistCustomFiles, setJumplistCustomFiles] = useState<File[]>([]);
   const [hostname, setHostname] = useState("");
   const [notes, setNotes] = useState("");
 
@@ -92,7 +95,7 @@ export default function UploadWindowsArtifactsPage() {
   function reset() {
     setSystemFile(null); setSoftwareFile(null); setSecurityFile(null); setAmcacheFile(null);
     setNtuserFiles([makeProfileFile()]); setUsrclassFiles([]);
-    setPrefetchFiles([]);
+    setPrefetchFiles([]); setLnkFiles([]); setJumplistAutomaticFiles([]); setJumplistCustomFiles([]);
     setHostname(""); setNotes(""); setError("");
     setSelectedCase(null); setPhase("case");
     setUploadPercent(0); setResultId("");
@@ -102,9 +105,15 @@ export default function UploadWindowsArtifactsPage() {
     (systemFile?.size ?? 0) + (softwareFile?.size ?? 0) + (securityFile?.size ?? 0) + (amcacheFile?.size ?? 0) +
     ntuserFiles.reduce((s, f) => s + (f.file?.size ?? 0), 0) +
     usrclassFiles.reduce((s, f) => s + (f.file?.size ?? 0), 0) +
-    prefetchFiles.reduce((s, f) => s + f.size, 0);
+    prefetchFiles.reduce((s, f) => s + f.size, 0) +
+    lnkFiles.reduce((s, f) => s + f.size, 0) +
+    jumplistAutomaticFiles.reduce((s, f) => s + f.size, 0) +
+    jumplistCustomFiles.reduce((s, f) => s + f.size, 0);
 
-  const hasAnyFile = !!(systemFile || softwareFile || securityFile || amcacheFile || ntuserFiles.some(f => f.file) || usrclassFiles.some(f => f.file) || prefetchFiles.length > 0);
+  const hasAnyFile = !!(
+    systemFile || softwareFile || securityFile || amcacheFile || ntuserFiles.some(f => f.file) || usrclassFiles.some(f => f.file) ||
+    prefetchFiles.length > 0 || lnkFiles.length > 0 || jumplistAutomaticFiles.length > 0 || jumplistCustomFiles.length > 0
+  );
 
   function handleSubmit() {
     if (!hasAnyFile || !selectedCase) return;
@@ -133,6 +142,15 @@ export default function UploadWindowsArtifactsPage() {
     }
     for (const f of prefetchFiles) {
       form.append("prefetch", f);
+    }
+    for (const f of lnkFiles) {
+      form.append("lnk", f);
+    }
+    for (const f of jumplistAutomaticFiles) {
+      form.append("jumplistAutomatic", f);
+    }
+    for (const f of jumplistCustomFiles) {
+      form.append("jumplistCustom", f);
     }
 
     const xhr = new XMLHttpRequest();
@@ -231,8 +249,8 @@ export default function UploadWindowsArtifactsPage() {
           </div>
           <h1 className="text-3xl font-semibold text-zinc-50">Upload Host Artifacts</h1>
           <p className="mt-2 text-sm text-zinc-400 max-w-xl">
-            Upload whichever registry hives you collected from one host — SYSTEM, SOFTWARE, one or more NTUSER.DAT, and
-            Amcache.hve. Each file is parsed independently; you don&apos;t need all of them to get value from the ones you have.
+            Upload whichever artifacts you collected from one host — registry hives, Prefetch, LNK files, Jump Lists,
+            and more. Each file is parsed independently; you don&apos;t need all of them to get value from the ones you have.
           </p>
         </div>
       </section>
@@ -341,30 +359,47 @@ export default function UploadWindowsArtifactsPage() {
             />
 
             <ProfileFileList
-              title="UsrClass.dat (one per user profile — optional, used by Shellbags in a later phase)"
+              title="UsrClass.dat (one per user profile — used by Shellbags)"
               files={usrclassFiles}
               setFiles={setUsrclassFiles}
               profilePlaceholder="e.g. jsmith"
             />
 
-            <div>
-              <h2 className="text-sm font-semibold text-zinc-300 mb-3">
-                Prefetch (.pf files) <span className="text-zinc-600 font-normal">(optional — select every .pf file from C:\Windows\Prefetch at once)</span>
-              </h2>
-              <label className="flex items-center gap-3 rounded-lg border border-dashed border-zinc-700 px-3 py-2.5 text-sm text-zinc-400 hover:border-teal-600 hover:text-teal-400 cursor-pointer">
-                <FileIcon className="h-4 w-4 shrink-0" />
-                <span className="flex-1 min-w-0 truncate">
-                  {prefetchFiles.length > 0 ? `${prefetchFiles.length} .pf file${prefetchFiles.length === 1 ? "" : "s"} selected` : "Choose .pf files…"}
-                </span>
-                {prefetchFiles.length > 0 && (
-                  <button type="button" onClick={(e) => { e.preventDefault(); setPrefetchFiles([]); }} className="shrink-0 text-zinc-600 hover:text-red-400">
-                    <X className="h-3.5 w-3.5" />
-                  </button>
-                )}
-                <input type="file" multiple accept=".pf" className="hidden"
-                  onChange={(e) => setPrefetchFiles(Array.from(e.target.files ?? []))} />
-              </label>
-            </div>
+            <MultiFilePicker
+              title="Prefetch (.pf files)"
+              hint="select every .pf file from C:\Windows\Prefetch at once"
+              accept=".pf"
+              label=".pf file"
+              files={prefetchFiles}
+              setFiles={setPrefetchFiles}
+            />
+
+            <MultiFilePicker
+              title="LNK Files (.lnk)"
+              hint="individual shortcuts, e.g. from Recent Items"
+              accept=".lnk"
+              label=".lnk file"
+              files={lnkFiles}
+              setFiles={setLnkFiles}
+            />
+
+            <MultiFilePicker
+              title="Jump Lists — Automatic (.automaticDestinations-ms)"
+              hint="from %AppData%\Roaming\Microsoft\Windows\Recent\AutomaticDestinations"
+              accept=".automaticDestinations-ms"
+              label="file"
+              files={jumplistAutomaticFiles}
+              setFiles={setJumplistAutomaticFiles}
+            />
+
+            <MultiFilePicker
+              title="Jump Lists — Custom (.customDestinations-ms)"
+              hint="from %AppData%\Roaming\Microsoft\Windows\Recent\CustomDestinations"
+              accept=".customDestinations-ms"
+              label="file"
+              files={jumplistCustomFiles}
+              setFiles={setJumplistCustomFiles}
+            />
 
             <div>
               <h2 className="text-sm font-semibold text-zinc-300 mb-3">
@@ -397,6 +432,38 @@ export default function UploadWindowsArtifactsPage() {
         )}
 
       </section>
+    </div>
+  );
+}
+
+function MultiFilePicker({
+  title, hint, accept, label, files, setFiles,
+}: {
+  title: string;
+  hint: string;
+  accept: string;
+  label: string;
+  files: File[];
+  setFiles: (files: File[]) => void;
+}) {
+  return (
+    <div>
+      <h2 className="text-sm font-semibold text-zinc-300 mb-3">
+        {title} <span className="text-zinc-600 font-normal">(optional — {hint})</span>
+      </h2>
+      <label className="flex items-center gap-3 rounded-lg border border-dashed border-zinc-700 px-3 py-2.5 text-sm text-zinc-400 hover:border-teal-600 hover:text-teal-400 cursor-pointer">
+        <FileIcon className="h-4 w-4 shrink-0" />
+        <span className="flex-1 min-w-0 truncate">
+          {files.length > 0 ? `${files.length} ${label}${files.length === 1 ? "" : "s"} selected` : `Choose ${label}s…`}
+        </span>
+        {files.length > 0 && (
+          <button type="button" onClick={(e) => { e.preventDefault(); setFiles([]); }} className="shrink-0 text-zinc-600 hover:text-red-400">
+            <X className="h-3.5 w-3.5" />
+          </button>
+        )}
+        <input type="file" multiple accept={accept} className="hidden"
+          onChange={(e) => setFiles(Array.from(e.target.files ?? []))} />
+      </label>
     </div>
   );
 }

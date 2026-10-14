@@ -15,7 +15,10 @@ export type WinArtifactFileRole =
   | "ntuser_hive"
   | "amcache_hive"
   | "usrclass_hive"
-  | "prefetch";
+  | "prefetch"
+  | "lnk"
+  | "jumplist_automatic"
+  | "jumplist_custom";
 
 /** All normalized field names Windows Artifact rules can operate against —
  * mirrors RamField/PcapField's role, rooted in the heterogeneous
@@ -23,7 +26,7 @@ export type WinArtifactFileRole =
  * row shape, since one WindowsArtifactFile can yield several different
  * kinds of subject. */
 export type WinArtifactField =
-  | "artifact_type" // shimcache | amcache | userassist | bam | autorun
+  | "artifact_type" // shimcache | amcache | userassist | bam | autorun | prefetch | prefetch_reference | lnk | jumplist | shellbag
   | "path"
   | "sha1"
   | "run_count"

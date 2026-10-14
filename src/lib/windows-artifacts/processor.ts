@@ -20,16 +20,19 @@
 import { prisma } from "@/lib/db/prisma";
 import { getWinArtifactsPythonPath, getPrefetchPythonPath } from "@/lib/settings/system";
 import {
-  runRegistryParse, mapShimcacheEntries, mapAmcacheEntries, mapBamEntries,
+  runRegistryParse, mapShimcacheEntries, mapAmcacheEntries, mapBamEntries, mapShellbagEntries,
   type RegistryRole,
 } from "./registry-engine";
 import { runPrefetchParse, type PrefetchEntryRow } from "./prefetch-engine";
+import { runLnkParse, type LnkEntryRow, type LnkRole } from "./lnk-engine";
+import { runJumpListParse, type JumpListEntryRow } from "./jumplist-engine";
 import { buildSubjects, runRules, type StoredWinArtifactRule } from "./rule-engine";
 import { isEnriched, type IocLookupMap } from "@/lib/rule-engine/ioc-lookup";
 import { autoEnrichNewIocs, type NewIocRecord } from "@/lib/intelligence/auto-enrich";
 import { notifyCriticalFindings } from "@/lib/notifications/critical-finding-alert";
 
-const REGISTRY_ROLES: RegistryRole[] = ["system_hive", "software_hive", "ntuser_hive", "amcache_hive"];
+const REGISTRY_ROLES: RegistryRole[] = ["system_hive", "software_hive", "ntuser_hive", "amcache_hive", "usrclass_hive"];
+const LNK_ROLES: LnkRole[] = ["lnk", "jumplist_custom"];
 
 export async function processWindowsArtifactFile(fileId: string, filePath: string): Promise<void> {
   const file = await prisma.windowsArtifactFile.findUnique({ where: { id: fileId }, include: { upload: true } });
@@ -47,6 +50,9 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
       prisma.bamEntry.deleteMany({ where: { fileId } }),
       prisma.autorunEntry.deleteMany({ where: { fileId } }),
       prisma.prefetchEntry.deleteMany({ where: { fileId } }),
+      prisma.lnkEntry.deleteMany({ where: { fileId } }),
+      prisma.jumpListEntry.deleteMany({ where: { fileId } }),
+      prisma.shellbagEntry.deleteMany({ where: { fileId } }),
       prisma.windowsArtifactFinding.deleteMany({ where: { fileId } }),
     ]);
 
@@ -56,7 +62,10 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
     let bamRows: ReturnType<typeof mapBamEntries> = [];
     let userAssistRows: import("./registry-engine").UserAssistRow[] = [];
     let autorunRows: import("./registry-engine").AutorunRow[] = [];
+    let shellbagRows: ReturnType<typeof mapShellbagEntries> = [];
     let prefetchRows: PrefetchEntryRow[] = [];
+    let lnkRows: LnkEntryRow[] = [];
+    let jumpListRows: JumpListEntryRow[] = [];
     const iocLookupMap: IocLookupMap = new Map();
 
     if (REGISTRY_ROLES.includes(file.role as RegistryRole)) {
@@ -82,6 +91,7 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
       shimcacheRows = file.role === "system_hive" ? mapShimcacheEntries(result.pluginEntries) : [];
       amcacheRows = file.role === "amcache_hive" ? mapAmcacheEntries(result.pluginEntries) : [];
       bamRows = file.role === "system_hive" ? mapBamEntries(result.pluginEntries) : [];
+      shellbagRows = (file.role === "usrclass_hive" || file.role === "ntuser_hive") ? mapShellbagEntries(result.pluginEntries) : [];
       userAssistRows = result.userAssist;
       autorunRows = result.autoruns;
 
@@ -129,6 +139,17 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
           data: autorunRows.map((r) => ({
             fileId, hiveSource: r.hiveSource, keyPath: r.keyPath,
             valueName: r.valueName ?? undefined, valueData: r.valueData, category: r.category,
+          })),
+        });
+      }
+      if (shellbagRows.length > 0) {
+        await prisma.shellbagEntry.createMany({
+          data: shellbagRows.map((r) => ({
+            fileId, path: r.path, nodeName: r.nodeName, nodeSlot: r.nodeSlot, depth: r.depth,
+            itemType: r.itemType ?? undefined,
+            creationTime: r.creationTime ? new Date(r.creationTime) : undefined,
+            accessTime: r.accessTime ? new Date(r.accessTime) : undefined,
+            lastModified: r.lastModified ? new Date(r.lastModified) : undefined,
           })),
         });
       }
@@ -197,10 +218,118 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
         });
       }
       // No IOC upsert step — Prefetch carries no hash to look up.
+    } else if (LNK_ROLES.includes(file.role as LnkRole)) {
+      // 3. Run the LNK parser — same winartifacts venv as regipy (pure
+      // Python, no C-library linking concern unlike pyscca). Handles both
+      // a standalone .lnk and the embedded LNKs inside a
+      // .customDestinations-ms container (same parser, selected by role).
+      const pythonPath = await getWinArtifactsPythonPath();
+      const result = await runLnkParse(pythonPath, filePath, file.role as LnkRole);
+
+      if (result.status === "not_installed") {
+        throw new Error("LnkParse3 is not installed in the Windows Artifacts venv.");
+      }
+      if (result.status === "timeout") {
+        throw new Error("LNK parsing timed out.");
+      }
+      if (result.status === "error") {
+        throw new Error(result.message);
+      }
+      for (const err of result.scriptErrors) {
+        console.warn(`[windows-artifacts] lnk-parse.py reported: ${err}`);
+      }
+
+      if (file.role === "lnk") {
+        // 4. One LnkEntry row for this standalone shortcut.
+        lnkRows = result.entries;
+        if (lnkRows.length > 0) {
+          await prisma.lnkEntry.createMany({
+            data: lnkRows.map((r) => ({
+              fileId,
+              targetPath: r.targetPath ?? undefined,
+              arguments: r.arguments ?? undefined,
+              workingDirectory: r.workingDirectory ?? undefined,
+              iconLocation: r.iconLocation ?? undefined,
+              creationTime: r.creationTime ? new Date(r.creationTime) : undefined,
+              accessTime: r.accessTime ? new Date(r.accessTime) : undefined,
+              modificationTime: r.modificationTime ? new Date(r.modificationTime) : undefined,
+              fileSize: r.fileSize ?? undefined,
+              driveSerialNumber: r.driveSerialNumber ?? undefined,
+              driveType: r.driveType ?? undefined,
+              volumeLabel: r.volumeLabel ?? undefined,
+              netName: r.netName ?? undefined,
+              deviceName: r.deviceName ?? undefined,
+              machineId: r.machineId ?? undefined,
+            })),
+          });
+        }
+      } else {
+        // 4. jumplist_custom — one JumpListEntry row per embedded LNK,
+        // alongside jumplist_automatic in the same table (same conceptual
+        // artifact — "this app recently opened this file" — just with no
+        // DestList-backed rank/machine/pin metadata to carry).
+        jumpListRows = result.entries.map((r) => ({
+          streamNumber: "", targetPath: r.targetPath, arguments: r.arguments,
+          workingDirectory: r.workingDirectory, lastAccessed: r.accessTime,
+          accessRank: null, pinned: null, machineName: null,
+        }));
+        const appId = file.filename.replace(/\.customDestinations-ms$/i, "");
+        if (jumpListRows.length > 0) {
+          await prisma.jumpListEntry.createMany({
+            data: jumpListRows.map((r) => ({
+              fileId, source: "custom", appId,
+              targetPath: r.targetPath ?? undefined,
+              arguments: r.arguments ?? undefined,
+              workingDirectory: r.workingDirectory ?? undefined,
+              lastAccessed: r.lastAccessed ? new Date(r.lastAccessed) : undefined,
+            })),
+          });
+        }
+      }
+      // No IOC upsert step — LNK/Jump List carries no hash to look up.
+    } else if (file.role === "jumplist_automatic") {
+      // 3. Run the Jump List parser (olefile + LnkParse3, same venv).
+      const pythonPath = await getWinArtifactsPythonPath();
+      const result = await runJumpListParse(pythonPath, filePath);
+
+      if (result.status === "not_installed") {
+        throw new Error("olefile/LnkParse3 are not installed in the Windows Artifacts venv.");
+      }
+      if (result.status === "timeout") {
+        throw new Error("Jump List parsing timed out.");
+      }
+      if (result.status === "error") {
+        throw new Error(result.message);
+      }
+      for (const err of result.scriptErrors) {
+        console.warn(`[windows-artifacts] jumplist-parse.py reported: ${err}`);
+      }
+
+      // 4. One JumpListEntry row per numbered OLE stream (one per
+      // recently-opened file/action the application tracked).
+      jumpListRows = result.entries;
+      // The uploaded file's own name carries the AppID hash
+      // (e.g. "5f7b5f1e01b83767.automaticDestinations-ms") — not resolved
+      // to a friendly app name, no attempt at hand-maintaining the public
+      // AppID-to-app lookup table.
+      const appId = file.filename.replace(/\.automaticDestinations-ms$/i, "");
+      if (jumpListRows.length > 0) {
+        await prisma.jumpListEntry.createMany({
+          data: jumpListRows.map((r) => ({
+            fileId, source: "automatic", appId,
+            targetPath: r.targetPath ?? undefined,
+            arguments: r.arguments ?? undefined,
+            workingDirectory: r.workingDirectory ?? undefined,
+            lastAccessed: r.lastAccessed ? new Date(r.lastAccessed) : undefined,
+            accessRank: r.accessRank ?? undefined,
+            pinned: r.pinned ?? undefined,
+            machineName: r.machineName ?? undefined,
+            streamNumber: r.streamNumber,
+          })),
+        });
+      }
+      // No IOC upsert step — Jump Lists carry no hash to look up.
     } else {
-      // LNK/JumpList roles are routed here in Phase 3 — not yet
-      // implemented, so a file uploaded with one of those roles today
-      // just fails cleanly rather than silently doing nothing.
       throw new Error(`Unsupported artifact role (not yet implemented): ${file.role}`);
     }
 
@@ -219,7 +348,10 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
     const detailPath = `/windows-artifacts/${file.uploadId}`;
 
     if (rules.length > 0) {
-      const subjects = buildSubjects({ shimcache: shimcacheRows, amcache: amcacheRows, userAssist: userAssistRows, bam: bamRows, autoruns: autorunRows, prefetch: prefetchRows });
+      const subjects = buildSubjects({
+        shimcache: shimcacheRows, amcache: amcacheRows, userAssist: userAssistRows, bam: bamRows, autoruns: autorunRows,
+        prefetch: prefetchRows, lnk: lnkRows, jumplist: jumpListRows, shellbag: shellbagRows,
+      });
       const matches = runRules(rules as unknown as StoredWinArtifactRule[], subjects, iocLookupMap);
 
       const byRule = new Map<string, typeof matches>();

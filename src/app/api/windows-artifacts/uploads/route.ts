@@ -104,6 +104,16 @@ export async function POST(req: NextRequest) {
     const prefetchFiles = formData.getAll("prefetch").filter(isUploadedFile);
     prefetchFiles.forEach((file) => pending.push({ role: "prefetch", file, profileName: null }));
 
+    // LNK / Jump List files — same whole-folder-at-once pattern as Prefetch.
+    const lnkFiles = formData.getAll("lnk").filter(isUploadedFile);
+    lnkFiles.forEach((file) => pending.push({ role: "lnk", file, profileName: null }));
+
+    const jumplistAutomaticFiles = formData.getAll("jumplistAutomatic").filter(isUploadedFile);
+    jumplistAutomaticFiles.forEach((file) => pending.push({ role: "jumplist_automatic", file, profileName: null }));
+
+    const jumplistCustomFiles = formData.getAll("jumplistCustom").filter(isUploadedFile);
+    jumplistCustomFiles.forEach((file) => pending.push({ role: "jumplist_custom", file, profileName: null }));
+
     if (pending.length === 0) {
       return NextResponse.json({ error: "no_files", message: "Upload at least one artifact file (SYSTEM, SOFTWARE, NTUSER.DAT, or Amcache.hve)." }, { status: 400 });
     }
