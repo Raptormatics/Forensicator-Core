@@ -81,13 +81,12 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
 # tshark — PCAP Analysis's packet-dissection dependency (src/lib/pcap-analysis/tshark.ts).
 # python3-venv/python3-dev — RAM Analysis's Volatility3 + yara-python venv, below.
-# python3-libscca — Windows Artifact Analysis's Prefetch (.pf) parser
-# (src/lib/windows-artifacts/prefetch-parse.py). Installed as a system
-# package, NOT pip'd into the winartifacts venv below, because it links
-# against the compiled libscca1 C library — getPrefetchPythonPath()
-# resolves a bare "python3" off PATH for this reason, same convention as
-# getTsharkPath().
-apt-get install -y ca-certificates curl gnupg build-essential postgresql postgresql-contrib redis-server sudo tshark python3-venv python3-dev python3-libscca
+# python3-libscca (Windows Artifact Analysis's Prefetch dependency) is
+# installed separately by install-winartifacts-deps.sh below, not here —
+# that script also has to run from forensicator-update.sh on every Core
+# update (this line never runs again after first boot), so its install
+# logic lives in exactly one place rather than two copies that can drift.
+apt-get install -y ca-certificates curl gnupg build-essential postgresql postgresql-contrib redis-server sudo tshark python3-venv python3-dev
 
 echo "==> Installing Node.js 26.x (current LTS)"
 if ! command -v node >/dev/null || [[ "$(node -v)" != v26.* ]]; then
@@ -140,23 +139,8 @@ if [[ ! -x "${APP_DIR}/.venvs/volatility3/bin/vol" ]]; then
     || echo "WARNING: yara-python install failed — custom Yara signatures will be unavailable until installed manually"
 fi
 
-echo "==> Installing regipy, LnkParse3, olefile (Windows Artifact Analysis dependencies)"
-# Its own venv, not shared with Volatility3's — registry-hive/LNK/Jump-List
-# parsing has no runtime relationship to Volatility3/yara-python, see
-# src/lib/settings/system.ts's getWinArtifactsPythonPath(). regipy[full]
-# (not bare regipy) pulls in pyfwsi/pyfwps — libyal's own shell-item
-# bindings, needed for Shellbags (regipy's ntuser_shellbag_plugin/
-# usrclass_shellbag_plugin) — confirmed these ship as prebuilt manylinux
-# wheels, no system library needed, same as LnkParse3/olefile (both pure
-# Python). None of this phase's new dependencies need a system package,
-# unlike Phase 2's pyscca (see python3-libscca above).
-if [[ ! -x "${APP_DIR}/.venvs/winartifacts/bin/python3" ]]; then
-  runuser -u "$SERVICE_USER" -- bash -lc "
-    python3 -m venv '${APP_DIR}/.venvs/winartifacts' &&
-    '${APP_DIR}/.venvs/winartifacts/bin/pip' install --upgrade pip &&
-    '${APP_DIR}/.venvs/winartifacts/bin/pip' install 'regipy[full]' LnkParse3 olefile
-  " || echo "WARNING: regipy/LnkParse3/olefile install failed — Windows Artifact Analysis will be unavailable until installed manually"
-fi
+echo "==> Installing Windows Artifact Analysis dependencies (python3-libscca, regipy, LnkParse3, olefile)"
+APP_DIR="$APP_DIR" SERVICE_USER="$SERVICE_USER" bash "${APP_DIR}/deploy/install-winartifacts-deps.sh"
 
 if [[ "$IMAGE_BUILD" == "1" ]]; then
   # A separate, real (sudo, login-shell) OS account for actually managing

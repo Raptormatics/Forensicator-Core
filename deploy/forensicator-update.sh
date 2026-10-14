@@ -506,6 +506,20 @@ do_install() {
     # fix this mirrors.
     rebuild_app
 
+    # Core-owned system dependencies (python3-libscca, the winartifacts
+    # venv) for whichever Windows Artifact Analysis sub-features this
+    # release introduced or an earlier one already needed. Core's own
+    # provision.sh installs these too, but only runs once at first boot —
+    # an already-deployed instance updating in place never gets back here
+    # any other way, so without this call it would silently keep failing
+    # every Prefetch/registry/LNK/Jump List/Shellbag upload forever after
+    # updating to the version that first shipped this feature. Unlike
+    # install-system-deps.sh below (PCAP/RAM Analysis, an Enterprise
+    # overlay feature, only relevant when an overlay is applied), this
+    # runs unconditionally since Windows Artifact Analysis is plain Core.
+    set_progress "install" "Installing Windows Artifact Analysis system dependencies"
+    APP_DIR="$APP_DIR" SERVICE_USER="$SERVICE_USER" bash "${APP_DIR}/deploy/install-winartifacts-deps.sh"
+
     set_progress "install" "Running database migrations"
     runuser -u "$SERVICE_USER" -- bash -lc "cd '${APP_DIR}' && npx prisma migrate deploy"
 
