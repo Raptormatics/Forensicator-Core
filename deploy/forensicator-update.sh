@@ -294,6 +294,14 @@ merge_overlay_deps() {
     pkg.devDependencies = { ...pkg.devDependencies, ...(extra.devDependencies ?? {}) };
     fs.writeFileSync(process.env.PKG_FILE, JSON.stringify(pkg, null, 2) + "\n");
   '
+  # package-lock.json still only reflects Core's own deps at this point —
+  # rebuild_app()'s `npm ci` right after this (via apply_delta_files's
+  # caller) requires an EXACT match between package.json and the lockfile
+  # and fails outright otherwise ("Missing: X from lock file" for every
+  # overlay-added package and its transitive deps). --package-lock-only
+  # resolves and writes the new entries without touching node_modules —
+  # rebuild_app's own npm ci does that part right after.
+  (cd "$APP_DIR" && npm install --package-lock-only)
 }
 
 # Extracts an already-verified overlay package's release.tar.gz over
@@ -469,21 +477,26 @@ do_install() {
 
   # From here on, any failure triggers an automatic rollback to this backup.
   #
-  # This is an explicit `( set -e; ... )` subshell, not a `{ ... }` group —
-  # a deliberate, non-obvious choice. Bash suspends `errexit` for every
-  # command inside a `{ ... }` group whose own failure is "being tested"
-  # (which is exactly what `{ ... } || install_failed=1` does to the whole
-  # group) — not just for the group as a unit, but for every individual
-  # line inside it too. That meant a failure in the MIDDLE of this
-  # sequence (migrations, the overlay replay, anything but literally the
-  # last line) was silently ignored; only whichever command happened to be
-  # last determined install_failed. A subshell doesn't inherit that
-  # exemption for its own internal commands, so `set -e` inside it behaves
-  # normally — the first failing step inside aborts the subshell
-  # immediately, and its non-zero exit is what the outer `) ||` below
-  # actually catches. (This is what silently broke the database backup
-  # and the migration step both — see create_backup() and this function's
-  # own source $ENV_FILE above.)
+  # This block used to end in `) || install_failed=1` — looks harmless, but
+  # POSIX's own errexit rule says `-e` has no effect on a compound command
+  # (an `( ... )` subshell counts, same as a `{ ... }` group — a previous
+  # version of this comment claimed otherwise and was wrong) when that
+  # compound command is the left side of a `||` list. Confirmed directly:
+  # the exact same subshell body, run as a bare statement vs. as the left
+  # side of `||`, aborts correctly in the first case and runs every
+  # command to completion in the second, silently, with the subshell still
+  # reporting success. That's not hypothetical — it's exactly what
+  # happened on a real overlay apply: rebuild_app's npm ci failed, the
+  # migration after it failed too, the license-carryover step crashed with
+  # an uncaught TypeError — none of it stopped anything, because this
+  # whole block's `set -e` had been silently inert the entire time. Only
+  # the final `if ! health_check` caught it, because that's the one step
+  # here using an explicit `if` instead of leaning on errexit.
+  #
+  # Fixed by never letting the subshell be `||`'s left operand: run it as
+  # its own statement, then read $? immediately after — at that point
+  # nothing is "testing" it, so `-e` behaves normally for every command
+  # inside.
   local install_failed=0
   (
     set -e
@@ -560,7 +573,8 @@ do_install() {
       echo "Health check failed after install." >&2
       exit 1
     fi
-  ) || install_failed=1
+  )
+  if [[ $? -ne 0 ]]; then install_failed=1; fi
 
   if [[ "$install_failed" -eq 1 ]]; then
     set_progress "rollback" "Install failed — automatically rolling back to ${backup_id}"
@@ -623,8 +637,8 @@ do_overlay() {
   backup_id="$(create_backup "pre-overlay" "$overlay_version")"
   echo "Backup created: ${backup_id}"
 
-  # Explicit subshell, not a `{ ... }` group — same reasoning as
-  # do_install()'s own version of this, see the comment there.
+  # Same errexit-vs-`||` pitfall as do_install() — see the comment there.
+  # This subshell must never become the left operand of `||`.
   local install_failed=0
   (
     set -e
@@ -712,7 +726,8 @@ do_overlay() {
       echo "Health check failed after applying the overlay." >&2
       exit 1
     fi
-  ) || install_failed=1
+  )
+  if [[ $? -ne 0 ]]; then install_failed=1; fi
 
   if [[ "$install_failed" -eq 1 ]]; then
     set_progress "rollback" "Overlay apply failed — automatically rolling back to ${backup_id}"
