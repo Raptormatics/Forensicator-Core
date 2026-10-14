@@ -81,7 +81,13 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
 # tshark — PCAP Analysis's packet-dissection dependency (src/lib/pcap-analysis/tshark.ts).
 # python3-venv/python3-dev — RAM Analysis's Volatility3 + yara-python venv, below.
-apt-get install -y ca-certificates curl gnupg build-essential postgresql postgresql-contrib redis-server sudo tshark python3-venv python3-dev
+# python3-libscca — Windows Artifact Analysis's Prefetch (.pf) parser
+# (src/lib/windows-artifacts/prefetch-parse.py). Installed as a system
+# package, NOT pip'd into the winartifacts venv below, because it links
+# against the compiled libscca1 C library — getPrefetchPythonPath()
+# resolves a bare "python3" off PATH for this reason, same convention as
+# getTsharkPath().
+apt-get install -y ca-certificates curl gnupg build-essential postgresql postgresql-contrib redis-server sudo tshark python3-venv python3-dev python3-libscca
 
 echo "==> Installing Node.js 26.x (current LTS)"
 if ! command -v node >/dev/null || [[ "$(node -v)" != v26.* ]]; then

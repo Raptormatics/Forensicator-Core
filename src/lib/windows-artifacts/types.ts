@@ -14,7 +14,8 @@ export type WinArtifactFileRole =
   | "security_hive"
   | "ntuser_hive"
   | "amcache_hive"
-  | "usrclass_hive";
+  | "usrclass_hive"
+  | "prefetch";
 
 /** All normalized field names Windows Artifact rules can operate against —
  * mirrors RamField/PcapField's role, rooted in the heterogeneous

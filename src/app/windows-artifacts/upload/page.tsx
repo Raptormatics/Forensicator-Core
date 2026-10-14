@@ -41,6 +41,7 @@ export default function UploadWindowsArtifactsPage() {
   const [amcacheFile, setAmcacheFile] = useState<File | null>(null);
   const [ntuserFiles, setNtuserFiles] = useState<ProfileFile[]>([makeProfileFile()]);
   const [usrclassFiles, setUsrclassFiles] = useState<ProfileFile[]>([]);
+  const [prefetchFiles, setPrefetchFiles] = useState<File[]>([]);
   const [hostname, setHostname] = useState("");
   const [notes, setNotes] = useState("");
 
@@ -91,6 +92,7 @@ export default function UploadWindowsArtifactsPage() {
   function reset() {
     setSystemFile(null); setSoftwareFile(null); setSecurityFile(null); setAmcacheFile(null);
     setNtuserFiles([makeProfileFile()]); setUsrclassFiles([]);
+    setPrefetchFiles([]);
     setHostname(""); setNotes(""); setError("");
     setSelectedCase(null); setPhase("case");
     setUploadPercent(0); setResultId("");
@@ -99,9 +101,10 @@ export default function UploadWindowsArtifactsPage() {
   const totalBytes =
     (systemFile?.size ?? 0) + (softwareFile?.size ?? 0) + (securityFile?.size ?? 0) + (amcacheFile?.size ?? 0) +
     ntuserFiles.reduce((s, f) => s + (f.file?.size ?? 0), 0) +
-    usrclassFiles.reduce((s, f) => s + (f.file?.size ?? 0), 0);
+    usrclassFiles.reduce((s, f) => s + (f.file?.size ?? 0), 0) +
+    prefetchFiles.reduce((s, f) => s + f.size, 0);
 
-  const hasAnyFile = !!(systemFile || softwareFile || securityFile || amcacheFile || ntuserFiles.some(f => f.file) || usrclassFiles.some(f => f.file));
+  const hasAnyFile = !!(systemFile || softwareFile || securityFile || amcacheFile || ntuserFiles.some(f => f.file) || usrclassFiles.some(f => f.file) || prefetchFiles.length > 0);
 
   function handleSubmit() {
     if (!hasAnyFile || !selectedCase) return;
@@ -127,6 +130,9 @@ export default function UploadWindowsArtifactsPage() {
     }
     for (const f of usrclassFiles) {
       if (f.file) { form.append("usrclass", f.file); form.append("usrclassProfileName", f.profileName); }
+    }
+    for (const f of prefetchFiles) {
+      form.append("prefetch", f);
     }
 
     const xhr = new XMLHttpRequest();
@@ -340,6 +346,25 @@ export default function UploadWindowsArtifactsPage() {
               setFiles={setUsrclassFiles}
               profilePlaceholder="e.g. jsmith"
             />
+
+            <div>
+              <h2 className="text-sm font-semibold text-zinc-300 mb-3">
+                Prefetch (.pf files) <span className="text-zinc-600 font-normal">(optional — select every .pf file from C:\Windows\Prefetch at once)</span>
+              </h2>
+              <label className="flex items-center gap-3 rounded-lg border border-dashed border-zinc-700 px-3 py-2.5 text-sm text-zinc-400 hover:border-teal-600 hover:text-teal-400 cursor-pointer">
+                <FileIcon className="h-4 w-4 shrink-0" />
+                <span className="flex-1 min-w-0 truncate">
+                  {prefetchFiles.length > 0 ? `${prefetchFiles.length} .pf file${prefetchFiles.length === 1 ? "" : "s"} selected` : "Choose .pf files…"}
+                </span>
+                {prefetchFiles.length > 0 && (
+                  <button type="button" onClick={(e) => { e.preventDefault(); setPrefetchFiles([]); }} className="shrink-0 text-zinc-600 hover:text-red-400">
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                )}
+                <input type="file" multiple accept=".pf" className="hidden"
+                  onChange={(e) => setPrefetchFiles(Array.from(e.target.files ?? []))} />
+              </label>
+            </div>
 
             <div>
               <h2 className="text-sm font-semibold text-zinc-300 mb-3">

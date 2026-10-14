@@ -34,6 +34,7 @@ const ROLE_LABEL: Record<string, string> = {
   ntuser_hive: "NTUSER.DAT",
   amcache_hive: "Amcache.hve",
   usrclass_hive: "UsrClass.dat",
+  prefetch: "Prefetch",
 };
 
 export default function WindowsArtifactsPage() {

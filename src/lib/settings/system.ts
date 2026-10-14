@@ -130,9 +130,10 @@ export async function getWinArtifactsDir(): Promise<string> {
 
 /**
  * DB override > WIN_ARTIFACTS_PYTHON_PATH env var > <APP_DIR>/.venvs/winartifacts/bin/python3.
- * Windows Artifact Analysis's registry/Prefetch/shell-item parsers (regipy
- * etc.) live in their own venv, separate from Volatility3's — no runtime
- * relationship between the two toolsets, see deploy/provision.sh.
+ * Windows Artifact Analysis's registry parser (regipy) lives in its own
+ * venv, separate from Volatility3's — no runtime relationship between the
+ * two toolsets, see deploy/provision.sh. Prefetch parsing does NOT use
+ * this venv — see getPrefetchPythonPath() below.
  */
 export async function getWinArtifactsPythonPath(): Promise<string> {
   const settings = await getSystemSettings();
@@ -140,6 +141,26 @@ export async function getWinArtifactsPythonPath(): Promise<string> {
     settings?.winArtifactsPythonPath ??
     process.env.WIN_ARTIFACTS_PYTHON_PATH ??
     path.join(process.cwd(), ".venvs", "winartifacts", "bin", "python3")
+  );
+}
+
+/**
+ * DB override > PREFETCH_PYTHON_PATH env var > bare "python3" (resolved
+ * via PATH). Unlike regipy's own pip-installed venv, Prefetch parsing
+ * uses pyscca (libyal's libscca Python bindings), installed as the
+ * python3-libscca system package (see deploy/provision.sh) — it needs to
+ * link against the compiled libscca1 C library, which isn't something a
+ * venv's pip install reliably provides, so this resolves to the SYSTEM
+ * python3 (same "bare command on PATH" convention as getTsharkPath()),
+ * not an isolated venv path like getWinArtifactsPythonPath()/
+ * getVolatilityPath().
+ */
+export async function getPrefetchPythonPath(): Promise<string> {
+  const settings = await getSystemSettings();
+  return (
+    settings?.prefetchPythonPath ??
+    process.env.PREFETCH_PYTHON_PATH ??
+    "python3"
   );
 }
 

@@ -10,8 +10,9 @@ import { applyOperator } from "@/lib/rule-engine/operators";
 import { isIocRuleField, resolveIoc, getIocFieldValue, type IocLookupMap, type IocRuleField } from "@/lib/rule-engine/ioc-lookup";
 import type { WinArtifactField, WinArtifactRuleCondition } from "./types";
 import type { ShimcacheRow, AmcacheRow, UserAssistRow, BamRow, AutorunRow } from "./registry-engine";
+import type { PrefetchEntryRow } from "./prefetch-engine";
 
-export type WinArtifactSubjectKind = "shimcache" | "amcache" | "userassist" | "bam" | "autorun";
+export type WinArtifactSubjectKind = "shimcache" | "amcache" | "userassist" | "bam" | "autorun" | "prefetch" | "prefetch_reference";
 
 export interface WinArtifactRuleSubject {
   kind: WinArtifactSubjectKind;
@@ -31,6 +32,7 @@ export function buildSubjects(data: {
   userAssist: UserAssistRow[];
   bam: BamRow[];
   autoruns: AutorunRow[];
+  prefetch?: PrefetchEntryRow[];
 }): WinArtifactRuleSubject[] {
   const subjects: WinArtifactRuleSubject[] = [];
 
@@ -58,6 +60,17 @@ export function buildSubjects(data: {
       keyPath: r.keyPath,
       sid: null,
     });
+  }
+  // One "prefetch" subject per executable (reuses the existing LOLBin
+  // built-in rule against its bare exe name), plus one "prefetch_reference"
+  // subject per referenced/loaded file (reuses the existing Temp/Downloads
+  // built-in rule against each DLL's own path) — no Prefetch-specific
+  // built-in rules needed, both existing rules already apply for free.
+  for (const p of data.prefetch ?? []) {
+    subjects.push({ kind: "prefetch", refKey: p.executableName, path: p.executableName, sha1: null, runCount: p.runCount, category: null, valueName: null, keyPath: null, sid: null });
+    for (const ref of p.referencedFiles) {
+      subjects.push({ kind: "prefetch_reference", refKey: `${p.executableName}:${ref}`, path: ref, sha1: null, runCount: null, category: null, valueName: null, keyPath: null, sid: null });
+    }
   }
 
   return subjects;

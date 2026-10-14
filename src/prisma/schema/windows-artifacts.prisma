@@ -71,6 +71,7 @@ model WindowsArtifactFile {
   userAssistEntries UserAssistEntry[]
   bamEntries        BamEntry[]
   autorunEntries    AutorunEntry[]
+  prefetchEntries   PrefetchEntry[]
   findings          WindowsArtifactFinding[]
 
   createdAt DateTime  @default(now()) @map("created_at")
@@ -170,6 +171,27 @@ model AutorunEntry {
   @@index([fileId])
   @@index([category])
   @@map("autorun_entries")
+}
+
+// Phase 2 — one row per .pf file (one upload per executable; Prefetch has
+// no concept of "per user profile" the way NTUSER.DAT does).
+model PrefetchEntry {
+  id     String              @id @default(uuid()) @db.Uuid
+  fileId String              @map("file_id") @db.Uuid
+  file   WindowsArtifactFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  executableName  String     @map("executable_name") // bare exe name, e.g. "POWERSHELL.EXE" — Prefetch doesn't retain full invocation paths
+  runCount        Int?       @map("run_count")
+  lastRunTimes    DateTime[] @map("last_run_times") // up to 8 most-recent run timestamps on Vista+ format; just the one on XP format
+  firstRunTime    DateTime?  @map("first_run_time")  // earliest of lastRunTimes, precomputed for easy sort/filter
+  volumeSerials   String[]   @map("volume_serials")
+  referencedFiles String[]   @map("referenced_files") // loaded DLLs + other files referenced during execution
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([fileId])
+  @@index([executableName])
+  @@map("prefetch_entries")
 }
 
 model WindowsArtifactFinding {

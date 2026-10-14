@@ -289,6 +289,10 @@ model SystemSettings {
   // <APP_DIR>/.venvs/winartifacts/bin/python3 — its own venv, not shared
   // with Volatility3's (see deploy/provision.sh).
   winArtifactsPythonPath String? @map("win_artifacts_python_path")
+  // Path to the system python3 that has python3-libscca (pyscca) installed
+  // — Prefetch parsing uses the apt-installed libscca bindings, not the
+  // winartifacts venv (see getPrefetchPythonPath()'s own doc comment).
+  prefetchPythonPath String? @map("prefetch_python_path")
 
   // Critical-finding email alerts — one channel, one recipient address.
   // Off by default (no SMTP server is assumed to exist). Read fresh per

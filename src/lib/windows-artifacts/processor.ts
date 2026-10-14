@@ -8,19 +8,22 @@
  *
  * 1. Set file status "processing"
  * 2. Wipe prior partial rows for this file in a $transaction (BullMQ retry idempotency)
- * 3. Run registry-parse.py via runRegistryParse(), map rows by role
- * 4. Batch-insert Shimcache/Amcache/UserAssist/BAM/Autorun rows
+ * 3. Run the role-appropriate parser (registry-parse.py for hive roles,
+ *    prefetch-parse.py for "prefetch"), map rows
+ * 4. Batch-insert the role-appropriate rows
  * 5. Upsert global IocRecord for Amcache SHA1 hashes, trigger autoEnrichNewIocs()
+ *    (registry roles only — Prefetch has no hash to upsert)
  * 6. Load enabled WindowsArtifactRule (org-scoped OR global) -> rule engine -> WindowsArtifactFinding rows
  * 7. notifyCriticalFindings() best-effort
  * 8. Update file status "ready" + findingCount; recompute parent upload's findingCount
  */
 import { prisma } from "@/lib/db/prisma";
-import { getWinArtifactsPythonPath } from "@/lib/settings/system";
+import { getWinArtifactsPythonPath, getPrefetchPythonPath } from "@/lib/settings/system";
 import {
   runRegistryParse, mapShimcacheEntries, mapAmcacheEntries, mapBamEntries,
   type RegistryRole,
 } from "./registry-engine";
+import { runPrefetchParse, type PrefetchEntryRow } from "./prefetch-engine";
 import { buildSubjects, runRules, type StoredWinArtifactRule } from "./rule-engine";
 import { isEnriched, type IocLookupMap } from "@/lib/rule-engine/ioc-lookup";
 import { autoEnrichNewIocs, type NewIocRecord } from "@/lib/intelligence/auto-enrich";
@@ -43,118 +46,162 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
       prisma.userAssistEntry.deleteMany({ where: { fileId } }),
       prisma.bamEntry.deleteMany({ where: { fileId } }),
       prisma.autorunEntry.deleteMany({ where: { fileId } }),
+      prisma.prefetchEntry.deleteMany({ where: { fileId } }),
       prisma.windowsArtifactFinding.deleteMany({ where: { fileId } }),
     ]);
 
-    if (!REGISTRY_ROLES.includes(file.role as RegistryRole)) {
-      // Prefetch/LNK/JumpList roles are routed here in later phases — not
-      // yet implemented, so a file uploaded with one of those roles today
+    let findingTotal = 0;
+    let shimcacheRows: ReturnType<typeof mapShimcacheEntries> = [];
+    let amcacheRows: ReturnType<typeof mapAmcacheEntries> = [];
+    let bamRows: ReturnType<typeof mapBamEntries> = [];
+    let userAssistRows: import("./registry-engine").UserAssistRow[] = [];
+    let autorunRows: import("./registry-engine").AutorunRow[] = [];
+    let prefetchRows: PrefetchEntryRow[] = [];
+    const iocLookupMap: IocLookupMap = new Map();
+
+    if (REGISTRY_ROLES.includes(file.role as RegistryRole)) {
+      // 3. Run the registry parser
+      const pythonPath = await getWinArtifactsPythonPath();
+      const result = await runRegistryParse(pythonPath, filePath, file.role as RegistryRole);
+
+      if (result.status === "not_installed") {
+        throw new Error("regipy is not installed in the Windows Artifacts venv — see Settings > Windows Artifact Storage Directory.");
+      }
+      if (result.status === "timeout") {
+        throw new Error("Registry parsing timed out.");
+      }
+      if (result.status === "error") {
+        throw new Error(result.message);
+      }
+
+      for (const err of result.scriptErrors) {
+        console.warn(`[windows-artifacts] registry-parse.py reported: ${err}`);
+      }
+
+      // 4. Map + batch-insert by role
+      shimcacheRows = file.role === "system_hive" ? mapShimcacheEntries(result.pluginEntries) : [];
+      amcacheRows = file.role === "amcache_hive" ? mapAmcacheEntries(result.pluginEntries) : [];
+      bamRows = file.role === "system_hive" ? mapBamEntries(result.pluginEntries) : [];
+      userAssistRows = result.userAssist;
+      autorunRows = result.autoruns;
+
+      if (shimcacheRows.length > 0) {
+        await prisma.shimcacheEntry.createMany({
+          data: shimcacheRows.map((r) => ({
+            fileId, path: r.path,
+            lastModified: r.lastModified ? new Date(r.lastModified) : undefined,
+            executionFlag: r.executionFlag ?? undefined,
+            order: r.order,
+          })),
+        });
+      }
+      if (amcacheRows.length > 0) {
+        await prisma.amcacheEntry.createMany({
+          data: amcacheRows.map((r) => ({
+            fileId, path: r.path, sha1: r.sha1 ?? undefined,
+            fileSizeBytes: r.fileSizeBytes ?? undefined,
+            firstSeen: r.firstSeen ? new Date(r.firstSeen) : undefined,
+            publisher: r.publisher ?? undefined,
+          })),
+        });
+      }
+      if (userAssistRows.length > 0) {
+        await prisma.userAssistEntry.createMany({
+          data: userAssistRows.map((r) => ({
+            fileId, programPath: r.programPath,
+            runCount: r.runCount ?? undefined,
+            lastExecuted: r.lastExecuted ? new Date(r.lastExecuted) : undefined,
+            focusCount: r.focusCount ?? undefined,
+            focusTimeMs: r.focusTimeMs ?? undefined,
+          })),
+        });
+      }
+      if (bamRows.length > 0) {
+        await prisma.bamEntry.createMany({
+          data: bamRows.map((r) => ({
+            fileId, sid: r.sid, path: r.path,
+            lastExecuted: r.lastExecuted ? new Date(r.lastExecuted) : undefined,
+          })),
+        });
+      }
+      if (autorunRows.length > 0) {
+        await prisma.autorunEntry.createMany({
+          data: autorunRows.map((r) => ({
+            fileId, hiveSource: r.hiveSource, keyPath: r.keyPath,
+            valueName: r.valueName ?? undefined, valueData: r.valueData, category: r.category,
+          })),
+        });
+      }
+
+      // 5. Amcache SHA1 -> global IocRecord, so the rule engine's ioc_known
+      // condition and the broader threat-intel DB both see these hashes.
+      const now = new Date();
+      const newIocRecords: NewIocRecord[] = [];
+      const distinctHashes = new Set(amcacheRows.map((r) => r.sha1).filter((h): h is string => !!h));
+
+      for (const hash of distinctHashes) {
+        try {
+          const existing = await prisma.iocRecord.findUnique({ where: { value: hash } });
+          if (existing) {
+            iocLookupMap.set(hash, { reputation: existing.reputation, threatType: existing.threatType, malwareFamily: existing.malwareFamily });
+          }
+          const rec = await prisma.iocRecord.upsert({
+            where: { value: hash },
+            create: { value: hash, type: "hash", firstSeen: now, lastSeen: now },
+            update: { lastSeen: now },
+          });
+          if (!existing) newIocRecords.push({ id: rec.id, value: rec.value, type: "hash" });
+        } catch (iocErr) {
+          console.warn("[windows-artifacts] IocRecord row skipped:", hash, iocErr instanceof Error ? iocErr.message : iocErr);
+        }
+      }
+      if (newIocRecords.length > 0) {
+        await autoEnrichNewIocs(newIocRecords, file.upload.organizationId ?? undefined).catch((err) =>
+          console.warn("[windows-artifacts] Auto-enrichment skipped:", err instanceof Error ? err.message : err)
+        );
+      }
+    } else if (file.role === "prefetch") {
+      // 3. Run the Prefetch parser (system python3 + pyscca, not the
+      // winartifacts venv — see getPrefetchPythonPath()'s own doc comment).
+      const pythonPath = await getPrefetchPythonPath();
+      const result = await runPrefetchParse(pythonPath, filePath);
+
+      if (result.status === "not_installed") {
+        throw new Error("pyscca (python3-libscca) is not installed — see deploy/provision.sh.");
+      }
+      if (result.status === "timeout") {
+        throw new Error("Prefetch parsing timed out.");
+      }
+      if (result.status === "error") {
+        throw new Error(result.message);
+      }
+      for (const err of result.scriptErrors) {
+        console.warn(`[windows-artifacts] prefetch-parse.py reported: ${err}`);
+      }
+
+      // 4. One PrefetchEntry row per file (a .pf file is one executable).
+      if (result.entry) {
+        prefetchRows = [result.entry];
+        await prisma.prefetchEntry.create({
+          data: {
+            fileId,
+            executableName: result.entry.executableName,
+            runCount: result.entry.runCount ?? undefined,
+            lastRunTimes: result.entry.lastRunTimes.map((t) => new Date(t)).filter((d) => !isNaN(d.getTime())),
+            firstRunTime: result.entry.lastRunTimes.length > 0
+              ? new Date(Math.min(...result.entry.lastRunTimes.map((t) => new Date(t).getTime()).filter((n) => !isNaN(n))))
+              : undefined,
+            volumeSerials: result.entry.volumeSerials,
+            referencedFiles: result.entry.referencedFiles,
+          },
+        });
+      }
+      // No IOC upsert step — Prefetch carries no hash to look up.
+    } else {
+      // LNK/JumpList roles are routed here in Phase 3 — not yet
+      // implemented, so a file uploaded with one of those roles today
       // just fails cleanly rather than silently doing nothing.
       throw new Error(`Unsupported artifact role (not yet implemented): ${file.role}`);
-    }
-
-    // 3. Run the registry parser
-    const pythonPath = await getWinArtifactsPythonPath();
-    const result = await runRegistryParse(pythonPath, filePath, file.role as RegistryRole);
-
-    let findingTotal = 0;
-
-    if (result.status === "not_installed") {
-      throw new Error("regipy is not installed in the Windows Artifacts venv — see Settings > Windows Artifact Storage Directory.");
-    }
-    if (result.status === "timeout") {
-      throw new Error("Registry parsing timed out.");
-    }
-    if (result.status === "error") {
-      throw new Error(result.message);
-    }
-
-    for (const err of result.scriptErrors) {
-      console.warn(`[windows-artifacts] registry-parse.py reported: ${err}`);
-    }
-
-    // 4. Map + batch-insert by role
-    const shimcacheRows = file.role === "system_hive" ? mapShimcacheEntries(result.pluginEntries) : [];
-    const amcacheRows = file.role === "amcache_hive" ? mapAmcacheEntries(result.pluginEntries) : [];
-    const bamRows = file.role === "system_hive" ? mapBamEntries(result.pluginEntries) : [];
-    const userAssistRows = result.userAssist;
-    const autorunRows = result.autoruns;
-
-    if (shimcacheRows.length > 0) {
-      await prisma.shimcacheEntry.createMany({
-        data: shimcacheRows.map((r) => ({
-          fileId, path: r.path,
-          lastModified: r.lastModified ? new Date(r.lastModified) : undefined,
-          executionFlag: r.executionFlag ?? undefined,
-          order: r.order,
-        })),
-      });
-    }
-    if (amcacheRows.length > 0) {
-      await prisma.amcacheEntry.createMany({
-        data: amcacheRows.map((r) => ({
-          fileId, path: r.path, sha1: r.sha1 ?? undefined,
-          fileSizeBytes: r.fileSizeBytes ?? undefined,
-          firstSeen: r.firstSeen ? new Date(r.firstSeen) : undefined,
-          publisher: r.publisher ?? undefined,
-        })),
-      });
-    }
-    if (userAssistRows.length > 0) {
-      await prisma.userAssistEntry.createMany({
-        data: userAssistRows.map((r) => ({
-          fileId, programPath: r.programPath,
-          runCount: r.runCount ?? undefined,
-          lastExecuted: r.lastExecuted ? new Date(r.lastExecuted) : undefined,
-          focusCount: r.focusCount ?? undefined,
-          focusTimeMs: r.focusTimeMs ?? undefined,
-        })),
-      });
-    }
-    if (bamRows.length > 0) {
-      await prisma.bamEntry.createMany({
-        data: bamRows.map((r) => ({
-          fileId, sid: r.sid, path: r.path,
-          lastExecuted: r.lastExecuted ? new Date(r.lastExecuted) : undefined,
-        })),
-      });
-    }
-    if (autorunRows.length > 0) {
-      await prisma.autorunEntry.createMany({
-        data: autorunRows.map((r) => ({
-          fileId, hiveSource: r.hiveSource, keyPath: r.keyPath,
-          valueName: r.valueName ?? undefined, valueData: r.valueData, category: r.category,
-        })),
-      });
-    }
-
-    // 5. Amcache SHA1 -> global IocRecord, so the rule engine's ioc_known
-    // condition and the broader threat-intel DB both see these hashes.
-    const now = new Date();
-    const iocLookupMap: IocLookupMap = new Map();
-    const newIocRecords: NewIocRecord[] = [];
-    const distinctHashes = new Set(amcacheRows.map((r) => r.sha1).filter((h): h is string => !!h));
-
-    for (const hash of distinctHashes) {
-      try {
-        const existing = await prisma.iocRecord.findUnique({ where: { value: hash } });
-        if (existing) {
-          iocLookupMap.set(hash, { reputation: existing.reputation, threatType: existing.threatType, malwareFamily: existing.malwareFamily });
-        }
-        const rec = await prisma.iocRecord.upsert({
-          where: { value: hash },
-          create: { value: hash, type: "hash", firstSeen: now, lastSeen: now },
-          update: { lastSeen: now },
-        });
-        if (!existing) newIocRecords.push({ id: rec.id, value: rec.value, type: "hash" });
-      } catch (iocErr) {
-        console.warn("[windows-artifacts] IocRecord row skipped:", hash, iocErr instanceof Error ? iocErr.message : iocErr);
-      }
-    }
-    if (newIocRecords.length > 0) {
-      await autoEnrichNewIocs(newIocRecords, file.upload.organizationId ?? undefined).catch((err) =>
-        console.warn("[windows-artifacts] Auto-enrichment skipped:", err instanceof Error ? err.message : err)
-      );
     }
 
     // 6. Analyst-defined rules (org-scoped OR global)
@@ -172,7 +219,7 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
     const detailPath = `/windows-artifacts/${file.uploadId}`;
 
     if (rules.length > 0) {
-      const subjects = buildSubjects({ shimcache: shimcacheRows, amcache: amcacheRows, userAssist: userAssistRows, bam: bamRows, autoruns: autorunRows });
+      const subjects = buildSubjects({ shimcache: shimcacheRows, amcache: amcacheRows, userAssist: userAssistRows, bam: bamRows, autoruns: autorunRows, prefetch: prefetchRows });
       const matches = runRules(rules as unknown as StoredWinArtifactRule[], subjects, iocLookupMap);
 
       const byRule = new Map<string, typeof matches>();

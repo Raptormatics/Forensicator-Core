@@ -99,6 +99,11 @@ export async function POST(req: NextRequest) {
     const usrclassNames = formData.getAll("usrclassProfileName").map((v) => String(v));
     usrclassFiles.forEach((file, i) => pending.push({ role: "usrclass_hive", file, profileName: usrclassNames[i]?.trim() || null }));
 
+    // Prefetch .pf files — a whole folder's worth collected at once, no
+    // per-file profile pairing needed (unlike NTUSER, which is per-user).
+    const prefetchFiles = formData.getAll("prefetch").filter(isUploadedFile);
+    prefetchFiles.forEach((file) => pending.push({ role: "prefetch", file, profileName: null }));
+
     if (pending.length === 0) {
       return NextResponse.json({ error: "no_files", message: "Upload at least one artifact file (SYSTEM, SOFTWARE, NTUSER.DAT, or Amcache.hve)." }, { status: 400 });
     }
