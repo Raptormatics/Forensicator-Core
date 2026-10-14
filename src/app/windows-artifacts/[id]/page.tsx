@@ -99,6 +99,12 @@ export default function WindowsArtifactDetailPage() {
 
   const { upload, shimcache, amcache, userAssist, bam, autoruns, prefetch, lnk, jumpList, shellbags, findings } = data;
 
+  // filename carries the source subfolder when the upload form's folder
+  // picker was used (e.g. "FAVOUR/Desktop/foo.lnk") — surfaced as a Source
+  // column below so LNK/Jump List entries stay traceable to which
+  // Desktop/Links/OneDrive/profile folder they actually came from.
+  const fileNameById = new Map(upload.files.map((f) => [f.id, f.filename]));
+
   const TABS: { key: Tab; label: string; count: number }[] = [
     { key: "overview", label: "Overview", count: upload.files.length },
     { key: "shimcache", label: "Shimcache", count: shimcache.length },
@@ -260,6 +266,7 @@ export default function WindowsArtifactDetailPage() {
             empty="No LNK entries — upload one or more .lnk files to populate this tab."
             columns={[
               { header: "Target", wrap: true, csv: (r) => r.targetPath ?? "", render: (r) => <span className="font-mono text-xs">{r.targetPath ?? "—"}</span> },
+              { header: "Source", wrap: true, csv: (r) => fileNameById.get(r.fileId) ?? "", render: (r) => <span className="font-mono text-xs text-zinc-500">{fileNameById.get(r.fileId) ?? "—"}</span> },
               { header: "Created", csv: (r) => r.creationTime ? formatDateTime(new Date(r.creationTime)) : "", render: (r) => r.creationTime ? formatDateTime(new Date(r.creationTime)) : "—" },
               { header: "Accessed", csv: (r) => r.accessTime ? formatDateTime(new Date(r.accessTime)) : "", render: (r) => r.accessTime ? formatDateTime(new Date(r.accessTime)) : "—" },
               { header: "Volume Serial", wrap: true, csv: (r) => r.driveSerialNumber ?? r.netName ?? "", render: (r) => <span className="font-mono text-xs text-zinc-500">{r.driveSerialNumber ?? r.netName ?? "—"}</span> },
@@ -277,6 +284,7 @@ export default function WindowsArtifactDetailPage() {
             columns={[
               { header: "Target", wrap: true, csv: (r) => r.targetPath ?? "", render: (r) => <span className="font-mono text-xs">{r.targetPath ?? "—"}</span> },
               { header: "Source", csv: (r) => r.source, render: (r) => <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-xs text-zinc-400 capitalize">{r.source}</span> },
+              { header: "Source File", wrap: true, csv: (r) => fileNameById.get(r.fileId) ?? "", render: (r) => <span className="font-mono text-xs text-zinc-500">{fileNameById.get(r.fileId) ?? "—"}</span> },
               { header: "App ID", wrap: true, csv: (r) => r.appId ?? "", render: (r) => <span className="font-mono text-xs text-zinc-500">{r.appId ?? "—"}</span> },
               { header: "Last Accessed", csv: (r) => r.lastAccessed ? formatDateTime(new Date(r.lastAccessed)) : "", render: (r) => r.lastAccessed ? formatDateTime(new Date(r.lastAccessed)) : "—" },
               { header: "Rank", csv: (r) => String(r.accessRank ?? ""), render: (r) => r.accessRank ?? "—" },

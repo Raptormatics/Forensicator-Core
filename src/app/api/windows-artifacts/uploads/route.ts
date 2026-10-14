@@ -83,7 +83,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "case_closed", message: "This case is closed and cannot accept new uploads. Reopen it first." }, { status: 403 });
     }
 
-    type PendingFile = { role: WinArtifactFileRole; file: File; profileName: string | null };
+    type PendingFile = { role: WinArtifactFileRole; file: File; profileName: string | null; relativePath?: string | null };
     const pending: PendingFile[] = [];
 
     for (const { field, role } of SINGLE_FILE_FIELDS) {
@@ -104,15 +104,23 @@ export async function POST(req: NextRequest) {
     const prefetchFiles = formData.getAll("prefetch").filter(isUploadedFile);
     prefetchFiles.forEach((file) => pending.push({ role: "prefetch", file, profileName: null }));
 
-    // LNK / Jump List files — same whole-folder-at-once pattern as Prefetch.
+    // LNK / Jump List files — the collector spreads these across several
+    // subfolders (LNK under Desktop/Links/OneDrive/etc., Jump Lists under
+    // one subfolder per user profile), so the upload form may send a
+    // relative path (via its own folder picker) alongside each file —
+    // kept as the stored filename instead of collapsing to the bare name,
+    // which also avoids same-named files from different folders colliding.
     const lnkFiles = formData.getAll("lnk").filter(isUploadedFile);
-    lnkFiles.forEach((file) => pending.push({ role: "lnk", file, profileName: null }));
+    const lnkPaths = formData.getAll("lnkRelativePath").map((v) => String(v));
+    lnkFiles.forEach((file, i) => pending.push({ role: "lnk", file, profileName: null, relativePath: lnkPaths[i] || null }));
 
     const jumplistAutomaticFiles = formData.getAll("jumplistAutomatic").filter(isUploadedFile);
-    jumplistAutomaticFiles.forEach((file) => pending.push({ role: "jumplist_automatic", file, profileName: null }));
+    const jumplistAutomaticPaths = formData.getAll("jumplistAutomaticRelativePath").map((v) => String(v));
+    jumplistAutomaticFiles.forEach((file, i) => pending.push({ role: "jumplist_automatic", file, profileName: null, relativePath: jumplistAutomaticPaths[i] || null }));
 
     const jumplistCustomFiles = formData.getAll("jumplistCustom").filter(isUploadedFile);
-    jumplistCustomFiles.forEach((file) => pending.push({ role: "jumplist_custom", file, profileName: null }));
+    const jumplistCustomPaths = formData.getAll("jumplistCustomRelativePath").map((v) => String(v));
+    jumplistCustomFiles.forEach((file, i) => pending.push({ role: "jumplist_custom", file, profileName: null, relativePath: jumplistCustomPaths[i] || null }));
 
     if (pending.length === 0) {
       return NextResponse.json({ error: "no_files", message: "Upload at least one artifact file (SYSTEM, SOFTWARE, NTUSER.DAT, or Amcache.hve)." }, { status: 400 });
@@ -145,7 +153,7 @@ export async function POST(req: NextRequest) {
         data: {
           uploadId: upload.id,
           role: p.role,
-          filename: p.file.name,
+          filename: p.relativePath || p.file.name,
           fileSize: buffer.length,
           sha256,
           status: "queued",

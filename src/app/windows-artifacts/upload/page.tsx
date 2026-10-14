@@ -143,14 +143,22 @@ export default function UploadWindowsArtifactsPage() {
     for (const f of prefetchFiles) {
       form.append("prefetch", f);
     }
+    // A folder-picked file carries webkitRelativePath (e.g.
+    // "FAVOUR/Desktop/foo.lnk") — sent alongside the file itself so the
+    // server can keep that folder context instead of collapsing every
+    // file down to its bare name (which also silently collides when two
+    // different source folders happen to contain a same-named file).
     for (const f of lnkFiles) {
       form.append("lnk", f);
+      form.append("lnkRelativePath", f.webkitRelativePath || f.name);
     }
     for (const f of jumplistAutomaticFiles) {
       form.append("jumplistAutomatic", f);
+      form.append("jumplistAutomaticRelativePath", f.webkitRelativePath || f.name);
     }
     for (const f of jumplistCustomFiles) {
       form.append("jumplistCustom", f);
+      form.append("jumplistCustomRelativePath", f.webkitRelativePath || f.name);
     }
 
     const xhr = new XMLHttpRequest();
@@ -376,29 +384,32 @@ export default function UploadWindowsArtifactsPage() {
 
             <MultiFilePicker
               title="LNK Files (.lnk)"
-              hint="individual shortcuts, e.g. from Recent Items"
+              hint="individual shortcuts — spread across Desktop/Links/OneDrive/Recent Items; use &quot;Choose folder&quot; to grab them all at once"
               accept=".lnk"
               label=".lnk file"
               files={lnkFiles}
               setFiles={setLnkFiles}
+              allowFolder
             />
 
             <MultiFilePicker
               title="Jump Lists — Automatic (.automaticDestinations-ms)"
-              hint="from %AppData%\Roaming\Microsoft\Windows\Recent\AutomaticDestinations"
+              hint="from %AppData%\Roaming\Microsoft\Windows\Recent\AutomaticDestinations — one subfolder per user profile"
               accept=".automaticDestinations-ms"
               label="file"
               files={jumplistAutomaticFiles}
               setFiles={setJumplistAutomaticFiles}
+              allowFolder
             />
 
             <MultiFilePicker
               title="Jump Lists — Custom (.customDestinations-ms)"
-              hint="from %AppData%\Roaming\Microsoft\Windows\Recent\CustomDestinations"
+              hint="from %AppData%\Roaming\Microsoft\Windows\Recent\CustomDestinations — one subfolder per user profile"
               accept=".customDestinations-ms"
               label="file"
               files={jumplistCustomFiles}
               setFiles={setJumplistCustomFiles}
+              allowFolder
             />
 
             <div>
@@ -437,7 +448,7 @@ export default function UploadWindowsArtifactsPage() {
 }
 
 function MultiFilePicker({
-  title, hint, accept, label, files, setFiles,
+  title, hint, accept, label, files, setFiles, allowFolder,
 }: {
   title: string;
   hint: string;
@@ -445,25 +456,61 @@ function MultiFilePicker({
   label: string;
   files: File[];
   setFiles: (files: File[]) => void;
+  /** Collector output for this artifact type can be spread across several
+   * subfolders (e.g. LNK files under Desktop/Links/OneDrive, or Jump Lists
+   * under one subfolder per user profile) — a plain multi-select file
+   * picker can only grab files from one folder per dialog. When set, this
+   * adds a second "Choose folder…" picker that recursively collects every
+   * matching file from a chosen folder and its subfolders in one action. */
+  allowFolder?: boolean;
 }) {
+  const acceptExts = accept.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+  function filterByAccept(list: File[]): File[] {
+    if (acceptExts.length === 0) return list;
+    return list.filter((f) => acceptExts.some((ext) => f.name.toLowerCase().endsWith(ext)));
+  }
+
   return (
     <div>
       <h2 className="text-sm font-semibold text-zinc-300 mb-3">
         {title} <span className="text-zinc-600 font-normal">(optional — {hint})</span>
       </h2>
-      <label className="flex items-center gap-3 rounded-lg border border-dashed border-zinc-700 px-3 py-2.5 text-sm text-zinc-400 hover:border-teal-600 hover:text-teal-400 cursor-pointer">
-        <FileIcon className="h-4 w-4 shrink-0" />
-        <span className="flex-1 min-w-0 truncate">
-          {files.length > 0 ? `${files.length} ${label}${files.length === 1 ? "" : "s"} selected` : `Choose ${label}s…`}
-        </span>
-        {files.length > 0 && (
-          <button type="button" onClick={(e) => { e.preventDefault(); setFiles([]); }} className="shrink-0 text-zinc-600 hover:text-red-400">
-            <X className="h-3.5 w-3.5" />
-          </button>
+      <div className="flex flex-col gap-2 sm:flex-row">
+        <label className="flex flex-1 items-center gap-3 rounded-lg border border-dashed border-zinc-700 px-3 py-2.5 text-sm text-zinc-400 hover:border-teal-600 hover:text-teal-400 cursor-pointer">
+          <FileIcon className="h-4 w-4 shrink-0" />
+          <span className="flex-1 min-w-0 truncate">
+            {files.length > 0 ? `${files.length} ${label}${files.length === 1 ? "" : "s"} selected` : `Choose ${label}s…`}
+          </span>
+          {files.length > 0 && (
+            <button type="button" onClick={(e) => { e.preventDefault(); setFiles([]); }} className="shrink-0 text-zinc-600 hover:text-red-400">
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+          <input type="file" multiple accept={accept} className="hidden"
+            onChange={(e) => setFiles(filterByAccept(Array.from(e.target.files ?? [])))} />
+        </label>
+        {allowFolder && (
+          <label
+            title="Recursively collects every matching file from the chosen folder and its subfolders"
+            className="flex items-center justify-center gap-2 rounded-lg border border-dashed border-zinc-700 px-3 py-2.5 text-sm text-zinc-400 hover:border-teal-600 hover:text-teal-400 cursor-pointer sm:w-44"
+          >
+            <Folder className="h-4 w-4 shrink-0" />
+            <span>Choose folder…</span>
+            <input
+              type="file"
+              multiple
+              className="hidden"
+              ref={(el) => {
+                // webkitdirectory/directory aren't part of React's typed
+                // input props — set directly so TypeScript doesn't need a
+                // cast, and the directory-picking behavior still applies.
+                if (el) { el.setAttribute("webkitdirectory", ""); el.setAttribute("directory", ""); }
+              }}
+              onChange={(e) => setFiles(filterByAccept(Array.from(e.target.files ?? [])))}
+            />
+          </label>
         )}
-        <input type="file" multiple accept={accept} className="hidden"
-          onChange={(e) => setFiles(Array.from(e.target.files ?? []))} />
-      </label>
+      </div>
     </div>
   );
 }

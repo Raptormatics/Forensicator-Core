@@ -17,6 +17,7 @@
  * 7. notifyCriticalFindings() best-effort
  * 8. Update file status "ready" + findingCount; recompute parent upload's findingCount
  */
+import path from "path";
 import { prisma } from "@/lib/db/prisma";
 import { getWinArtifactsPythonPath, getPrefetchPythonPath } from "@/lib/settings/system";
 import {
@@ -273,7 +274,11 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
           workingDirectory: r.workingDirectory, lastAccessed: r.accessTime,
           accessRank: null, pinned: null, machineName: null,
         }));
-        const appId = file.filename.replace(/\.customDestinations-ms$/i, "");
+        // path.basename() — file.filename may carry a folder-picker's relative
+        // path (e.g. "FAVOUR/abc123.customDestinations-ms") now that uploads
+        // can preserve per-profile subfolder context; the AppID hash itself
+        // is always just the bare filename's stem.
+        const appId = path.basename(file.filename).replace(/\.customDestinations-ms$/i, "");
         if (jumpListRows.length > 0) {
           await prisma.jumpListEntry.createMany({
             data: jumpListRows.map((r) => ({
@@ -312,7 +317,7 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
       // (e.g. "5f7b5f1e01b83767.automaticDestinations-ms") — not resolved
       // to a friendly app name, no attempt at hand-maintaining the public
       // AppID-to-app lookup table.
-      const appId = file.filename.replace(/\.automaticDestinations-ms$/i, "");
+      const appId = path.basename(file.filename).replace(/\.automaticDestinations-ms$/i, "");
       if (jumpListRows.length > 0) {
         await prisma.jumpListEntry.createMany({
           data: jumpListRows.map((r) => ({
