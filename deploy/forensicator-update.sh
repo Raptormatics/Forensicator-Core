@@ -757,6 +757,16 @@ do_overlay() {
     }, null, 2));
   '
   cp "$pkg" "$DELTA_CACHE_FPK"
+  # DELTA_STATE_FILE has to be readable by the app itself (GET
+  # /api/admin/updates/status reads it server-side, running as
+  # SERVICE_USER, to show the installed overlay version and compute
+  # whether a newer one is available) — chmod 600 alone defaults to
+  # root:root since this whole script runs as root, which silently made
+  # every read fail and getDeltaState() fall back to "no overlay
+  # applied", regardless of the real state on disk. DELTA_CACHE_FPK has
+  # no such need (only this script itself re-reads it, for the replay-
+  # after-a-Core-update step above), so it stays root-only.
+  chown "${SERVICE_USER}:${SERVICE_USER}" "$DELTA_STATE_FILE"
   chmod 600 "$DELTA_STATE_FILE" "$DELTA_CACHE_FPK"
 
   set_progress "complete" "Enterprise overlay applied (v${overlay_version})."
