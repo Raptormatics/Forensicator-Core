@@ -165,6 +165,24 @@ export async function getPrefetchPythonPath(): Promise<string> {
 }
 
 /**
+ * DB override > WIN_ARTIFACTS_SYSTEM_PYTHON_PATH env var > bare "python3".
+ * $MFT (pyfsntfs/libfsntfs) and SRUDB.dat (pyesedb/libesedb) parsing both
+ * link compiled libyal C libraries, same reasoning as
+ * getPrefetchPythonPath() — not the winartifacts venv. Shared by both
+ * ($MFT and SRUM, not Prefetch) since deploy/install-winartifacts-deps.sh
+ * installs them together and they have identical requirements; $UsnJrnl:$J
+ * needs no C library at all (hand-rolled struct parsing in the venv).
+ */
+export async function getWinArtifactsSystemPythonPath(): Promise<string> {
+  const settings = await getSystemSettings();
+  return (
+    settings?.winArtifactsSystemPythonPath ??
+    process.env.WIN_ARTIFACTS_SYSTEM_PYTHON_PATH ??
+    "python3"
+  );
+}
+
+/**
  * Forensicator AI provider config — DB-backed, schema defaults cover an
  * unconfigured instance. Decrypts the stored API key (if any) so callers
  * get something directly usable; never returns aiApiKeyEncrypted itself.

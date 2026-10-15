@@ -23,6 +23,8 @@ const SINGLE_FILE_FIELDS: { field: string; role: WinArtifactFileRole }[] = [
   { field: "software", role: "software_hive" },
   { field: "security", role: "security_hive" },
   { field: "amcache", role: "amcache_hive" },
+  { field: "mft", role: "mft" },
+  { field: "srudb", role: "srum_db" },
 ];
 
 function isUploadedFile(v: FormDataEntryValue | null): v is File {
@@ -83,7 +85,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "case_closed", message: "This case is closed and cannot accept new uploads. Reopen it first." }, { status: 403 });
     }
 
-    type PendingFile = { role: WinArtifactFileRole; file: File; profileName: string | null; relativePath?: string | null };
+    type PendingFile = { role: WinArtifactFileRole; file: File; profileName: string | null; relativePath?: string | null; journalMetadataText?: string | null };
     const pending: PendingFile[] = [];
 
     for (const { field, role } of SINGLE_FILE_FIELDS) {
@@ -122,6 +124,17 @@ export async function POST(req: NextRequest) {
     const jumplistCustomPaths = formData.getAll("jumplistCustomRelativePath").map((v) => String(v));
     jumplistCustomFiles.forEach((file, i) => pending.push({ role: "jumplist_custom", file, profileName: null, relativePath: jumplistCustomPaths[i] || null }));
 
+    // $UsnJrnl:$J — the collector's own fsutil usn queryjournal sidecar
+    // (if gathered) is volume-level context, not a separate parseable
+    // artifact, so it rides along on the SAME WindowsArtifactFile row
+    // (journalMetadataText) rather than becoming its own role/upload field.
+    const usnjrnlFile = formData.get("usnjrnl");
+    if (isUploadedFile(usnjrnlFile)) {
+      const metadataFile = formData.get("usnJournalMetadata");
+      const journalMetadataText = isUploadedFile(metadataFile) ? await metadataFile.text() : null;
+      pending.push({ role: "usnjrnl", file: usnjrnlFile, profileName: null, journalMetadataText });
+    }
+
     if (pending.length === 0) {
       return NextResponse.json({ error: "no_files", message: "Upload at least one artifact file (SYSTEM, SOFTWARE, NTUSER.DAT, or Amcache.hve)." }, { status: 400 });
     }
@@ -158,6 +171,7 @@ export async function POST(req: NextRequest) {
           sha256,
           status: "queued",
           profileName: p.profileName,
+          journalMetadataText: p.journalMetadataText ?? null,
         },
       });
 

@@ -31,8 +31,13 @@ export interface UserAssistRow {
   focusTimeMs: number | null;
 }
 
+export interface SrumExtensionRow {
+  guid: string;
+  dllName: string | null;
+}
+
 export type RegistryParseResult =
-  | { status: "ok"; pluginEntries: RegistryPluginEntry[]; autoruns: AutorunRow[]; userAssist: UserAssistRow[]; scriptErrors: string[] }
+  | { status: "ok"; pluginEntries: RegistryPluginEntry[]; autoruns: AutorunRow[]; userAssist: UserAssistRow[]; srumExtensions: SrumExtensionRow[]; scriptErrors: string[] }
   | { status: "not_installed" }
   | { status: "timeout" }
   | { status: "error"; message: string };
@@ -83,6 +88,7 @@ export async function runRegistryParse(
       const pluginEntries: RegistryPluginEntry[] = [];
       const autoruns: AutorunRow[] = [];
       const userAssist: UserAssistRow[] = [];
+      const srumExtensions: SrumExtensionRow[] = [];
       const scriptErrors: string[] = [];
       let notInstalled = false;
 
@@ -117,6 +123,12 @@ export async function runRegistryParse(
               focusTimeMs: obj.focus_time_ms != null ? Number(obj.focus_time_ms) : null,
             });
             break;
+          case "srum_extension":
+            srumExtensions.push({
+              guid: String(obj.guid ?? ""),
+              dllName: obj.dll_name != null ? String(obj.dll_name) : null,
+            });
+            break;
           case "error":
             scriptErrors.push(String(obj.message));
             break;
@@ -125,14 +137,14 @@ export async function runRegistryParse(
 
       if (notInstalled) { settle({ status: "not_installed" }); return; }
 
-      const gotAnything = pluginEntries.length > 0 || autoruns.length > 0 || userAssist.length > 0;
+      const gotAnything = pluginEntries.length > 0 || autoruns.length > 0 || userAssist.length > 0 || srumExtensions.length > 0;
       if (exitCode !== 0 && !gotAnything) {
         const detail = (stderr || scriptErrors.join("; ") || stdout).trim().slice(0, 500);
         settle({ status: "error", message: detail || `registry-parse.py exited with code ${exitCode}` });
         return;
       }
 
-      settle({ status: "ok", pluginEntries, autoruns, userAssist, scriptErrors });
+      settle({ status: "ok", pluginEntries, autoruns, userAssist, srumExtensions, scriptErrors });
     });
   });
 }

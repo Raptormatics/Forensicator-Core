@@ -26,6 +26,15 @@ model WindowsArtifactUpload {
 
   files WindowsArtifactFile[]
 
+  // GUID -> DllName, extracted from a software_hive file's
+  // SRUM\Extensions registry key (see registry-parse.py's srum_extension
+  // emission) when one is processed in this same collection. Upload-level,
+  // not per-file, since it's shared context a srum_db file's own
+  // processing cross-checks against — order-independent either way (see
+  // srum-engine.ts): whichever of the two files finishes first just
+  // leaves this null until the other one sets it.
+  srumExtensionsMap Json? @db.JsonB @map("srum_extensions_map")
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -46,7 +55,7 @@ model WindowsArtifactFile {
   upload   WindowsArtifactUpload @relation(fields: [uploadId], references: [id], onDelete: Cascade)
 
   // system_hive | software_hive | security_hive | ntuser_hive | amcache_hive | usrclass_hive
-  // | prefetch | lnk | jumplist_automatic | jumplist_custom
+  // | prefetch | lnk | jumplist_automatic | jumplist_custom | mft | usnjrnl | srum_db
   role     String
   filename String
   fileSize Int    @map("file_size")
@@ -66,6 +75,12 @@ model WindowsArtifactFile {
   // itself (SAM-based SID-to-username mapping is real but out of scope here).
   profileName String? @map("profile_name")
 
+  // Raw fsutil usn queryjournal output for a "usnjrnl"-role file, when
+  // the collector gathered it alongside the raw $J stream — volume-level
+  // context (journal ID, USN range, max size), not a per-record field, so
+  // it lives here rather than on UsnJrnlEntry.
+  journalMetadataText String? @map("journal_metadata_text") @db.Text
+
   shimcacheEntries  ShimcacheEntry[]
   amcacheEntries    AmcacheEntry[]
   userAssistEntries UserAssistEntry[]
@@ -75,6 +90,9 @@ model WindowsArtifactFile {
   lnkEntries        LnkEntry[]
   jumpListEntries   JumpListEntry[]
   shellbagEntries   ShellbagEntry[]
+  mftEntries        MftEntry[]
+  usnJrnlEntries    UsnJrnlEntry[]
+  srumEntries       SrumEntry[]
   findings          WindowsArtifactFinding[]
 
   createdAt DateTime  @default(now()) @map("created_at")
@@ -297,6 +315,112 @@ model ShellbagEntry {
   @@index([fileId])
   @@index([path])
   @@map("shellbag_entries")
+}
+
+// $MFT — one row per NTFS Master File Table entry, parsed via pyfsntfs
+// (libyal's libfsntfs Python bindings — same C-linked-library pattern as
+// pyscca/Prefetch, see mft-parse.py). `path` is resolved via one
+// in-memory parent-chain walk during parsing (entries reference parents
+// by MFT entry number, which only resolves meaningfully within the same
+// parse — not stored as a live FK to another MftEntry row). Real-world
+// row counts run into the hundreds of thousands to low millions —
+// deliberately NOT capped at ingestion (every row goes in, rules run
+// against all of it); the results UI applies the same display cap every
+// other artifact type already uses.
+model MftEntry {
+  id     String              @id @default(uuid()) @db.Uuid
+  fileId String              @map("file_id") @db.Uuid
+  file   WindowsArtifactFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  mftEntryNumber    Int     @map("mft_entry_number")
+  sequenceNumber    Int?    @map("sequence_number")
+  name              String  @db.Text
+  path              String? @db.Text // reconstructed via parent-chain walk; null if the chain couldn't be resolved (e.g. orphaned/truncated entry)
+  parentEntryNumber Int?    @map("parent_entry_number")
+
+  isAllocated Boolean @map("is_allocated") // false = a deleted entry still present in the table
+  isDirectory Boolean @map("is_directory")
+
+  // The four NTFS "MACB" timestamps — entryModificationTime (the MFT
+  // record's own last-change time, distinct from the file's content
+  // modificationTime) is specifically what timestomping-detection rules
+  // compare creationTime against.
+  creationTime         DateTime? @map("creation_time")
+  modificationTime     DateTime? @map("modification_time")
+  accessTime           DateTime? @map("access_time")
+  entryModificationTime DateTime? @map("entry_modification_time")
+
+  fileSize                BigInt?  @map("file_size")
+  hasAlternateDataStreams Boolean  @default(false) @map("has_alternate_data_streams")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([fileId])
+  @@index([mftEntryNumber])
+  @@index([path])
+  @@map("mft_entries")
+}
+
+// $UsnJrnl:$J — one row per decoded USN_RECORD_V2/V3 (the journal's
+// actual content lives entirely in this alternate data stream — see
+// usnjrnl-parse.py's own header comment for why no library was used:
+// it's a stable, documented Microsoft structure, hand-parsed via struct).
+// fileReferenceNumber/parentFileReferenceNumber are NOT resolved to an
+// MftEntry row at ingestion time (that would be an O(n*m) join against a
+// potentially-huge MftEntry table for every one of a potentially-huge
+// number of journal records) — left as opaque stringified 64-bit
+// references for a rule/UI-level cross-reference instead.
+model UsnJrnlEntry {
+  id     String              @id @default(uuid()) @db.Uuid
+  fileId String              @map("file_id") @db.Uuid
+  file   WindowsArtifactFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  usn                       BigInt
+  fileReferenceNumber       String? @map("file_reference_number")
+  parentFileReferenceNumber String? @map("parent_file_reference_number")
+  timestamp                 DateTime?
+  reason                    String[] // decoded USN_REASON_* flag names, e.g. ["DATA_OVERWRITE", "CLOSE"]
+  fileName                  String?  @map("file_name") @db.Text
+  fileAttributes            Int?     @map("file_attributes")
+  sourceInfo                Int?     @map("source_info")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([fileId])
+  @@index([usn])
+  @@index([fileName])
+  @@map("usn_jrnl_entries")
+}
+
+// SRUDB.dat (SRUM/System Resource Usage Monitor) — one row per ESE record,
+// read via pyesedb (libyal's libesedb Python bindings) across every table
+// in the database. `tableName` is the raw GUID (or SruDbIdMapTable/
+// SruDbCheckpointTable); `providerLabel` resolves it to a friendly name
+// via a hardcoded table of the well-documented SRUM providers (the
+// SRUM\Extensions registry key only gives a DLL path, not a human label —
+// see srum-parse.py). `details` holds provider-specific columns (bytes
+// sent/received for network usage, CPU/disk metrics for app resource
+// usage, etc.) as a flexible JSON blob rather than forcing every
+// provider's genuinely different schema into fixed typed columns — same
+// precedent as WindowsArtifactRule.conditions.
+model SrumEntry {
+  id     String              @id @default(uuid()) @db.Uuid
+  fileId String              @map("file_id") @db.Uuid
+  file   WindowsArtifactFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  tableName     String  @map("table_name")
+  providerLabel String? @map("provider_label")
+  timestamp     DateTime?
+  appId         String? @map("app_id") @db.Text
+  userSid       String? @map("user_sid")
+  details       Json    @db.JsonB
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([fileId])
+  @@index([tableName])
+  @@index([appId])
+  @@map("srum_entries")
 }
 
 model WindowsArtifactFinding {

@@ -2,8 +2,9 @@
 #
 # Installs the system-level tools Windows Artifact Analysis needs:
 # python3-libscca (Prefetch — src/lib/windows-artifacts/prefetch-parse.py),
-# and a Python venv with regipy[full]/LnkParse3/olefile (registry hives,
-# LNK, Jump Lists, Shellbags).
+# libfsntfs/pyfsntfs ($MFT — mft-parse.py), libesedb/pyesedb (SRUDB.dat —
+# srum-parse.py), and a Python venv with regipy[full]/LnkParse3/olefile
+# (registry hives, LNK, Jump Lists, Shellbags, $UsnJrnl:$J).
 #
 # Unlike deploy/install-system-deps.sh (PCAP/RAM Analysis's equivalent),
 # which ships from the Enterprise overlay because those are overlay
@@ -88,6 +89,75 @@ if [[ "$installed_pyscca_version" < "$LIBSCCA_VERSION" ]]; then
   trap - EXIT
 
   python3 -c "import pyscca; print('pyscca', pyscca.get_version())"
+fi
+
+# Same rationale as libscca above: Debian/Ubuntu ship no python3-libfsntfs
+# package at all (as of writing), so there's no "too old" case to detect —
+# just install if missing.
+LIBFSNTFS_VERSION="20260827"
+LIBFSNTFS_URL="https://github.com/libyal/libfsntfs/releases/download/${LIBFSNTFS_VERSION}/libfsntfs-experimental-${LIBFSNTFS_VERSION}.tar.gz"
+LIBFSNTFS_SHA256="72f46ed374c5e61bf24bf840eed10869f593a0d1d9123d07212d0eb336a6eed7"
+
+if ! python3 -c "import pyfsntfs" >/dev/null 2>&1; then
+  echo "==> Building libfsntfs ${LIBFSNTFS_VERSION} from source (Windows Artifact Analysis \$MFT dependency)"
+  DEBIAN_FRONTEND=noninteractive apt-get update -y
+  DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential pkg-config python3-dev python3-setuptools
+
+  libfsntfs_build_dir="$(mktemp -d)"
+  trap 'rm -rf "$libfsntfs_build_dir"' EXIT
+  curl -fsSL -o "${libfsntfs_build_dir}/libfsntfs.tar.gz" "$LIBFSNTFS_URL"
+  echo "${LIBFSNTFS_SHA256}  ${libfsntfs_build_dir}/libfsntfs.tar.gz" | sha256sum -c -
+  tar -xzf "${libfsntfs_build_dir}/libfsntfs.tar.gz" -C "$libfsntfs_build_dir"
+  (
+    cd "${libfsntfs_build_dir}/libfsntfs-${LIBFSNTFS_VERSION}"
+    ./configure --enable-python
+    make -j"$(nproc)"
+    make install
+    ldconfig
+  )
+
+  # Same "make install drops the .so in an unversioned dist-packages path"
+  # gotcha as libscca above.
+  python_site_packages="$(python3 -c "import sysconfig; print(sysconfig.get_path('platlib'))")"
+  mkdir -p "$python_site_packages"
+  cp /usr/local/lib/python3/dist-packages/pyfsntfs.so "$python_site_packages/"
+
+  rm -rf "$libfsntfs_build_dir"
+  trap - EXIT
+
+  python3 -c "import pyfsntfs; print('pyfsntfs', pyfsntfs.get_version())"
+fi
+
+LIBESEDB_VERSION="20260704"
+LIBESEDB_URL="https://github.com/libyal/libesedb/releases/download/${LIBESEDB_VERSION}/libesedb-experimental-${LIBESEDB_VERSION}.tar.gz"
+LIBESEDB_SHA256="78f5e4cd11b551e673db270a9d40abf3c8ec8523b91939a9251ca80ee5a83bd1"
+
+if ! python3 -c "import pyesedb" >/dev/null 2>&1; then
+  echo "==> Building libesedb ${LIBESEDB_VERSION} from source (Windows Artifact Analysis SRUM dependency)"
+  DEBIAN_FRONTEND=noninteractive apt-get update -y
+  DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential pkg-config python3-dev python3-setuptools
+
+  libesedb_build_dir="$(mktemp -d)"
+  trap 'rm -rf "$libesedb_build_dir"' EXIT
+  curl -fsSL -o "${libesedb_build_dir}/libesedb.tar.gz" "$LIBESEDB_URL"
+  echo "${LIBESEDB_SHA256}  ${libesedb_build_dir}/libesedb.tar.gz" | sha256sum -c -
+  tar -xzf "${libesedb_build_dir}/libesedb.tar.gz" -C "$libesedb_build_dir"
+  (
+    cd "${libesedb_build_dir}/libesedb-${LIBESEDB_VERSION}"
+    ./configure --enable-python
+    make -j"$(nproc)"
+    make install
+    ldconfig
+  )
+
+  python_site_packages="$(python3 -c "import sysconfig; print(sysconfig.get_path('platlib'))")"
+  mkdir -p "$python_site_packages"
+  cp /usr/local/lib/python3/dist-packages/pyesedb.so "$python_site_packages/"
+
+  rm -rf "$libesedb_build_dir"
+  trap - EXIT
+
+  python3 -c "import pyesedb; print('pyesedb', pyesedb.get_version())"
 fi
 
 if [[ ! -x "${APP_DIR}/.venvs/winartifacts/bin/python3" ]]; then

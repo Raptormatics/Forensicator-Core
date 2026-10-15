@@ -293,6 +293,12 @@ model SystemSettings {
   // — Prefetch parsing uses the apt-installed libscca bindings, not the
   // winartifacts venv (see getPrefetchPythonPath()'s own doc comment).
   prefetchPythonPath String? @map("prefetch_python_path")
+  // Path to the system python3 that has pyfsntfs ($MFT) and pyesedb
+  // (SRUDB.dat) installed — same reasoning as prefetchPythonPath above
+  // (C-linked libyal bindings, not the winartifacts venv); shared by both
+  // since they're installed together by the same deploy step and have
+  // identical requirements, unlike Prefetch's separate dedicated setting.
+  winArtifactsSystemPythonPath String? @map("win_artifacts_system_python_path")
 
   // Critical-finding email alerts — one channel, one recipient address.
   // Off by default (no SMTP server is assumed to exist). Read fresh per

@@ -19,7 +19,7 @@
  */
 import path from "path";
 import { prisma } from "@/lib/db/prisma";
-import { getWinArtifactsPythonPath, getPrefetchPythonPath } from "@/lib/settings/system";
+import { getWinArtifactsPythonPath, getPrefetchPythonPath, getWinArtifactsSystemPythonPath } from "@/lib/settings/system";
 import {
   runRegistryParse, mapShimcacheEntries, mapAmcacheEntries, mapBamEntries, mapShellbagEntries,
   type RegistryRole,
@@ -27,6 +27,9 @@ import {
 import { runPrefetchParse, type PrefetchEntryRow } from "./prefetch-engine";
 import { runLnkParse, type LnkEntryRow, type LnkRole } from "./lnk-engine";
 import { runJumpListParse, type JumpListEntryRow } from "./jumplist-engine";
+import { runMftParse, type MftEntryRow } from "./mft-engine";
+import { runUsnJrnlParse, type UsnJrnlEntryRow } from "./usnjrnl-engine";
+import { runSrumParse, type SrumEntryRow } from "./srum-engine";
 import { buildSubjects, runRules, type StoredWinArtifactRule } from "./rule-engine";
 import { isEnriched, type IocLookupMap } from "@/lib/rule-engine/ioc-lookup";
 import { autoEnrichNewIocs, type NewIocRecord } from "@/lib/intelligence/auto-enrich";
@@ -34,6 +37,22 @@ import { notifyCriticalFindings } from "@/lib/notifications/critical-finding-ale
 
 const REGISTRY_ROLES: RegistryRole[] = ["system_hive", "software_hive", "security_hive", "ntuser_hive", "amcache_hive", "usrclass_hive"];
 const LNK_ROLES: LnkRole[] = ["lnk", "jumplist_custom"];
+
+// Prisma/Postgres have a practical parameter-count limit per query that
+// the existing small-row-count artifact types never had to think about —
+// $MFT/$UsnJrnl:$J can run into the hundreds of thousands to millions of
+// rows, so their createMany calls are chunked rather than one unbounded array.
+const BULK_INSERT_CHUNK_SIZE = 2000;
+
+async function chunkedCreateMany<T>(
+  create: (data: T[]) => Promise<unknown>,
+  rows: T[],
+  chunkSize = BULK_INSERT_CHUNK_SIZE
+): Promise<void> {
+  for (let i = 0; i < rows.length; i += chunkSize) {
+    await create(rows.slice(i, i + chunkSize));
+  }
+}
 
 export async function processWindowsArtifactFile(fileId: string, filePath: string): Promise<void> {
   const file = await prisma.windowsArtifactFile.findUnique({ where: { id: fileId }, include: { upload: true } });
@@ -54,6 +73,9 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
       prisma.lnkEntry.deleteMany({ where: { fileId } }),
       prisma.jumpListEntry.deleteMany({ where: { fileId } }),
       prisma.shellbagEntry.deleteMany({ where: { fileId } }),
+      prisma.mftEntry.deleteMany({ where: { fileId } }),
+      prisma.usnJrnlEntry.deleteMany({ where: { fileId } }),
+      prisma.srumEntry.deleteMany({ where: { fileId } }),
       prisma.windowsArtifactFinding.deleteMany({ where: { fileId } }),
     ]);
 
@@ -67,6 +89,9 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
     let prefetchRows: PrefetchEntryRow[] = [];
     let lnkRows: LnkEntryRow[] = [];
     let jumpListRows: JumpListEntryRow[] = [];
+    let mftRows: MftEntryRow[] = [];
+    let usnJrnlRows: UsnJrnlEntryRow[] = [];
+    let srumRows: SrumEntryRow[] = [];
     const iocLookupMap: IocLookupMap = new Map();
 
     if (REGISTRY_ROLES.includes(file.role as RegistryRole)) {
@@ -95,6 +120,25 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
       shellbagRows = (file.role === "usrclass_hive" || file.role === "ntuser_hive") ? mapShellbagEntries(result.pluginEntries) : [];
       userAssistRows = result.userAssist;
       autorunRows = result.autoruns;
+
+      // software_hive only — persist the SRUM\Extensions GUID->DllName
+      // map at the upload level so a srum_db file's own processing (in
+      // this same collection, whenever it runs — order-independent) can
+      // cross-check table GUIDs against what's actually registered on
+      // this system. Not required for SRUM parsing to work at all (see
+      // srum-engine.ts) — just extra context when available.
+      if (file.role === "software_hive" && result.srumExtensions.length > 0) {
+        const map: Record<string, string> = {};
+        for (const ext of result.srumExtensions) {
+          if (ext.dllName) map[ext.guid] = ext.dllName;
+        }
+        if (Object.keys(map).length > 0) {
+          await prisma.windowsArtifactUpload.update({
+            where: { id: file.uploadId },
+            data: { srumExtensionsMap: map },
+          });
+        }
+      }
 
       if (shimcacheRows.length > 0) {
         await prisma.shimcacheEntry.createMany({
@@ -334,6 +378,126 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
         });
       }
       // No IOC upsert step — Jump Lists carry no hash to look up.
+    } else if (file.role === "mft") {
+      // 3. Run the $MFT parser (system python3 + pyfsntfs, same
+      // C-linked-library tier as Prefetch's pyscca).
+      const pythonPath = await getWinArtifactsSystemPythonPath();
+      const result = await runMftParse(pythonPath, filePath);
+
+      if (result.status === "not_installed") {
+        throw new Error("pyfsntfs (libfsntfs-python) is not installed — see deploy/install-winartifacts-deps.sh.");
+      }
+      if (result.status === "timeout") {
+        throw new Error("$MFT parsing timed out.");
+      }
+      if (result.status === "error") {
+        throw new Error(result.message);
+      }
+      for (const err of result.scriptErrors) {
+        console.warn(`[windows-artifacts] mft-parse.py reported: ${err}`);
+      }
+
+      // 4. One MftEntry row per parsed entry — a real $MFT can run into
+      // the hundreds of thousands to low millions of rows, so inserted
+      // in chunks rather than one unbounded createMany call.
+      mftRows = result.entries;
+      await chunkedCreateMany(
+        (data) => prisma.mftEntry.createMany({ data }),
+        mftRows.map((r) => ({
+          fileId,
+          mftEntryNumber: r.mftEntryNumber,
+          sequenceNumber: r.sequenceNumber ?? undefined,
+          name: r.name,
+          path: r.path ?? undefined,
+          parentEntryNumber: r.parentEntryNumber ?? undefined,
+          isAllocated: r.isAllocated,
+          isDirectory: r.isDirectory,
+          creationTime: r.creationTime ? new Date(r.creationTime) : undefined,
+          modificationTime: r.modificationTime ? new Date(r.modificationTime) : undefined,
+          accessTime: r.accessTime ? new Date(r.accessTime) : undefined,
+          entryModificationTime: r.entryModificationTime ? new Date(r.entryModificationTime) : undefined,
+          fileSize: r.fileSize != null ? BigInt(r.fileSize) : undefined,
+          hasAlternateDataStreams: r.hasAlternateDataStreams,
+        }))
+      );
+      // No IOC upsert step — $MFT carries no hash to look up.
+    } else if (file.role === "usnjrnl") {
+      // 3. Run the $UsnJrnl:$J parser — pure stdlib struct parsing, same
+      // winartifacts venv as regipy/LnkParse3 (no C library involved).
+      const pythonPath = await getWinArtifactsPythonPath();
+      const result = await runUsnJrnlParse(pythonPath, filePath);
+
+      if (result.status === "not_installed") {
+        throw new Error("usnjrnl-parse.py reported itself unavailable.");
+      }
+      if (result.status === "timeout") {
+        throw new Error("$UsnJrnl:$J parsing timed out.");
+      }
+      if (result.status === "error") {
+        throw new Error(result.message);
+      }
+      for (const err of result.scriptErrors) {
+        console.warn(`[windows-artifacts] usnjrnl-parse.py reported: ${err}`);
+      }
+
+      // 4. One UsnJrnlEntry row per decoded USN record — same chunked
+      // insert reasoning as $MFT above (can also run into the millions).
+      usnJrnlRows = result.entries;
+      await chunkedCreateMany(
+        (data) => prisma.usnJrnlEntry.createMany({ data }),
+        usnJrnlRows.map((r) => ({
+          fileId,
+          usn: BigInt(r.usn),
+          fileReferenceNumber: r.fileReferenceNumber,
+          parentFileReferenceNumber: r.parentFileReferenceNumber,
+          timestamp: r.timestamp ? new Date(r.timestamp) : undefined,
+          reason: r.reason,
+          fileName: r.fileName ?? undefined,
+          fileAttributes: r.fileAttributes ?? undefined,
+          sourceInfo: r.sourceInfo ?? undefined,
+        }))
+      );
+      // No IOC upsert step — $UsnJrnl:$J carries no hash to look up.
+    } else if (file.role === "srum_db") {
+      // 3. Run the SRUM parser (system python3 + pyesedb, same
+      // C-linked-library tier as $MFT/Prefetch). Passes along the
+      // upload-level SRUM\Extensions registry map, if a software_hive
+      // file in this same collection already set one (see the
+      // REGISTRY_ROLES branch above) — order-independent, null is fine.
+      const pythonPath = await getWinArtifactsSystemPythonPath();
+      const extensionsMap = (file.upload.srumExtensionsMap as Record<string, string> | null) ?? null;
+      const result = await runSrumParse(pythonPath, filePath, extensionsMap);
+
+      if (result.status === "not_installed") {
+        throw new Error("pyesedb (libesedb-python) is not installed — see deploy/install-winartifacts-deps.sh.");
+      }
+      if (result.status === "timeout") {
+        throw new Error("SRUDB.dat parsing timed out.");
+      }
+      if (result.status === "error") {
+        throw new Error(result.message);
+      }
+      for (const err of result.scriptErrors) {
+        console.warn(`[windows-artifacts] srum-parse.py reported: ${err}`);
+      }
+
+      // 4. One SrumEntry row per ESE record — modest row counts (hundreds
+      // to low thousands), unlike $MFT/$UsnJrnl, so a plain createMany.
+      srumRows = result.entries;
+      if (srumRows.length > 0) {
+        await prisma.srumEntry.createMany({
+          data: srumRows.map((r) => ({
+            fileId,
+            tableName: r.tableName,
+            providerLabel: r.providerLabel ?? undefined,
+            timestamp: r.timestamp ? new Date(r.timestamp) : undefined,
+            appId: r.appId ?? undefined,
+            userSid: r.userSid ?? undefined,
+            details: r.details as object,
+          })),
+        });
+      }
+      // No IOC upsert step — SRUM carries no hash to look up.
     } else {
       throw new Error(`Unsupported artifact role (not yet implemented): ${file.role}`);
     }
@@ -356,6 +520,7 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
       const subjects = buildSubjects({
         shimcache: shimcacheRows, amcache: amcacheRows, userAssist: userAssistRows, bam: bamRows, autoruns: autorunRows,
         prefetch: prefetchRows, lnk: lnkRows, jumplist: jumpListRows, shellbag: shellbagRows,
+        mft: mftRows, usnjrnl: usnJrnlRows, srum: srumRows,
       });
       const matches = runRules(rules as unknown as StoredWinArtifactRule[], subjects, iocLookupMap);
 

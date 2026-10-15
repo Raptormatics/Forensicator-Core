@@ -13,8 +13,11 @@ import type { ShimcacheRow, AmcacheRow, UserAssistRow, BamRow, AutorunRow, Shell
 import type { PrefetchEntryRow } from "./prefetch-engine";
 import type { LnkEntryRow } from "./lnk-engine";
 import type { JumpListEntryRow } from "./jumplist-engine";
+import type { MftEntryRow } from "./mft-engine";
+import type { UsnJrnlEntryRow } from "./usnjrnl-engine";
+import type { SrumEntryRow } from "./srum-engine";
 
-export type WinArtifactSubjectKind = "shimcache" | "amcache" | "userassist" | "bam" | "autorun" | "prefetch" | "prefetch_reference" | "lnk" | "jumplist" | "shellbag";
+export type WinArtifactSubjectKind = "shimcache" | "amcache" | "userassist" | "bam" | "autorun" | "prefetch" | "prefetch_reference" | "lnk" | "jumplist" | "shellbag" | "mft" | "usnjrnl" | "srum";
 
 export interface WinArtifactRuleSubject {
   kind: WinArtifactSubjectKind;
@@ -26,7 +29,19 @@ export interface WinArtifactRuleSubject {
   valueName: string | null;
   keyPath: string | null;
   sid: string | null;
+  isAllocated: boolean | null;
+  hasTimestomp: boolean | null;
+  usnReason: string | null;
+  providerLabel: string | null;
 }
+
+// Every field a specific subject kind doesn't use stays at this default
+// (null) — spread this first, then override only the fields that kind
+// actually has, rather than repeating all ~13 nulls at every call site.
+const BLANK_SUBJECT_FIELDS: Omit<WinArtifactRuleSubject, "kind" | "refKey"> = {
+  path: null, sha1: null, runCount: null, category: null, valueName: null, keyPath: null, sid: null,
+  isAllocated: null, hasTimestomp: null, usnReason: null, providerLabel: null,
+};
 
 export function buildSubjects(data: {
   shimcache: ShimcacheRow[];
@@ -38,32 +53,33 @@ export function buildSubjects(data: {
   lnk?: LnkEntryRow[];
   jumplist?: JumpListEntryRow[];
   shellbag?: ShellbagRow[];
+  mft?: MftEntryRow[];
+  usnjrnl?: UsnJrnlEntryRow[];
+  srum?: SrumEntryRow[];
 }): WinArtifactRuleSubject[] {
   const subjects: WinArtifactRuleSubject[] = [];
 
   for (const s of data.shimcache) {
-    subjects.push({ kind: "shimcache", refKey: s.path, path: s.path, sha1: null, runCount: null, category: null, valueName: null, keyPath: null, sid: null });
+    subjects.push({ ...BLANK_SUBJECT_FIELDS, kind: "shimcache", refKey: s.path, path: s.path });
   }
   for (const a of data.amcache) {
-    subjects.push({ kind: "amcache", refKey: a.path, path: a.path, sha1: a.sha1, runCount: null, category: null, valueName: null, keyPath: null, sid: null });
+    subjects.push({ ...BLANK_SUBJECT_FIELDS, kind: "amcache", refKey: a.path, path: a.path, sha1: a.sha1 });
   }
   for (const u of data.userAssist) {
-    subjects.push({ kind: "userassist", refKey: u.programPath, path: u.programPath, sha1: null, runCount: u.runCount, category: null, valueName: null, keyPath: null, sid: null });
+    subjects.push({ ...BLANK_SUBJECT_FIELDS, kind: "userassist", refKey: u.programPath, path: u.programPath, runCount: u.runCount });
   }
   for (const b of data.bam) {
-    subjects.push({ kind: "bam", refKey: b.path, path: b.path, sha1: null, runCount: null, category: null, valueName: null, keyPath: null, sid: b.sid });
+    subjects.push({ ...BLANK_SUBJECT_FIELDS, kind: "bam", refKey: b.path, path: b.path, sid: b.sid });
   }
   for (const r of data.autoruns) {
     subjects.push({
+      ...BLANK_SUBJECT_FIELDS,
       kind: "autorun",
       refKey: `${r.keyPath}\\${r.valueName ?? ""}`,
       path: r.valueData,
-      sha1: null,
-      runCount: null,
       category: r.category,
       valueName: r.valueName,
       keyPath: r.keyPath,
-      sid: null,
     });
   }
   // One "prefetch" subject per executable (reuses the existing LOLBin
@@ -72,9 +88,9 @@ export function buildSubjects(data: {
   // built-in rule against each DLL's own path) — no Prefetch-specific
   // built-in rules needed, both existing rules already apply for free.
   for (const p of data.prefetch ?? []) {
-    subjects.push({ kind: "prefetch", refKey: p.executableName, path: p.executableName, sha1: null, runCount: p.runCount, category: null, valueName: null, keyPath: null, sid: null });
+    subjects.push({ ...BLANK_SUBJECT_FIELDS, kind: "prefetch", refKey: p.executableName, path: p.executableName, runCount: p.runCount });
     for (const ref of p.referencedFiles) {
-      subjects.push({ kind: "prefetch_reference", refKey: `${p.executableName}:${ref}`, path: ref, sha1: null, runCount: null, category: null, valueName: null, keyPath: null, sid: null });
+      subjects.push({ ...BLANK_SUBJECT_FIELDS, kind: "prefetch_reference", refKey: `${p.executableName}:${ref}`, path: ref });
     }
   }
   // Reuses the existing LOLBin/Temp-Downloads built-ins (via `path`) and
@@ -82,14 +98,48 @@ export function buildSubjects(data: {
   // no LNK/JumpList/Shellbag-specific built-in rules needed beyond that one.
   for (const l of data.lnk ?? []) {
     if (!l.targetPath) continue;
-    subjects.push({ kind: "lnk", refKey: l.targetPath, path: l.targetPath, sha1: null, runCount: null, category: null, valueName: null, keyPath: null, sid: null });
+    subjects.push({ ...BLANK_SUBJECT_FIELDS, kind: "lnk", refKey: l.targetPath, path: l.targetPath });
   }
   for (const j of data.jumplist ?? []) {
     if (!j.targetPath) continue;
-    subjects.push({ kind: "jumplist", refKey: `${j.streamNumber}:${j.targetPath}`, path: j.targetPath, sha1: null, runCount: null, category: null, valueName: null, keyPath: null, sid: null });
+    subjects.push({ ...BLANK_SUBJECT_FIELDS, kind: "jumplist", refKey: `${j.streamNumber}:${j.targetPath}`, path: j.targetPath });
   }
   for (const s of data.shellbag ?? []) {
-    subjects.push({ kind: "shellbag", refKey: s.path, path: s.path, sha1: null, runCount: null, category: s.itemType, valueName: null, keyPath: null, sid: null });
+    subjects.push({ ...BLANK_SUBJECT_FIELDS, kind: "shellbag", refKey: s.path, path: s.path, category: s.itemType });
+  }
+  // isAllocated false flags a deleted-but-still-present entry;
+  // hasTimestomp flags creationTime later than entryModificationTime —
+  // the single most forensically-recognized use of raw $MFT data (see
+  // the "Possible MFT Timestomping" built-in in rule-engine/seed.ts).
+  for (const m of data.mft ?? []) {
+    const hasTimestomp = !!(m.creationTime && m.entryModificationTime && new Date(m.creationTime) > new Date(m.entryModificationTime));
+    subjects.push({
+      ...BLANK_SUBJECT_FIELDS,
+      kind: "mft",
+      refKey: `${m.mftEntryNumber}`,
+      path: m.path ?? m.name,
+      isAllocated: m.isAllocated,
+      hasTimestomp,
+    });
+  }
+  for (const u of data.usnjrnl ?? []) {
+    if (!u.fileName) continue;
+    subjects.push({
+      ...BLANK_SUBJECT_FIELDS,
+      kind: "usnjrnl",
+      refKey: `${u.usn}:${u.fileName}`,
+      path: u.fileName,
+      usnReason: u.reason.join(" "),
+    });
+  }
+  for (const r of data.srum ?? []) {
+    subjects.push({
+      ...BLANK_SUBJECT_FIELDS,
+      kind: "srum",
+      refKey: `${r.tableName}:${r.appId ?? ""}:${r.timestamp ?? ""}`,
+      path: r.appId,
+      providerLabel: r.providerLabel,
+    });
   }
 
   return subjects;
@@ -106,15 +156,19 @@ function getFieldValue(subject: WinArtifactRuleSubject, field: WinArtifactField,
   if (isIocRuleField(field)) {
     return getIocFieldValue(resolveIoc(iocCandidates(subject), iocMap), field);
   }
-  const fieldMap: Record<Exclude<WinArtifactField, IocRuleField>, string | number | null> = {
-    artifact_type: subject.kind,
-    path:          subject.path,
-    sha1:          subject.sha1,
-    run_count:     subject.runCount,
-    category:      subject.category,
-    value_name:    subject.valueName,
-    key_path:      subject.keyPath,
-    sid:           subject.sid,
+  const fieldMap: Record<Exclude<WinArtifactField, IocRuleField>, string | number | boolean | null> = {
+    artifact_type:  subject.kind,
+    path:           subject.path,
+    sha1:           subject.sha1,
+    run_count:      subject.runCount,
+    category:       subject.category,
+    value_name:     subject.valueName,
+    key_path:       subject.keyPath,
+    sid:            subject.sid,
+    is_allocated:   subject.isAllocated,
+    has_timestomp:  subject.hasTimestomp,
+    usn_reason:     subject.usnReason,
+    provider_label: subject.providerLabel,
   };
   const val = fieldMap[field as Exclude<WinArtifactField, IocRuleField>];
   if (val === null || val === undefined) return "";

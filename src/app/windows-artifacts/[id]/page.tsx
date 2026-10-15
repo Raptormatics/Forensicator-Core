@@ -25,6 +25,9 @@ type PrefetchRow = { id: string; fileId: string; executableName: string; runCoun
 type LnkRow = { id: string; fileId: string; targetPath: string | null; arguments: string | null; workingDirectory: string | null; creationTime: string | null; accessTime: string | null; modificationTime: string | null; driveSerialNumber: string | null; netName: string | null; machineId: string | null };
 type JumpListRow = { id: string; fileId: string; source: string; appId: string | null; targetPath: string | null; lastAccessed: string | null; accessRank: number | null; pinned: boolean | null; machineName: string | null };
 type ShellbagRow = { id: string; fileId: string; path: string; itemType: string | null; lastModified: string | null; creationTime: string | null; accessTime: string | null };
+type MftRow = { id: string; fileId: string; mftEntryNumber: number; name: string; path: string | null; isAllocated: boolean; isDirectory: boolean; creationTime: string | null; entryModificationTime: string | null; fileSize: string | null; hasAlternateDataStreams: boolean };
+type UsnJrnlRow = { id: string; fileId: string; usn: string; timestamp: string | null; reason: string[]; fileName: string | null };
+type SrumRow = { id: string; fileId: string; tableName: string; providerLabel: string | null; timestamp: string | null; appId: string | null; userSid: string | null; details: Record<string, unknown> };
 type Finding = { id: string; title: string; description: string | null; severity: string; matchCount: number; matchedField: string | null; matchedValue: string | null; rule: { id: string; name: string } | null };
 
 type Detail = {
@@ -38,10 +41,13 @@ type Detail = {
   lnk: LnkRow[];
   jumpList: JumpListRow[];
   shellbags: ShellbagRow[];
+  mft: MftRow[];
+  usnJrnl: UsnJrnlRow[];
+  srum: SrumRow[];
   findings: Finding[];
 };
 
-type Tab = "overview" | "shimcache" | "amcache" | "userassist" | "bam" | "autoruns" | "prefetch" | "lnk" | "jumplist" | "shellbags" | "findings";
+type Tab = "overview" | "shimcache" | "amcache" | "userassist" | "bam" | "autoruns" | "prefetch" | "lnk" | "jumplist" | "shellbags" | "mft" | "usnjrnl" | "srum" | "findings";
 
 const STATUS_ICON: Record<string, React.ReactNode> = {
   ready:      <CheckCircle2 className="h-3.5 w-3.5 text-teal-400" />,
@@ -97,7 +103,7 @@ export default function WindowsArtifactDetailPage() {
   if (loading) return <div className="p-8 text-zinc-500">Loading…</div>;
   if (!data) return <div className="p-8 text-red-400">Collection not found.</div>;
 
-  const { upload, shimcache, amcache, userAssist, bam, autoruns, prefetch, lnk, jumpList, shellbags, findings } = data;
+  const { upload, shimcache, amcache, userAssist, bam, autoruns, prefetch, lnk, jumpList, shellbags, mft, usnJrnl, srum, findings } = data;
 
   // filename carries the source subfolder when the upload form's folder
   // picker was used (e.g. "FAVOUR/Desktop/foo.lnk") — surfaced as a Source
@@ -116,6 +122,9 @@ export default function WindowsArtifactDetailPage() {
     { key: "lnk", label: "LNK Files", count: lnk.length },
     { key: "jumplist", label: "Jump Lists", count: jumpList.length },
     { key: "shellbags", label: "Shellbags", count: shellbags.length },
+    { key: "mft", label: "$MFT", count: mft.length },
+    { key: "usnjrnl", label: "$UsnJrnl:$J", count: usnJrnl.length },
+    { key: "srum", label: "SRUM", count: srum.length },
     { key: "findings", label: "Findings", count: findings.length },
   ];
 
@@ -304,6 +313,53 @@ export default function WindowsArtifactDetailPage() {
               { header: "Created", csv: (r) => r.creationTime ? formatDateTime(new Date(r.creationTime)) : "", render: (r) => r.creationTime ? formatDateTime(new Date(r.creationTime)) : "—" },
               { header: "Accessed", csv: (r) => r.accessTime ? formatDateTime(new Date(r.accessTime)) : "", render: (r) => r.accessTime ? formatDateTime(new Date(r.accessTime)) : "—" },
               { header: "Modified", csv: (r) => r.lastModified ? formatDateTime(new Date(r.lastModified)) : "", render: (r) => r.lastModified ? formatDateTime(new Date(r.lastModified)) : "—" },
+            ]}
+          />
+        )}
+
+        {tab === "mft" && (
+          <SimpleTable
+            rows={mft}
+            exportName={`windows-artifacts-${id}-mft`}
+            empty="No $MFT entries — upload a $MFT file to populate this tab."
+            columns={[
+              { header: "Name", wrap: true, csv: (r) => r.name, render: (r) => <span className="font-mono text-xs">{r.name}</span> },
+              { header: "Path", wrap: true, csv: (r) => r.path ?? "", render: (r) => <span className="font-mono text-xs text-zinc-500">{r.path ?? "—"}</span> },
+              { header: "Allocated", csv: (r) => r.isAllocated ? "Yes" : "No", render: (r) => r.isAllocated ? "Yes" : <span className="text-red-400">No</span> },
+              { header: "Directory", csv: (r) => r.isDirectory ? "Yes" : "No", render: (r) => r.isDirectory ? "Yes" : "No" },
+              { header: "Created", csv: (r) => r.creationTime ? formatDateTime(new Date(r.creationTime)) : "", render: (r) => r.creationTime ? formatDateTime(new Date(r.creationTime)) : "—" },
+              { header: "Entry Modified", csv: (r) => r.entryModificationTime ? formatDateTime(new Date(r.entryModificationTime)) : "", render: (r) => r.entryModificationTime ? formatDateTime(new Date(r.entryModificationTime)) : "—" },
+              { header: "Size", csv: (r) => r.fileSize ?? "", render: (r) => r.fileSize ?? "—" },
+              { header: "ADS", csv: (r) => r.hasAlternateDataStreams ? "Yes" : "No", render: (r) => r.hasAlternateDataStreams ? "Yes" : "No" },
+            ]}
+          />
+        )}
+
+        {tab === "usnjrnl" && (
+          <SimpleTable
+            rows={usnJrnl}
+            exportName={`windows-artifacts-${id}-usnjrnl`}
+            empty="No $UsnJrnl:$J entries — upload the $UsnJrnl:$J stream to populate this tab."
+            columns={[
+              { header: "Timestamp", csv: (r) => r.timestamp ? formatDateTime(new Date(r.timestamp)) : "", render: (r) => r.timestamp ? formatDateTime(new Date(r.timestamp)) : "—" },
+              { header: "File Name", wrap: true, csv: (r) => r.fileName ?? "", render: (r) => <span className="font-mono text-xs">{r.fileName ?? "—"}</span> },
+              { header: "Reason", wrap: true, csv: (r) => r.reason.join(" "), render: (r) => <span className="font-mono text-xs text-zinc-500">{r.reason.join(" ")}</span> },
+              { header: "USN", csv: (r) => r.usn, render: (r) => <span className="font-mono text-xs text-zinc-500">{r.usn}</span> },
+            ]}
+          />
+        )}
+
+        {tab === "srum" && (
+          <SimpleTable
+            rows={srum}
+            exportName={`windows-artifacts-${id}-srum`}
+            empty="No SRUM entries — upload SRUDB.dat to populate this tab."
+            filter={{ label: "Provider", getValue: (r) => r.providerLabel ?? r.tableName }}
+            columns={[
+              { header: "Timestamp", csv: (r) => r.timestamp ? formatDateTime(new Date(r.timestamp)) : "", render: (r) => r.timestamp ? formatDateTime(new Date(r.timestamp)) : "—" },
+              { header: "Provider", wrap: true, csv: (r) => r.providerLabel ?? r.tableName, render: (r) => <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-xs text-zinc-400">{r.providerLabel ?? r.tableName}</span> },
+              { header: "App / SID", wrap: true, csv: (r) => r.appId ?? r.userSid ?? "", render: (r) => <span className="font-mono text-xs text-zinc-500">{r.appId ?? r.userSid ?? "—"}</span> },
+              { header: "Details", wrap: true, csv: (r) => JSON.stringify(r.details), render: (r) => <span className="font-mono text-xs text-zinc-500">{JSON.stringify(r.details)}</span> },
             ]}
           />
         )}

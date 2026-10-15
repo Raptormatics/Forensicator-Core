@@ -30,7 +30,7 @@ export async function GET(req: NextRequest, props: Params) {
 
     const fileIds = upload.files.map((f) => f.id);
 
-    const [shimcache, amcache, userAssist, bam, autoruns, prefetch, lnk, jumpList, shellbags, findings] = await Promise.all([
+    const [shimcache, amcache, userAssist, bam, autoruns, prefetch, lnk, jumpList, shellbags, mft, usnJrnl, srum, findings] = await Promise.all([
       prisma.shimcacheEntry.findMany({ where: { fileId: { in: fileIds } }, orderBy: { order: "asc" }, take: ROW_CAP }),
       prisma.amcacheEntry.findMany({ where: { fileId: { in: fileIds } }, orderBy: { createdAt: "asc" }, take: ROW_CAP }),
       prisma.userAssistEntry.findMany({ where: { fileId: { in: fileIds } }, orderBy: { lastExecuted: "desc" }, take: ROW_CAP }),
@@ -40,6 +40,14 @@ export async function GET(req: NextRequest, props: Params) {
       prisma.lnkEntry.findMany({ where: { fileId: { in: fileIds } }, orderBy: { createdAt: "asc" }, take: ROW_CAP }),
       prisma.jumpListEntry.findMany({ where: { fileId: { in: fileIds } }, orderBy: { accessRank: "asc" }, take: ROW_CAP }),
       prisma.shellbagEntry.findMany({ where: { fileId: { in: fileIds } }, orderBy: { path: "asc" }, take: ROW_CAP }),
+      // $MFT/$UsnJrnl:$J can run into the hundreds of thousands to
+      // millions of rows — ROW_CAP still applies for this browsable tab
+      // (every row is still in the DB and still ran through the rule
+      // engine regardless; see processor.ts), same scope decision as
+      // every other artifact type here, just a more consequential one.
+      prisma.mftEntry.findMany({ where: { fileId: { in: fileIds } }, orderBy: { mftEntryNumber: "asc" }, take: ROW_CAP }),
+      prisma.usnJrnlEntry.findMany({ where: { fileId: { in: fileIds } }, orderBy: { usn: "asc" }, take: ROW_CAP }),
+      prisma.srumEntry.findMany({ where: { fileId: { in: fileIds } }, orderBy: { timestamp: "desc" }, take: ROW_CAP }),
       prisma.windowsArtifactFinding.findMany({
         where: { fileId: { in: fileIds } },
         orderBy: { matchCount: "desc" },
@@ -61,6 +69,9 @@ export async function GET(req: NextRequest, props: Params) {
       lnk,
       jumpList,
       shellbags,
+      mft: mft.map((r) => ({ ...r, fileSize: r.fileSize?.toString() ?? null })),
+      usnJrnl: usnJrnl.map((r) => ({ ...r, usn: r.usn.toString() })),
+      srum,
       findings,
     });
   } catch (err: unknown) {

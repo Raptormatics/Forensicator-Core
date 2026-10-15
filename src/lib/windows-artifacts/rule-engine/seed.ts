@@ -94,6 +94,14 @@ export const BUILTIN_RULES: BuiltinRuleDef[] = [
     ],
   },
   {
+    name: "Possible MFT Timestomping",
+    description: "A file's NTFS creation timestamp is later than its own MFT record's last-change time — the record was altered (e.g. via SetMACE/timestomping tools) after the fact, which shouldn't be possible under normal filesystem behavior",
+    severity: "high",
+    logic: "AND",
+    tags: ["anti-forensics", "timestomping"],
+    conditions: [cond("has_timestomp", "equals", "true", "c1")],
+  },
+  {
     name: "AppInit_DLLs Configured",
     description: "AppInit_DLLs is set — a DLL-injection persistence vector affecting every process that loads user32.dll",
     severity: "high",

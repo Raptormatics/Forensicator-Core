@@ -39,6 +39,7 @@ Emits one JSON object per line to stdout:
   {"type": "plugin_entry", "plugin": str, "data": dict}        — raw Shimcache/Amcache/BAM plugin output
   {"type": "autorun", "key_path", "value_name", "value_data", "category"}
   {"type": "userassist", "program_path", "run_count", "last_executed", "focus_count", "focus_time_ms"}
+  {"type": "srum_extension", "guid", "dll_name"}                 — software_hive only, see run_srum_extensions()
   {"type": "error", "message": str}                             — unrecoverable failure for this hive
 """
 import sys
@@ -182,6 +183,33 @@ def run_autoruns_software(reg):
                              getattr(v, "value", None) if hasattr(v, "value") else v.get("value"), "appinit_dll")
     except Exception:
         pass
+
+
+# ── SRUM Extensions — GUID -> DllName, needed to interpret SRUDB.dat ──────
+
+SRUM_EXTENSIONS_KEY = r"\Microsoft\Windows NT\CurrentVersion\SRUM\Extensions"
+
+
+def run_srum_extensions(reg):
+    try:
+        key = reg.get_key(SRUM_EXTENSIONS_KEY)
+    except Exception:
+        return  # not present on this system — not an error, just absent
+    try:
+        for subkey in key.iter_subkeys() or []:
+            guid = subkey.name
+            dll_name = None
+            try:
+                for v in subkey.get_values(as_json=True):
+                    name = getattr(v, "name", None) or v.get("name")
+                    if name == "DllName":
+                        dll_name = getattr(v, "value", None) if hasattr(v, "value") else v.get("value")
+                        break
+            except Exception:
+                pass
+            emit({"type": "srum_extension", "guid": guid, "dll_name": str(dll_name) if dll_name is not None else None})
+    except Exception as e:
+        emit({"type": "error", "message": f"SRUM extensions enumeration failed: {e}"})
 
 
 def run_autoruns_ntuser(reg):
@@ -336,6 +364,7 @@ def main():
         run_autoruns_system(reg)
     elif role == "software_hive":
         run_autoruns_software(reg)
+        run_srum_extensions(reg)
     elif role == "security_hive":
         # No hand-rolled extraction — SECURITY mainly holds LSA secrets,
         # which regipy doesn't decrypt (needs the SYSTEM hive's bootkey,

@@ -18,7 +18,10 @@ export type WinArtifactFileRole =
   | "prefetch"
   | "lnk"
   | "jumplist_automatic"
-  | "jumplist_custom";
+  | "jumplist_custom"
+  | "mft"
+  | "usnjrnl"
+  | "srum_db";
 
 /** All normalized field names Windows Artifact rules can operate against —
  * mirrors RamField/PcapField's role, rooted in the heterogeneous
@@ -26,7 +29,7 @@ export type WinArtifactFileRole =
  * row shape, since one WindowsArtifactFile can yield several different
  * kinds of subject. */
 export type WinArtifactField =
-  | "artifact_type" // shimcache | amcache | userassist | bam | autorun | prefetch | prefetch_reference | lnk | jumplist | shellbag
+  | "artifact_type" // shimcache | amcache | userassist | bam | autorun | prefetch | prefetch_reference | lnk | jumplist | shellbag | mft | usnjrnl | srum
   | "path"
   | "sha1"
   | "run_count"
@@ -34,6 +37,10 @@ export type WinArtifactField =
   | "value_name"
   | "key_path"
   | "sid"
+  | "is_allocated"      // mft only — "true" | "false"
+  | "has_timestomp"     // mft only — "true" when creationTime is later than entryModificationTime
+  | "usn_reason"         // usnjrnl only — space-joined decoded USN_REASON_* flags
+  | "provider_label"    // srum only
   | IocRuleField;
 
 export interface WinArtifactRuleCondition {
@@ -44,14 +51,18 @@ export interface WinArtifactRuleCondition {
 }
 
 export const FIELD_LABELS: Record<WinArtifactField, string> = {
-  artifact_type: "Artifact Type",
-  path:          "Path",
-  sha1:          "SHA1",
-  run_count:     "Run Count",
-  category:      "Autorun Category",
-  value_name:    "Registry Value Name",
-  key_path:      "Registry Key Path",
-  sid:           "User SID",
+  artifact_type:  "Artifact Type",
+  path:           "Path",
+  sha1:           "SHA1",
+  run_count:      "Run Count",
+  category:       "Autorun Category",
+  value_name:     "Registry Value Name",
+  key_path:       "Registry Key Path",
+  sid:            "User SID",
+  is_allocated:   "MFT Entry Allocated",
+  has_timestomp:  "Possible Timestomping",
+  usn_reason:     "USN Reason Flags",
+  provider_label: "SRUM Provider",
   ...IOC_FIELD_LABELS,
 };
 

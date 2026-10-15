@@ -45,6 +45,10 @@ export default function UploadWindowsArtifactsPage() {
   const [lnkFiles, setLnkFiles] = useState<File[]>([]);
   const [jumplistAutomaticFiles, setJumplistAutomaticFiles] = useState<File[]>([]);
   const [jumplistCustomFiles, setJumplistCustomFiles] = useState<File[]>([]);
+  const [mftFile, setMftFile] = useState<File | null>(null);
+  const [usnjrnlFile, setUsnjrnlFile] = useState<File | null>(null);
+  const [usnJournalMetadataFile, setUsnJournalMetadataFile] = useState<File | null>(null);
+  const [srudbFile, setSrudbFile] = useState<File | null>(null);
   const [hostname, setHostname] = useState("");
   const [notes, setNotes] = useState("");
 
@@ -96,6 +100,7 @@ export default function UploadWindowsArtifactsPage() {
     setSystemFile(null); setSoftwareFile(null); setSecurityFile(null); setAmcacheFile(null);
     setNtuserFiles([makeProfileFile()]); setUsrclassFiles([]);
     setPrefetchFiles([]); setLnkFiles([]); setJumplistAutomaticFiles([]); setJumplistCustomFiles([]);
+    setMftFile(null); setUsnjrnlFile(null); setUsnJournalMetadataFile(null); setSrudbFile(null);
     setHostname(""); setNotes(""); setError("");
     setSelectedCase(null); setPhase("case");
     setUploadPercent(0); setResultId("");
@@ -108,11 +113,13 @@ export default function UploadWindowsArtifactsPage() {
     prefetchFiles.reduce((s, f) => s + f.size, 0) +
     lnkFiles.reduce((s, f) => s + f.size, 0) +
     jumplistAutomaticFiles.reduce((s, f) => s + f.size, 0) +
-    jumplistCustomFiles.reduce((s, f) => s + f.size, 0);
+    jumplistCustomFiles.reduce((s, f) => s + f.size, 0) +
+    (mftFile?.size ?? 0) + (usnjrnlFile?.size ?? 0) + (usnJournalMetadataFile?.size ?? 0) + (srudbFile?.size ?? 0);
 
   const hasAnyFile = !!(
     systemFile || softwareFile || securityFile || amcacheFile || ntuserFiles.some(f => f.file) || usrclassFiles.some(f => f.file) ||
-    prefetchFiles.length > 0 || lnkFiles.length > 0 || jumplistAutomaticFiles.length > 0 || jumplistCustomFiles.length > 0
+    prefetchFiles.length > 0 || lnkFiles.length > 0 || jumplistAutomaticFiles.length > 0 || jumplistCustomFiles.length > 0 ||
+    mftFile || usnjrnlFile || srudbFile
   );
 
   function handleSubmit() {
@@ -160,6 +167,10 @@ export default function UploadWindowsArtifactsPage() {
       form.append("jumplistCustom", f);
       form.append("jumplistCustomRelativePath", f.webkitRelativePath || f.name);
     }
+    if (mftFile) form.append("mft", mftFile);
+    if (usnjrnlFile) form.append("usnjrnl", usnjrnlFile);
+    if (usnJournalMetadataFile) form.append("usnJournalMetadata", usnJournalMetadataFile);
+    if (srudbFile) form.append("srudb", srudbFile);
 
     const xhr = new XMLHttpRequest();
     xhrRef.current = xhr;
@@ -411,6 +422,18 @@ export default function UploadWindowsArtifactsPage() {
               setFiles={setJumplistCustomFiles}
               allowFolder
             />
+
+            <div>
+              <h2 className="text-sm font-semibold text-zinc-300 mb-3">
+                NTFS / SRUM Artifacts <span className="text-zinc-600 font-normal">(optional)</span>
+              </h2>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <FileSlot label="$MFT" file={mftFile} onChange={setMftFile} optionalNote="Master File Table" />
+                <FileSlot label="$J" file={usnjrnlFile} onChange={setUsnjrnlFile} optionalNote="the $UsnJrnl:$J stream" />
+                <FileSlot label="UsnJournal_Metadata.txt" file={usnJournalMetadataFile} onChange={setUsnJournalMetadataFile} optionalNote="fsutil usn queryjournal output, if collected" />
+                <FileSlot label="SRUDB.dat" file={srudbFile} onChange={setSrudbFile} optionalNote="SRUM database" />
+              </div>
+            </div>
 
             <div>
               <h2 className="text-sm font-semibold text-zinc-300 mb-3">
