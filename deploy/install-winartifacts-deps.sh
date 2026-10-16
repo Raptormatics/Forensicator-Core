@@ -76,7 +76,7 @@ if [[ "$installed_pyscca_version" < "$LIBSCCA_VERSION" ]]; then
     ldconfig
   )
 
-  # `make install` always drops the compiled pyscca.so into the generic,
+  # `make install` always drops the compiled module into the generic,
   # unversioned /usr/local/lib/python3/dist-packages — confirmed live
   # against this exact release (--with-pythondir has no effect on this
   # particular path; it's hardcoded in pyscca/Makefile, not threaded
@@ -85,9 +85,21 @@ if [[ "$installed_pyscca_version" < "$LIBSCCA_VERSION" ]]; then
   # that generic path isn't on, so `import pyscca` fails with the module
   # sitting right there unless it's also placed into the directory this
   # specific python3 build actually resolves.
+  #
+  # The installed filename isn't always plain "pyscca.so" — depending on
+  # the libyal release and the Python version's build conventions, it can
+  # come out ABI-tagged instead (e.g. "pyscca.cpython-314-x86_64-linux-gnu.so",
+  # confirmed live on Python 3.14/libfsntfs's equivalent pyfsntfs module
+  # below). Glob for whatever actually got installed rather than assuming
+  # one fixed name.
   python_site_packages="$(python3 -c "import sysconfig; print(sysconfig.get_path('platlib'))")"
   mkdir -p "$python_site_packages"
-  cp /usr/local/lib/python3/dist-packages/pyscca.so "$python_site_packages/"
+  pyscca_so=(/usr/local/lib/python3/dist-packages/pyscca*.so)
+  if [[ ! -e "${pyscca_so[0]}" ]]; then
+    echo "ERROR: libscca built successfully but no pyscca*.so was found in /usr/local/lib/python3/dist-packages" >&2
+    exit 1
+  fi
+  cp "${pyscca_so[@]}" "$python_site_packages/"
 
   rm -rf "$libscca_build_dir"
   trap - EXIT
@@ -120,11 +132,17 @@ if ! python3 -c "import pyfsntfs" >/dev/null 2>&1; then
     ldconfig
   )
 
-  # Same "make install drops the .so in an unversioned dist-packages path"
-  # gotcha as libscca above.
+  # Same "make install drops the module in an unversioned dist-packages
+  # path, and under a name that isn't always plain <module>.so" gotcha as
+  # libscca above.
   python_site_packages="$(python3 -c "import sysconfig; print(sysconfig.get_path('platlib'))")"
   mkdir -p "$python_site_packages"
-  cp /usr/local/lib/python3/dist-packages/pyfsntfs.so "$python_site_packages/"
+  pyfsntfs_so=(/usr/local/lib/python3/dist-packages/pyfsntfs*.so)
+  if [[ ! -e "${pyfsntfs_so[0]}" ]]; then
+    echo "ERROR: libfsntfs built successfully but no pyfsntfs*.so was found in /usr/local/lib/python3/dist-packages" >&2
+    exit 1
+  fi
+  cp "${pyfsntfs_so[@]}" "$python_site_packages/"
 
   rm -rf "$libfsntfs_build_dir"
   trap - EXIT
@@ -154,9 +172,17 @@ if ! python3 -c "import pyesedb" >/dev/null 2>&1; then
     ldconfig
   )
 
+  # Same "make install drops the module in an unversioned dist-packages
+  # path, and under a name that isn't always plain <module>.so" gotcha as
+  # libscca above.
   python_site_packages="$(python3 -c "import sysconfig; print(sysconfig.get_path('platlib'))")"
   mkdir -p "$python_site_packages"
-  cp /usr/local/lib/python3/dist-packages/pyesedb.so "$python_site_packages/"
+  pyesedb_so=(/usr/local/lib/python3/dist-packages/pyesedb*.so)
+  if [[ ! -e "${pyesedb_so[0]}" ]]; then
+    echo "ERROR: libesedb built successfully but no pyesedb*.so was found in /usr/local/lib/python3/dist-packages" >&2
+    exit 1
+  fi
+  cp "${pyesedb_so[@]}" "$python_site_packages/"
 
   rm -rf "$libesedb_build_dir"
   trap - EXIT
