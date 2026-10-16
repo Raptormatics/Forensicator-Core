@@ -118,6 +118,25 @@ export async function getRamChunkSize(): Promise<number> {
   return envVal > 0 ? envVal : 40 * 1024 * 1024;
 }
 
+/**
+ * DB override > WIN_ARTIFACTS_MAX_UPLOAD_BYTES env var > 5GB default.
+ * Combined size cap for one Windows Artifact Analysis upload — enforced
+ * identically here (server) and by the upload page's own copy of this
+ * same fallback chain (client), so a rejected-client-side upload doesn't
+ * even start, and a value raised here takes effect without a restart.
+ * Stored as BigInt (see schema comment) since a multi-GB value overflows
+ * a 32-bit int; converted to a plain number here since realistic values
+ * are nowhere near Number.MAX_SAFE_INTEGER.
+ */
+export async function getWinArtifactsMaxUploadBytes(): Promise<number> {
+  const settings = await getSystemSettings();
+  if (settings?.winArtifactsMaxUploadBytes && settings.winArtifactsMaxUploadBytes > BigInt(0)) {
+    return Number(settings.winArtifactsMaxUploadBytes);
+  }
+  const envVal = Number(process.env.WIN_ARTIFACTS_MAX_UPLOAD_BYTES);
+  return envVal > 0 ? envVal : 5 * 1024 * 1024 * 1024;
+}
+
 /** DB override > WIN_ARTIFACTS_DIR env var > default ./winartifacts-storage under the project root. */
 export async function getWinArtifactsDir(): Promise<string> {
   const settings = await getSystemSettings();

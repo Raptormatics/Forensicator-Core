@@ -13,7 +13,13 @@ type CaseOption = { id: string; caseSeq: number; title: string; status: string; 
 type Phase = "case" | "select" | "uploading" | "done" | "error";
 
 const CASE_SEVERITIES = ["important", "notable", "interesting", "informational"];
-const MAX_TOTAL_BYTES = 500 * 1024 * 1024;
+// Default/fallback only — the authoritative value is fetched from
+// /api/settings/system (winArtifactsMaxUploadBytes) below, so a limit
+// raised from Settings > General takes effect here without a rebuild.
+// Must stay in sync with getWinArtifactsMaxUploadBytes()'s own default,
+// since the server enforces the real limit regardless of what this page
+// shows — this is purely to fail fast client-side before uploading.
+const DEFAULT_MAX_TOTAL_BYTES = 5 * 1024 * 1024 * 1024;
 
 type ProfileFile = { id: string; profileName: string; file: File | null };
 
@@ -92,6 +98,7 @@ export default function UploadWindowsArtifactsPage() {
   const [uploadPercent, setUploadPercent] = useState(0);
   const [resultId, setResultId] = useState("");
   const [error, setError] = useState("");
+  const [maxTotalBytes, setMaxTotalBytes] = useState(DEFAULT_MAX_TOTAL_BYTES);
 
   const xhrRef = useRef<XMLHttpRequest | null>(null);
 
@@ -101,6 +108,11 @@ export default function UploadWindowsArtifactsPage() {
       .then(d => setCases((d.cases ?? []).filter((c: { status: string }) => c.status !== "closed").map((c: { id: string; caseSeq: number; title: string; status: string; severity: string }) => ({
         id: c.id, caseSeq: c.caseSeq, title: c.title, status: c.status, severity: c.severity,
       }))));
+
+    fetch("/api/settings/system")
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d?.winArtifactsMaxUploadBytes) setMaxTotalBytes(d.winArtifactsMaxUploadBytes); })
+      .catch(() => {});
   }, []);
 
   async function createAndSelectCase() {
@@ -175,8 +187,8 @@ export default function UploadWindowsArtifactsPage() {
 
   function handleSubmit() {
     if (!hasAnyFile || !selectedCase) return;
-    if (totalBytes > MAX_TOTAL_BYTES) {
-      setError(`Combined upload (${(totalBytes / 1024 / 1024).toFixed(0)} MB) exceeds the 500 MB limit for one collection.`);
+    if (totalBytes > maxTotalBytes) {
+      setError(`Combined upload (${(totalBytes / 1024 / 1024).toFixed(0)} MB) exceeds the ${(maxTotalBytes / 1024 / 1024).toFixed(0)} MB limit for one collection.`);
       setPhase("error");
       return;
     }
@@ -462,7 +474,7 @@ export default function UploadWindowsArtifactsPage() {
 
             <div>
               <h2 className="text-sm font-semibold text-zinc-300 mb-3">
-                Registry Hives <span className="text-zinc-600 font-normal">(select a hive together with its .LOG1/.LOG2 files, if you have them, in one multi-select)</span>
+                Registry Hives <span className="text-zinc-600 font-normal">(hold Ctrl and click each file — or Shift-click to select the range — to select a hive together with its .LOG1/.LOG2 files, if you have them)</span>
               </h2>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <HiveFileSlot label="SYSTEM" value={systemFile} onChange={setSystemFile} />
@@ -587,7 +599,7 @@ export default function UploadWindowsArtifactsPage() {
                 Windows Search / Defender / BITS <span className="text-zinc-600 font-normal">(optional)</span>
               </h2>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <FileSlot label="Windows.edb" file={searchedbFile} onChange={setSearchedbFile} optionalNote="Windows Search database" />
+                <FileSlot label="Windows.edb / Windows.db" file={searchedbFile} onChange={setSearchedbFile} optionalNote="Windows Search database — either filename, same parser" />
                 <FileSlot label="qmgr0.dat" file={qmgr0File} onChange={setQmgr0File} optionalNote="BITS job database" />
                 <FileSlot label="qmgr1.dat" file={qmgr1File} onChange={setQmgr1File} optionalNote="BITS job database" />
               </div>
@@ -843,7 +855,7 @@ function HiveProfileFileList({
   return (
     <div>
       <h2 className="text-sm font-semibold text-zinc-300 mb-3">
-        {title} <span className="text-zinc-600 font-normal">(select together with .LOG1/.LOG2, if you have them)</span>
+        {title} <span className="text-zinc-600 font-normal">(hold Ctrl and click each file — or Shift-click to select the range — to select it together with .LOG1/.LOG2, if you have them)</span>
       </h2>
       <div className="space-y-2">
         {files.map((pf) => (

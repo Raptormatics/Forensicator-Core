@@ -4,18 +4,16 @@ import path from "path";
 import crypto from "crypto";
 import { prisma } from "@/lib/db/prisma";
 import { requireAuth, orgWhere } from "@/lib/auth/api-guard";
-import { getWinArtifactsDir } from "@/lib/settings/system";
+import { getWinArtifactsDir, getWinArtifactsMaxUploadBytes } from "@/lib/settings/system";
 import { getWinArtifactsQueue } from "@/lib/jobs/queues";
 import type { WinArtifactFileRole } from "@/lib/windows-artifacts/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// Combined across every file in one upload — individual registry hives,
-// Amcache.hve, and (later phases) Prefetch/LNK files are all sub-100MB in
-// practice; this just bounds one triage bundle, same reasoning as PCAP's
-// own 500MB single-file cap.
-const MAX_TOTAL_BYTES = 500 * 1024 * 1024;
+// Combined across every file in one upload — see getWinArtifactsMaxUploadBytes()
+// for the DB-override/env-var/default chain (5GB default; configurable from
+// Settings > General without a restart).
 
 // Form-field name -> artifact role, for the single-file-per-collection roles.
 const SINGLE_FILE_FIELDS: { field: string; role: WinArtifactFileRole }[] = [
@@ -224,8 +222,10 @@ export async function POST(req: NextRequest) {
     }
 
     const totalBytes = pending.reduce((sum, p) => sum + p.file.size, 0);
-    if (totalBytes > MAX_TOTAL_BYTES) {
-      return NextResponse.json({ error: "file_too_large", message: "Combined upload exceeds the 500 MB limit for one collection." }, { status: 413 });
+    const maxTotalBytes = await getWinArtifactsMaxUploadBytes();
+    if (totalBytes > maxTotalBytes) {
+      const maxMb = (maxTotalBytes / 1024 / 1024).toFixed(0);
+      return NextResponse.json({ error: "file_too_large", message: `Combined upload exceeds the ${maxMb} MB limit for one collection.` }, { status: 413 });
     }
 
     const upload = await prisma.windowsArtifactUpload.create({

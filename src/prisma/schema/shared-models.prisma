@@ -299,6 +299,15 @@ model SystemSettings {
   // since they're installed together by the same deploy step and have
   // identical requirements, unlike Prefetch's separate dedicated setting.
   winArtifactsSystemPythonPath String? @map("win_artifacts_system_python_path")
+  // Overrides WIN_ARTIFACTS_MAX_UPLOAD_BYTES when set — the combined size
+  // cap for one Windows Artifact Analysis upload (registry hives + their
+  // .LOG1/.LOG2, $MFT, Prefetch, WER dumps, etc. all add up — a busy
+  // workstation's $MFT alone can run 1-2+ GB). BigInt, not Int — a 5GB+
+  // default/value overflows Postgres's 32-bit int4. Null resolves to the
+  // env var, then a 5GB default. Enforced identically client-side (the
+  // upload page) and server-side (the uploads route) — see
+  // getWinArtifactsMaxUploadBytes().
+  winArtifactsMaxUploadBytes BigInt? @map("win_artifacts_max_upload_bytes")
 
   // Critical-finding email alerts — one channel, one recipient address.
   // Off by default (no SMTP server is assumed to exist). Read fresh per

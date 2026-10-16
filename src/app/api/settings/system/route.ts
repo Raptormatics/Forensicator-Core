@@ -28,6 +28,7 @@ export async function GET(req: NextRequest) {
     ramChunkSizeBytes: settings?.ramChunkSizeBytes ?? null,
     winArtifactsDir: settings?.winArtifactsDir ?? null,
     winArtifactsPythonPath: settings?.winArtifactsPythonPath ?? null,
+    winArtifactsMaxUploadBytes: settings?.winArtifactsMaxUploadBytes != null ? Number(settings.winArtifactsMaxUploadBytes) : null,
   });
 }
 
@@ -46,6 +47,9 @@ const putSchema = z.object({
   ramChunkSizeBytes: z.number().int().min(0).optional(),
   winArtifactsDir: z.union([z.string().min(1).max(500), z.literal("")]).optional(),
   winArtifactsPythonPath: z.union([z.string().min(1).max(500), z.literal("")]).optional(),
+  // 0 clears the override (falls back to env var / 5GB default) — same
+  // convention as ramChunkSizeBytes above.
+  winArtifactsMaxUploadBytes: z.number().int().min(0).optional(),
 });
 
 // PUT — unrestricted (Core's sole user).
@@ -66,7 +70,7 @@ export async function PUT(req: NextRequest) {
   const data: {
     appDomain?: string | null; reportsDir?: string | null; pcapDir?: string | null; tsharkPath?: string | null;
     ramDir?: string | null; volatilityPath?: string | null; volatilitySymbolsDir?: string | null; ramChunkSizeBytes?: number | null;
-    winArtifactsDir?: string | null; winArtifactsPythonPath?: string | null;
+    winArtifactsDir?: string | null; winArtifactsPythonPath?: string | null; winArtifactsMaxUploadBytes?: bigint | null;
   } = {};
   if (body.appDomain !== undefined) {
     // Strip a trailing slash so callers can safely do `${appDomain}/api` etc.
@@ -99,6 +103,9 @@ export async function PUT(req: NextRequest) {
   if (body.winArtifactsPythonPath !== undefined) {
     data.winArtifactsPythonPath = body.winArtifactsPythonPath === "" ? null : body.winArtifactsPythonPath.trim();
   }
+  if (body.winArtifactsMaxUploadBytes !== undefined) {
+    data.winArtifactsMaxUploadBytes = body.winArtifactsMaxUploadBytes === 0 ? null : BigInt(body.winArtifactsMaxUploadBytes);
+  }
 
   const settings = await prisma.systemSettings.upsert({
     where: { id: SINGLETON_ID },
@@ -111,7 +118,9 @@ export async function PUT(req: NextRequest) {
       actorId: actor.id, actorEmail: actor.email,
       action: "system_settings_updated",
       resourceType: "system_settings", resourceId: SINGLETON_ID,
-      metadata: data as object,
+      // metadata is a Prisma Json field — bigint (winArtifactsMaxUploadBytes)
+      // isn't JSON-serializable, so it's narrowed to a number here first.
+      metadata: { ...data, winArtifactsMaxUploadBytes: data.winArtifactsMaxUploadBytes != null ? Number(data.winArtifactsMaxUploadBytes) : data.winArtifactsMaxUploadBytes } as object,
       severity: "warning",
     },
   });
@@ -127,5 +136,6 @@ export async function PUT(req: NextRequest) {
     ramChunkSizeBytes: settings.ramChunkSizeBytes,
     winArtifactsDir: settings.winArtifactsDir,
     winArtifactsPythonPath: settings.winArtifactsPythonPath,
+    winArtifactsMaxUploadBytes: settings.winArtifactsMaxUploadBytes != null ? Number(settings.winArtifactsMaxUploadBytes) : null,
   });
 }
