@@ -1,11 +1,11 @@
 <h1 align="center">🛡️ Forensicator Core 🛡️</h1>
 
 <h3 align="center">
-Free, Self-Hosted Digital Forensics & Case Management Platform
+Free, Self-Hosted Digital Forensics & Incident Response (DFIR) Platform
 </h3>
 
 <p align="center">
-Upload collected evidence, triage findings, manage cases, and generate reports.
+Ingest evidence from memory, disk, network, Windows artifacts, and logs. Enrich it against threat intelligence, correlate it across hosts and cases, and report on it — all from one self-hosted app.
 </p>
 
 <picture>
@@ -18,17 +18,18 @@ Upload collected evidence, triage findings, manage cases, and generate reports.
 
 ## 🤔 About
 
-**Forensicator Core** is the free, self-hosted edition of Forensicator's case management platform — the server-side counterpart to the [Forensicator collector](https://github.com/Johnng007/Live-Forensicator), where the artifacts it gathers actually get triaged, analyzed, and reported on.
+**Forensicator Core** is the free, self-hosted edition of Forensicator — a full DFIR (Digital Forensics & Incident Response) platform, not just a case tracker. It's the server-side counterpart to the [Forensicator collector](https://github.com/Johnng007/Live-Forensicator): the collector gathers evidence from a live host, Core is where that evidence actually gets parsed, analyzed, enriched, correlated, and reported on.
 
 Forensicator Core:
 
-* Ingests collector archives and extracts normalized findings, a timeline, and an attack-path reconstruction
-* Groups related investigations, hosts, and findings under Cases
+* Parses RAM dumps, PCAPs, raw log files, and Windows forensic artifacts (registry hives, Prefetch, $MFT, SRUM, Defender quarantine, and more) into structured, searchable findings — see Key Features below
+* Enriches indicators automatically against VirusTotal, AbuseIPDB, OTX, URLhaus, ThreatFox, and MalwareBazaar
+* Groups related investigations, hosts, and findings under Cases, with built-in incident-response playbooks
 * Builds a cross-investigation Host profile — finding counts, IOC hits, persistence events — every time a hostname shows up again
+* Correlates findings across uploads into a single narrative and relationship graph per case
 * Generates executive and technical reports (PDF, CSV, JSON, ZIP)
 * Includes AI-assisted finding analysis (Ollama, OpenAI, Anthropic, or any OpenAI-compatible endpoint)
 * Ships with a signed, offline-capable update mechanism — online, offline `.fpk` package, or CLI
-
 
 ---
 
@@ -66,9 +67,18 @@ cd /opt/forensicator-core
 sudo bash ./deploy/provision.sh
 ```
 
-No reboot needed — `provision.sh` installs Node.js, PostgreSQL, Redis, builds the app, sets up systemd units, then generates secrets, runs migrations, and starts the services itself, right there in the same command. Visit the machine's address in a browser once it prints "Setup complete" and complete the setup wizard.
+No reboot needed — `provision.sh` installs Node.js, PostgreSQL, Redis, `tshark` (for PCAP Analysis), builds the app, sets up systemd units, then generates secrets, runs migrations, and starts the services itself, right there in the same command. Visit the machine's address in a browser once it prints "Setup complete" and complete the setup wizard.
 
-Optional environment variables for `provision.sh` (see documentation for full list):
+Optional environment variables for `provision.sh`:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `ORG_NAME` | `Default Organization` | Seeded organization name |
+| `ORG_SLUG` | `default` | Seeded organization slug |
+| `PUBLIC_URL` | `http://localhost:3000` | Externally reachable URL, used as `NEXTAUTH_URL` |
+| `APP_PORT` | `3000` | Port `next start` binds to |
+| `SERVICE_USER` | `forensicator` | System account the app runs as |
+| `UPDATE_SERVER_URL` | `https://updates.forensicator.io/core` | Where "Check for Updates" queries. Set to an empty string to disable online update checks entirely (e.g. air-gapped installs) — offline/CLI `.fpk` installs work regardless of this setting |
 
 ```bash
 ORG_NAME="Acme Corp" ORG_SLUG=acme PUBLIC_URL="https://forensicator.acme.internal" sudo ./deploy/provision.sh
@@ -81,19 +91,46 @@ sudo ./deploy/uninstall.sh --dry-run   # preview first
 sudo ./deploy/uninstall.sh
 ```
 
-See `sudo ./deploy/uninstall.sh --help` for options (keeping the database, also removing this checkout, etc.). Docker installs don't need this — `docker compose down -v` instead.
+`uninstall.sh` leaves PostgreSQL/Redis/Node.js themselves, any swapfile `provision.sh` added, and this checkout's own files alone by default — pass `--purge-packages`, `--remove-swap`, or `--remove-app-dir` respectively to also remove those. `--keep-data` leaves the database and its role untouched (e.g. if you plan to point a fresh install at it later); `--no-backup` skips the pre-removal `pg_dump`. See `sudo ./deploy/uninstall.sh --help` for the full list. Docker installs don't need this — `docker compose down -v` instead.
 
 ---
 
 ## 🔍 Key Features
 
-* Case management — organize related investigations, hosts, and findings under a single Case as an incident unfolds
-* Investigation analysis — upload a collector archive and get normalized findings, a timeline, and an attack-path reconstruction
-* Host intelligence — every host that's had data collected from it, rolled up across every investigation it's ever appeared in
-* Executive/technical reporting — PDF, CSV, JSON, ZIP
-* AI-assisted analysis — per-finding verdicts from a local (Ollama) or commercial LLM
-* REST API with its own API Keys — build integrations without needing Enterprise
-* Audit log, role-based access, and a signed update mechanism (online, offline `.fpk`, or CLI) that verifies, backs up, migrates, and auto-rolls-back on a failed health check
+### Case & Investigation Management
+
+* **Cases** — organize related investigations, hosts, and findings under a single Case as an incident unfolds, with a human-readable case number
+* **Investigations** — upload a collector archive and get normalized findings, a timeline, and an attack-path reconstruction
+* **Built-in playbooks** — select an incident type on a case to apply a bundled response playbook
+* **Notes & bookmarks** — per-investigation/finding/evidence notes, and personal bookmarks for anything you want to get back to quickly
+* **Known-hash allowlisting** — link an NSRL-style known-good hash set to a case to cut down on noise
+
+### Analysis Engines
+
+Each of the following is its own upload type with independent background processing, a detail page with per-artifact-type tabs, and its own no-code detection-rule builder:
+
+* **RAM Analysis** — Volatility3-based memory image analysis (processes, network connections, malfind/injection detection, and more)
+* **PCAP Analysis** — network capture analysis: conversations, DNS queries, extracted IOCs
+* **Log Analysis** — upload any raw log file, pick a built-in or custom decoder, and get normalized events, extracted IOCs, and detection-rule matches
+* **Windows Artifact Analysis** — upload raw artifacts from a live Windows host (registry hives + their transaction logs, Prefetch, LNK/Jump Lists/Shellbags, $MFT/$UsnJrnl/SRUM, Windows Defender quarantine, WER crash reports/dumps, Windows Search, Recycle Bin, Notifications, BITS, Windows Timeline) and get them parsed into structured rows — paired with the [Forensicator collector](https://github.com/Johnng007/Live-Forensicator)'s `-WINARTIFACTS` flag
+
+### Threat Intelligence
+
+* Automatic IOC enrichment against **VirusTotal**, **AbuseIPDB**, **OTX AlienVault**, **URLhaus**, **ThreatFox**, and **MalwareBazaar** — bring your own API keys for the ones that need them; URLhaus and MalwareBazaar also offer a free, keyless bulk-feed cache you can sync on demand
+* **Host Intelligence** — every host that's had data collected from it, rolled up across every investigation it's ever appeared in
+* **Correlation** — cross-upload correlation into a single narrative and relationship graph per case, with an optional AI-generated interpretation on top of the deterministic facts
+
+### Reporting & AI
+
+* Executive and technical reporting — PDF, CSV, JSON, ZIP
+* AI-assisted analysis — per-finding verdicts and case correlation narratives from a local (Ollama) or commercial LLM (OpenAI, Anthropic, or any OpenAI-compatible endpoint)
+
+### Platform
+
+* REST API with its own API Keys — build integrations without writing glue code against the UI
+* Global search and a severity-ranked dashboard across every case
+* Audit log of account and data-changing actions
+* A signed update mechanism (online, offline `.fpk`, or CLI) that verifies, backs up, migrates, and auto-rolls-back on a failed health check
 
 ---
 
@@ -103,7 +140,40 @@ Three ways to update an existing install, covered in more detail in-app (Setting
 
 * **Online** — if `UPDATE_SERVER_URL` is configured (set by default on bare-metal installs), click "Check for Updates" then "Install Update".
 * **Offline** — upload a signed `.fpk` package directly (Settings → Updates → Offline Update). Works fully air-gapped.
-* **CLI** — `sudo forensicator update <package.fpk>`, or `sudo forensicator update --rollback <backup-id>` to undo a previous update.
+* **CLI** — see below.
+
+### CLI (bare-metal only)
+
+`provision.sh` installs a `forensicator` command for admins who prefer console/SSH over the Admin UI:
+
+```bash
+forensicator update <package.fpk>                    # install a signed update package
+forensicator update <package.fpk> --allow-downgrade   # install even if it's an older version
+forensicator update --list-backups                    # list available rollback points
+forensicator update --rollback <backup-id>             # undo a previous update
+```
+
+Every update is preceded by a database backup; a failed post-update health check triggers an automatic rollback on its own, before you'd even need `--rollback` yourself.
+
+---
+
+## 🩺 Troubleshooting (bare-metal)
+
+| Check | Command |
+|---|---|
+| Is the app running? | `systemctl status forensicator` |
+| Is the background worker running? | `systemctl status forensicator-workers` |
+| App logs | `journalctl -u forensicator -f` |
+| Worker logs (reports, enrichment) | `journalctl -u forensicator-workers -f` |
+| First-boot setup logs (secrets/DB/migrations) | `journalctl -u forensicator-firstboot` |
+| Is the app healthy? | `curl http://localhost:3000/api/health` — `{"status":"ok"}` means the app can reach Postgres |
+| Restart after a config change | `sudo systemctl restart forensicator` |
+
+Common first issues:
+
+* **Setup wizard never appears / blank page on first visit** — check `journalctl -u forensicator-firstboot` for a failed migration or secret-generation step; `forensicator.service` depends on it and won't start cleanly until it succeeds.
+* **"Check for Updates" does nothing** — confirm `UPDATE_SERVER_URL` is set in `/etc/forensicator/forensicator.env` and the box has outbound HTTPS; otherwise use an offline `.fpk` package instead.
+* **Running in Docker and `systemctl`/`journalctl` aren't available** — that's expected; use `docker compose logs -f` instead, and see the Docker-specific note under Quickstart above for why the in-app updater doesn't apply there.
 
 ---
 
@@ -121,6 +191,7 @@ npm run dev
 |---|---|
 | `npm run dev` | Next.js dev server with hot reload |
 | `npm run build` | Production build |
+| `npm run start` | Production build + start (what `forensicator.service` effectively runs) |
 | `npm run workers` | Runs the background job worker (reports, AI analysis) standalone |
 | `npm run prisma:generate` | Regenerate the Prisma client after a schema change |
 | `npm run prisma:migrate` | Create and apply a new migration (dev only) |
@@ -146,13 +217,17 @@ Participation is governed by our [Code of Conduct](CODE_OF_CONDUCT.md). Found a 
 
 ## 📄 License
 
-Forensicator Core is open-source software licensed under the **Apache License 2.0**.
+Forensicator Core is **source-available** software licensed under the **[Business Source License 1.1](LICENSE)** (BUSL-1.1).
 
 Copyright © 2026 [Raptormatics LLC](https://raptormatics.com).
 
-You are free to use, reproduce, modify, and distribute Forensicator Core in accordance with the terms of the Apache License 2.0.
+In plain terms:
 
-See the [`LICENSE`](LICENSE) file for the full license text.
+* You can read, use, self-host, and modify Forensicator Core free of charge — including for your own organization's internal digital forensics and incident response work, even commercially.
+* You can't take Forensicator Core (or a modified version of it) and offer it to third parties as a hosted, managed, white-labeled, or otherwise commercially-provided forensics/incident-response product or service without a separate commercial agreement with Raptormatics LLC.
+* Every version automatically converts to the permissive **Apache License 2.0** on its stated Change Date (currently **January 1, 2030**) — so this isn't a permanent restriction, just a time-boxed one.
+
+BUSL-1.1 is not an OSI-approved "open source" license (the use restriction above is exactly why), but the source is fully available here, and older versions become genuinely open source automatically over time. See the [`LICENSE`](LICENSE) file for the full, authoritative text — the summary above is for convenience only and isn't a substitute for reading it, or for your own legal advice if you're unsure whether your intended use is covered.
 
 ### Third-Party Components
 
