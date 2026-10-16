@@ -49,6 +49,15 @@ export default function UploadWindowsArtifactsPage() {
   const [usnjrnlFile, setUsnjrnlFile] = useState<File | null>(null);
   const [usnJournalMetadataFile, setUsnJournalMetadataFile] = useState<File | null>(null);
   const [srudbFile, setSrudbFile] = useState<File | null>(null);
+  const [werReportFiles, setWerReportFiles] = useState<File[]>([]);
+  const [werDumpFiles, setWerDumpFiles] = useState<File[]>([]);
+  const [recycleBinFiles, setRecycleBinFiles] = useState<File[]>([]);
+  const [notificationFiles, setNotificationFiles] = useState<ProfileFile[]>([]);
+  const [searchedbFile, setSearchedbFile] = useState<File | null>(null);
+  const [quarantineEntryFiles, setQuarantineEntryFiles] = useState<File[]>([]);
+  const [quarantineResourceFiles, setQuarantineResourceFiles] = useState<File[]>([]);
+  const [qmgr0File, setQmgr0File] = useState<File | null>(null);
+  const [qmgr1File, setQmgr1File] = useState<File | null>(null);
   const [hostname, setHostname] = useState("");
   const [notes, setNotes] = useState("");
 
@@ -101,6 +110,9 @@ export default function UploadWindowsArtifactsPage() {
     setNtuserFiles([makeProfileFile()]); setUsrclassFiles([]);
     setPrefetchFiles([]); setLnkFiles([]); setJumplistAutomaticFiles([]); setJumplistCustomFiles([]);
     setMftFile(null); setUsnjrnlFile(null); setUsnJournalMetadataFile(null); setSrudbFile(null);
+    setWerReportFiles([]); setWerDumpFiles([]); setRecycleBinFiles([]); setNotificationFiles([]);
+    setSearchedbFile(null); setQuarantineEntryFiles([]); setQuarantineResourceFiles([]);
+    setQmgr0File(null); setQmgr1File(null);
     setHostname(""); setNotes(""); setError("");
     setSelectedCase(null); setPhase("case");
     setUploadPercent(0); setResultId("");
@@ -114,12 +126,20 @@ export default function UploadWindowsArtifactsPage() {
     lnkFiles.reduce((s, f) => s + f.size, 0) +
     jumplistAutomaticFiles.reduce((s, f) => s + f.size, 0) +
     jumplistCustomFiles.reduce((s, f) => s + f.size, 0) +
-    (mftFile?.size ?? 0) + (usnjrnlFile?.size ?? 0) + (usnJournalMetadataFile?.size ?? 0) + (srudbFile?.size ?? 0);
+    (mftFile?.size ?? 0) + (usnjrnlFile?.size ?? 0) + (usnJournalMetadataFile?.size ?? 0) + (srudbFile?.size ?? 0) +
+    werReportFiles.reduce((s, f) => s + f.size, 0) + werDumpFiles.reduce((s, f) => s + f.size, 0) +
+    recycleBinFiles.reduce((s, f) => s + f.size, 0) +
+    notificationFiles.reduce((s, f) => s + (f.file?.size ?? 0), 0) +
+    (searchedbFile?.size ?? 0) +
+    quarantineEntryFiles.reduce((s, f) => s + f.size, 0) + quarantineResourceFiles.reduce((s, f) => s + f.size, 0) +
+    (qmgr0File?.size ?? 0) + (qmgr1File?.size ?? 0);
 
   const hasAnyFile = !!(
     systemFile || softwareFile || securityFile || amcacheFile || ntuserFiles.some(f => f.file) || usrclassFiles.some(f => f.file) ||
     prefetchFiles.length > 0 || lnkFiles.length > 0 || jumplistAutomaticFiles.length > 0 || jumplistCustomFiles.length > 0 ||
-    mftFile || usnjrnlFile || srudbFile
+    mftFile || usnjrnlFile || srudbFile ||
+    werReportFiles.length > 0 || werDumpFiles.length > 0 || recycleBinFiles.length > 0 || notificationFiles.some(f => f.file) ||
+    searchedbFile || quarantineEntryFiles.length > 0 || quarantineResourceFiles.length > 0 || qmgr0File || qmgr1File
   );
 
   function handleSubmit() {
@@ -171,6 +191,32 @@ export default function UploadWindowsArtifactsPage() {
     if (usnjrnlFile) form.append("usnjrnl", usnjrnlFile);
     if (usnJournalMetadataFile) form.append("usnJournalMetadata", usnJournalMetadataFile);
     if (srudbFile) form.append("srudb", srudbFile);
+    for (const f of werReportFiles) {
+      form.append("werReport", f);
+      form.append("werReportRelativePath", f.webkitRelativePath || f.name);
+    }
+    for (const f of werDumpFiles) {
+      form.append("werDump", f);
+      form.append("werDumpRelativePath", f.webkitRelativePath || f.name);
+    }
+    for (const f of recycleBinFiles) {
+      form.append("recyclebin", f);
+      form.append("recyclebinRelativePath", f.webkitRelativePath || f.name);
+    }
+    for (const f of notificationFiles) {
+      if (f.file) { form.append("notification", f.file); form.append("notificationProfileName", f.profileName); }
+    }
+    if (searchedbFile) form.append("searchedb", searchedbFile);
+    for (const f of quarantineEntryFiles) {
+      form.append("quarantineEntries", f);
+      form.append("quarantineEntriesRelativePath", f.webkitRelativePath || f.name);
+    }
+    for (const f of quarantineResourceFiles) {
+      form.append("quarantineResources", f);
+      form.append("quarantineResourcesRelativePath", f.webkitRelativePath || f.name);
+    }
+    if (qmgr0File) form.append("qmgr0", qmgr0File);
+    if (qmgr1File) form.append("qmgr1", qmgr1File);
 
     const xhr = new XMLHttpRequest();
     xhrRef.current = xhr;
@@ -435,6 +481,83 @@ export default function UploadWindowsArtifactsPage() {
               </div>
             </div>
 
+            <MultiFilePicker
+              title="Windows Error Reporting — Reports (Report.wer)"
+              hint="from WER\System or WER\&lt;profile&gt;\ReportArchive|ReportQueue — use &quot;Choose folder&quot; to grab them all at once"
+              accept=".wer"
+              label="Report.wer file"
+              files={werReportFiles}
+              setFiles={setWerReportFiles}
+              allowFolder
+            />
+
+            <MultiFilePicker
+              title="Windows Error Reporting — Crash Dumps (.dmp)"
+              hint="from the same WER folders, alongside each Report.wer"
+              accept=".dmp,.hdmp"
+              label="dump file"
+              files={werDumpFiles}
+              setFiles={setWerDumpFiles}
+              allowFolder
+            />
+
+            <MultiFilePicker
+              title="Recycle Bin Metadata ($I files)"
+              hint="from $Recycle.Bin\&lt;SID&gt;\ — use &quot;Choose folder&quot; to grab every SID subfolder at once; $R payload files are filtered out automatically"
+              accept=""
+              label="$I file"
+              files={recycleBinFiles}
+              setFiles={setRecycleBinFiles}
+              allowFolder
+              filterFn={(f) => /^\$I/i.test(f.name)}
+            />
+
+            <ProfileFileList
+              title="Notification Database (wpndatabase.db / appdb.dat, one per user profile)"
+              files={notificationFiles}
+              setFiles={setNotificationFiles}
+              profilePlaceholder="e.g. jsmith"
+            />
+
+            <div>
+              <h2 className="text-sm font-semibold text-zinc-300 mb-3">
+                Windows Search / Defender / BITS <span className="text-zinc-600 font-normal">(optional)</span>
+              </h2>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <FileSlot label="Windows.edb" file={searchedbFile} onChange={setSearchedbFile} optionalNote="Windows Search database" />
+                <FileSlot label="qmgr0.dat" file={qmgr0File} onChange={setQmgr0File} optionalNote="BITS job database" />
+                <FileSlot label="qmgr1.dat" file={qmgr1File} onChange={setQmgr1File} optionalNote="BITS job database" />
+              </div>
+            </div>
+
+            <MultiFilePicker
+              title="Defender Quarantine — Entries"
+              hint="from Quarantine\Entries — detection metadata, RC4-decrypted server-side"
+              accept=""
+              label="Entries file"
+              files={quarantineEntryFiles}
+              setFiles={setQuarantineEntryFiles}
+              allowFolder
+            />
+
+            <div>
+              <MultiFilePicker
+                title="Defender Quarantine — ResourceData"
+                hint="from Quarantine\ResourceData — decrypted server-side; the decrypted file becomes downloadable from the results page"
+                accept=""
+                label="ResourceData file"
+                files={quarantineResourceFiles}
+                setFiles={setQuarantineResourceFiles}
+                allowFolder
+              />
+              {quarantineResourceFiles.length > 0 && (
+                <p className="mt-2 flex items-center gap-1.5 text-xs text-amber-500">
+                  <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                  Decrypted quarantine payloads are real (if previously quarantined) malware samples, stored and made downloadable from the results page. Handle with care.
+                </p>
+              )}
+            </div>
+
             <div>
               <h2 className="text-sm font-semibold text-zinc-300 mb-3">
                 Context <span className="text-zinc-600 font-normal">(optional)</span>
@@ -471,7 +594,7 @@ export default function UploadWindowsArtifactsPage() {
 }
 
 function MultiFilePicker({
-  title, hint, accept, label, files, setFiles, allowFolder,
+  title, hint, accept, label, files, setFiles, allowFolder, filterFn,
 }: {
   title: string;
   hint: string;
@@ -486,9 +609,15 @@ function MultiFilePicker({
    * adds a second "Choose folder…" picker that recursively collects every
    * matching file from a chosen folder and its subfolders in one action. */
   allowFolder?: boolean;
+  /** Overrides the default extension-suffix match for artifact types
+   * whose relevant files aren't distinguishable by extension (Recycle
+   * Bin's $I/$R prefix convention, Defender quarantine's extensionless
+   * GUID-named files) — leave `accept` empty when using this. */
+  filterFn?: (f: File) => boolean;
 }) {
   const acceptExts = accept.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
   function filterByAccept(list: File[]): File[] {
+    if (filterFn) return list.filter(filterFn);
     if (acceptExts.length === 0) return list;
     return list.filter((f) => acceptExts.some((ext) => f.name.toLowerCase().endsWith(ext)));
   }

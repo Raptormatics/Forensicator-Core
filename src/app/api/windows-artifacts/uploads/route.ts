@@ -25,6 +25,9 @@ const SINGLE_FILE_FIELDS: { field: string; role: WinArtifactFileRole }[] = [
   { field: "amcache", role: "amcache_hive" },
   { field: "mft", role: "mft" },
   { field: "srudb", role: "srum_db" },
+  { field: "searchedb", role: "search_edb" },
+  { field: "qmgr0", role: "bits_queue" },
+  { field: "qmgr1", role: "bits_queue" },
 ];
 
 function isUploadedFile(v: FormDataEntryValue | null): v is File {
@@ -134,6 +137,41 @@ export async function POST(req: NextRequest) {
       const journalMetadataText = isUploadedFile(metadataFile) ? await metadataFile.text() : null;
       pending.push({ role: "usnjrnl", file: usnjrnlFile, profileName: null, journalMetadataText });
     }
+
+    // Windows Error Reporting — reports and crash dumps are each spread
+    // across a System folder and per-profile folders, same "folder-picker
+    // relative path preserved as the stored filename" convention as LNK.
+    const werReportFiles = formData.getAll("werReport").filter(isUploadedFile);
+    const werReportPaths = formData.getAll("werReportRelativePath").map((v) => String(v));
+    werReportFiles.forEach((file, i) => pending.push({ role: "wer_report", file, profileName: null, relativePath: werReportPaths[i] || null }));
+
+    const werDumpFiles = formData.getAll("werDump").filter(isUploadedFile);
+    const werDumpPaths = formData.getAll("werDumpRelativePath").map((v) => String(v));
+    werDumpFiles.forEach((file, i) => pending.push({ role: "wer_dump", file, profileName: null, relativePath: werDumpPaths[i] || null }));
+
+    // Recycle Bin $I files — one subfolder per SID, same relative-path
+    // preservation so the SID is recoverable from the stored filename.
+    const recycleBinFiles = formData.getAll("recyclebin").filter(isUploadedFile);
+    const recycleBinPaths = formData.getAll("recyclebinRelativePath").map((v) => String(v));
+    recycleBinFiles.forEach((file, i) => pending.push({ role: "recycle_bin", file, profileName: null, relativePath: recycleBinPaths[i] || null }));
+
+    // Notification database — one per user profile, same ProfileFileList
+    // pairing convention as NTUSER.DAT/UsrClass.dat.
+    const notificationFiles = formData.getAll("notification").filter(isUploadedFile);
+    const notificationNames = formData.getAll("notificationProfileName").map((v) => String(v));
+    notificationFiles.forEach((file, i) => pending.push({ role: "notification_db", file, profileName: notificationNames[i]?.trim() || null }));
+
+    // Defender quarantine — Entries (metadata) and ResourceData (payload)
+    // are uploaded as two independent roles; no relational link between a
+    // specific Entries file and a specific ResourceData file is assumed
+    // (see windows-artifacts plan's Decisions on why that's deliberate).
+    const quarantineEntryFiles = formData.getAll("quarantineEntries").filter(isUploadedFile);
+    const quarantineEntryPaths = formData.getAll("quarantineEntriesRelativePath").map((v) => String(v));
+    quarantineEntryFiles.forEach((file, i) => pending.push({ role: "quarantine_entry", file, profileName: null, relativePath: quarantineEntryPaths[i] || null }));
+
+    const quarantineResourceFiles = formData.getAll("quarantineResources").filter(isUploadedFile);
+    const quarantineResourcePaths = formData.getAll("quarantineResourcesRelativePath").map((v) => String(v));
+    quarantineResourceFiles.forEach((file, i) => pending.push({ role: "quarantine_resource", file, profileName: null, relativePath: quarantineResourcePaths[i] || null }));
 
     if (pending.length === 0) {
       return NextResponse.json({ error: "no_files", message: "Upload at least one artifact file (SYSTEM, SOFTWARE, NTUSER.DAT, or Amcache.hve)." }, { status: 400 });

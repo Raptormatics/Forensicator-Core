@@ -21,7 +21,15 @@ export type WinArtifactFileRole =
   | "jumplist_custom"
   | "mft"
   | "usnjrnl"
-  | "srum_db";
+  | "srum_db"
+  | "wer_report"
+  | "wer_dump"
+  | "recycle_bin"
+  | "notification_db"
+  | "search_edb"
+  | "quarantine_entry"
+  | "quarantine_resource"
+  | "bits_queue";
 
 /** All normalized field names Windows Artifact rules can operate against —
  * mirrors RamField/PcapField's role, rooted in the heterogeneous
@@ -29,7 +37,7 @@ export type WinArtifactFileRole =
  * row shape, since one WindowsArtifactFile can yield several different
  * kinds of subject. */
 export type WinArtifactField =
-  | "artifact_type" // shimcache | amcache | userassist | bam | autorun | prefetch | prefetch_reference | lnk | jumplist | shellbag | mft | usnjrnl | srum
+  | "artifact_type" // shimcache | amcache | userassist | bam | autorun | prefetch | prefetch_reference | lnk | jumplist | shellbag | mft | usnjrnl | srum | wer | wer_dump | recyclebin | bits | quarantine_payload
   | "path"
   | "sha1"
   | "run_count"
@@ -41,6 +49,9 @@ export type WinArtifactField =
   | "has_timestomp"     // mft only — "true" when creationTime is later than entryModificationTime
   | "usn_reason"         // usnjrnl only — space-joined decoded USN_REASON_* flags
   | "provider_label"    // srum only
+  | "exception_code"    // wer | wer_dump only
+  | "is_carved"         // bits only — "true" when the job was recovered via carving, not clean parsing
+  | "sha256"            // quarantine_payload only
   | IocRuleField;
 
 export interface WinArtifactRuleCondition {
@@ -63,6 +74,9 @@ export const FIELD_LABELS: Record<WinArtifactField, string> = {
   has_timestomp:  "Possible Timestomping",
   usn_reason:     "USN Reason Flags",
   provider_label: "SRUM Provider",
+  exception_code: "Exception Code",
+  is_carved:      "Recovered via Carving",
+  sha256:         "SHA256",
   ...IOC_FIELD_LABELS,
 };
 

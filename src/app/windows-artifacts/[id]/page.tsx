@@ -28,6 +28,14 @@ type ShellbagRow = { id: string; fileId: string; path: string; itemType: string 
 type MftRow = { id: string; fileId: string; mftEntryNumber: number; name: string; path: string | null; isAllocated: boolean; isDirectory: boolean; creationTime: string | null; entryModificationTime: string | null; fileSize: string | null; hasAlternateDataStreams: boolean };
 type UsnJrnlRow = { id: string; fileId: string; usn: string; timestamp: string | null; reason: string[]; fileName: string | null };
 type SrumRow = { id: string; fileId: string; tableName: string; providerLabel: string | null; timestamp: string | null; appId: string | null; userSid: string | null; details: Record<string, unknown> };
+type WerReportRow = { id: string; fileId: string; sourceFileName: string; eventType: string | null; eventTime: string | null; appName: string | null; appVersion: string | null; faultModuleName: string | null; exceptionCode: string | null; exceptionOffset: string | null };
+type WerDumpRow = { id: string; fileId: string; sourceFileName: string; exceptionCode: string | null; exceptionAddress: string | null; processId: number | null; processCreateTime: string | null; osVersion: string | null; moduleList: { name: string; base_address: string | null; size: number }[] };
+type RecycleBinRow = { id: string; fileId: string; sid: string; sourceFileName: string; formatVersion: number; originalPath: string; deletedTime: string | null; fileSizeBytes: string | null };
+type NotificationRow = { id: string; fileId: string; profileName: string | null; arrivalTime: string | null; notifType: string | null; tag: string | null; handlerLabel: string | null; payload: string | null };
+type SearchIndexRow = { id: string; fileId: string; tableName: string; recordIndex: number; details: Record<string, unknown> };
+type QuarantineEntryRow = { id: string; fileId: string; sourceFileName: string; detectionName: string | null; timestamp: string | null; threatId: string | null; resources: { detection_path: string | null; detection_type: string | null }[] };
+type QuarantinePayloadRow = { id: string; fileId: string; sourceFileName: string; magicValid: boolean; sha256: string | null; decryptedSizeBytes: string | null; fileTypeSniff: string | null };
+type BitsJobRow = { id: string; fileId: string; name: string | null; destFn: string | null; srcFn: string | null; state: string | null; ctime: string | null; isCarved: boolean };
 type Finding = { id: string; title: string; description: string | null; severity: string; matchCount: number; matchedField: string | null; matchedValue: string | null; rule: { id: string; name: string } | null };
 
 type Detail = {
@@ -44,10 +52,19 @@ type Detail = {
   mft: MftRow[];
   usnJrnl: UsnJrnlRow[];
   srum: SrumRow[];
+  werReports: WerReportRow[];
+  werDumps: WerDumpRow[];
+  recycleBin: RecycleBinRow[];
+  notifications: NotificationRow[];
+  searchIndex: SearchIndexRow[];
+  quarantineEntries: QuarantineEntryRow[];
+  quarantinePayloads: QuarantinePayloadRow[];
+  bitsJobs: BitsJobRow[];
   findings: Finding[];
 };
 
-type Tab = "overview" | "shimcache" | "amcache" | "userassist" | "bam" | "autoruns" | "prefetch" | "lnk" | "jumplist" | "shellbags" | "mft" | "usnjrnl" | "srum" | "findings";
+type Tab = "overview" | "shimcache" | "amcache" | "userassist" | "bam" | "autoruns" | "prefetch" | "lnk" | "jumplist" | "shellbags" | "mft" | "usnjrnl" | "srum"
+  | "wer" | "werdump" | "recyclebin" | "notifications" | "search" | "quarantine" | "quarantinepayloads" | "bits" | "findings";
 
 const STATUS_ICON: Record<string, React.ReactNode> = {
   ready:      <CheckCircle2 className="h-3.5 w-3.5 text-teal-400" />,
@@ -103,7 +120,11 @@ export default function WindowsArtifactDetailPage() {
   if (loading) return <div className="p-8 text-zinc-500">Loading…</div>;
   if (!data) return <div className="p-8 text-red-400">Collection not found.</div>;
 
-  const { upload, shimcache, amcache, userAssist, bam, autoruns, prefetch, lnk, jumpList, shellbags, mft, usnJrnl, srum, findings } = data;
+  const {
+    upload, shimcache, amcache, userAssist, bam, autoruns, prefetch, lnk, jumpList, shellbags, mft, usnJrnl, srum,
+    werReports, werDumps, recycleBin, notifications, searchIndex, quarantineEntries, quarantinePayloads, bitsJobs,
+    findings,
+  } = data;
 
   // filename carries the source subfolder when the upload form's folder
   // picker was used (e.g. "FAVOUR/Desktop/foo.lnk") — surfaced as a Source
@@ -125,6 +146,14 @@ export default function WindowsArtifactDetailPage() {
     { key: "mft", label: "$MFT", count: mft.length },
     { key: "usnjrnl", label: "$UsnJrnl:$J", count: usnJrnl.length },
     { key: "srum", label: "SRUM", count: srum.length },
+    { key: "wer", label: "WER Reports", count: werReports.length },
+    { key: "werdump", label: "WER Dumps", count: werDumps.length },
+    { key: "recyclebin", label: "Recycle Bin", count: recycleBin.length },
+    { key: "notifications", label: "Notifications", count: notifications.length },
+    { key: "search", label: "Search Index", count: searchIndex.length },
+    { key: "quarantine", label: "Quarantine Entries", count: quarantineEntries.length },
+    { key: "quarantinepayloads", label: "Quarantine Payloads", count: quarantinePayloads.length },
+    { key: "bits", label: "BITS", count: bitsJobs.length },
     { key: "findings", label: "Findings", count: findings.length },
   ];
 
@@ -360,6 +389,151 @@ export default function WindowsArtifactDetailPage() {
               { header: "Provider", wrap: true, csv: (r) => r.providerLabel ?? r.tableName, render: (r) => <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-xs text-zinc-400">{r.providerLabel ?? r.tableName}</span> },
               { header: "App / SID", wrap: true, csv: (r) => r.appId ?? r.userSid ?? "", render: (r) => <span className="font-mono text-xs text-zinc-500">{r.appId ?? r.userSid ?? "—"}</span> },
               { header: "Details", wrap: true, csv: (r) => JSON.stringify(r.details), render: (r) => <span className="font-mono text-xs text-zinc-500">{JSON.stringify(r.details)}</span> },
+            ]}
+          />
+        )}
+
+        {tab === "wer" && (
+          <SimpleTable
+            rows={werReports}
+            exportName={`windows-artifacts-${id}-wer-reports`}
+            empty="No WER reports — upload one or more Report.wer files to populate this tab."
+            columns={[
+              { header: "Event Type", csv: (r) => r.eventType ?? "", render: (r) => <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-xs text-zinc-400">{r.eventType ?? "—"}</span> },
+              { header: "App", wrap: true, csv: (r) => r.appName ?? "", render: (r) => <span className="font-mono text-xs">{r.appName ?? "—"}</span> },
+              { header: "Fault Module", wrap: true, csv: (r) => r.faultModuleName ?? "", render: (r) => <span className="font-mono text-xs text-zinc-500">{r.faultModuleName ?? "—"}</span> },
+              { header: "Exception", csv: (r) => r.exceptionCode ?? "", render: (r) => <span className="font-mono text-xs text-red-400">{r.exceptionCode ?? "—"}</span> },
+              { header: "Event Time", csv: (r) => r.eventTime ?? "", render: (r) => r.eventTime ? r.eventTime : "—" },
+              { header: "Source File", wrap: true, csv: (r) => r.sourceFileName, render: (r) => <span className="font-mono text-xs text-zinc-500">{r.sourceFileName}</span> },
+            ]}
+          />
+        )}
+
+        {tab === "werdump" && (
+          <SimpleTable
+            rows={werDumps}
+            exportName={`windows-artifacts-${id}-wer-dumps`}
+            empty="No crash dumps — upload one or more .dmp files to populate this tab."
+            columns={[
+              { header: "Exception", csv: (r) => r.exceptionCode ?? "", render: (r) => <span className="font-mono text-xs text-red-400">{r.exceptionCode ?? "—"}</span> },
+              { header: "Address", csv: (r) => r.exceptionAddress ?? "", render: (r) => <span className="font-mono text-xs text-zinc-500">{r.exceptionAddress ?? "—"}</span> },
+              { header: "PID", csv: (r) => String(r.processId ?? ""), render: (r) => r.processId ?? "—" },
+              { header: "Process Created", csv: (r) => r.processCreateTime ?? "", render: (r) => r.processCreateTime ? formatDateTime(new Date(r.processCreateTime)) : "—" },
+              { header: "OS Version", wrap: true, csv: (r) => r.osVersion ?? "", render: (r) => r.osVersion ?? "—" },
+              { header: "Modules", csv: (r) => String(r.moduleList.length), render: (r) => <span className="text-xs text-zinc-500">{r.moduleList.length}</span> },
+              { header: "Source File", wrap: true, csv: (r) => r.sourceFileName, render: (r) => <span className="font-mono text-xs text-zinc-500">{r.sourceFileName}</span> },
+            ]}
+          />
+        )}
+
+        {tab === "recyclebin" && (
+          <SimpleTable
+            rows={recycleBin}
+            exportName={`windows-artifacts-${id}-recycle-bin`}
+            empty="No Recycle Bin entries — upload one or more $I files to populate this tab."
+            columns={[
+              { header: "Original Path", wrap: true, csv: (r) => r.originalPath, render: (r) => <span className="font-mono text-xs">{r.originalPath}</span> },
+              { header: "Deleted", csv: (r) => r.deletedTime ?? "", render: (r) => r.deletedTime ? formatDateTime(new Date(r.deletedTime)) : "—" },
+              { header: "Size", csv: (r) => r.fileSizeBytes ?? "", render: (r) => r.fileSizeBytes ?? "—" },
+              { header: "SID", wrap: true, csv: (r) => r.sid, render: (r) => <span className="font-mono text-xs text-zinc-500">{r.sid}</span> },
+              { header: "Format", csv: (r) => String(r.formatVersion), render: (r) => `v${r.formatVersion}` },
+            ]}
+          />
+        )}
+
+        {tab === "notifications" && (
+          <SimpleTable
+            rows={notifications}
+            exportName={`windows-artifacts-${id}-notifications`}
+            empty="No notification entries — upload a wpndatabase.db/appdb.dat to populate this tab."
+            columns={[
+              { header: "Arrived", csv: (r) => r.arrivalTime ?? "", render: (r) => r.arrivalTime ? formatDateTime(new Date(r.arrivalTime)) : "—" },
+              { header: "Handler", wrap: true, csv: (r) => r.handlerLabel ?? "", render: (r) => <span className="font-mono text-xs">{r.handlerLabel ?? "—"}</span> },
+              { header: "Type", csv: (r) => r.notifType ?? "", render: (r) => r.notifType ?? "—" },
+              { header: "Tag", wrap: true, csv: (r) => r.tag ?? "", render: (r) => <span className="text-xs text-zinc-500">{r.tag ?? "—"}</span> },
+              { header: "Payload", wrap: true, csv: (r) => r.payload ?? "", render: (r) => <span className="font-mono text-xs text-zinc-500 break-all">{r.payload ?? "—"}</span> },
+              { header: "Profile", wrap: true, csv: (r) => r.profileName ?? "", render: (r) => r.profileName ?? "—" },
+            ]}
+          />
+        )}
+
+        {tab === "search" && (
+          <SimpleTable
+            rows={searchIndex}
+            exportName={`windows-artifacts-${id}-search-index`}
+            empty="No Windows Search entries — upload Windows.edb to populate this tab."
+            filter={{ label: "Table", getValue: (r) => r.tableName }}
+            columns={[
+              { header: "Table", csv: (r) => r.tableName, render: (r) => <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-xs text-zinc-400">{r.tableName}</span> },
+              { header: "Record #", csv: (r) => String(r.recordIndex), render: (r) => r.recordIndex },
+              { header: "Details", wrap: true, csv: (r) => JSON.stringify(r.details), render: (r) => <span className="font-mono text-xs text-zinc-500">{JSON.stringify(r.details)}</span> },
+            ]}
+          />
+        )}
+
+        {tab === "quarantine" && (
+          <SimpleTable
+            rows={quarantineEntries}
+            exportName={`windows-artifacts-${id}-quarantine-entries`}
+            empty="No Defender quarantine entries — upload one or more Quarantine\\Entries files to populate this tab."
+            columns={[
+              { header: "Detection", wrap: true, csv: (r) => r.detectionName ?? "", render: (r) => <span className="font-mono text-xs text-red-400">{r.detectionName ?? "—"}</span> },
+              { header: "Detected", csv: (r) => r.timestamp ?? "", render: (r) => r.timestamp ? formatDateTime(new Date(r.timestamp)) : "—" },
+              { header: "Resources", csv: (r) => String(r.resources.length), render: (r) => r.resources.length },
+              { header: "Paths", wrap: true, csv: (r) => r.resources.map((x) => x.detection_path).filter(Boolean).join("; "), render: (r) => <span className="font-mono text-xs text-zinc-500 break-all">{r.resources.map((x) => x.detection_path).filter(Boolean).join("; ") || "—"}</span> },
+              { header: "Source File", wrap: true, csv: (r) => r.sourceFileName, render: (r) => <span className="font-mono text-xs text-zinc-500">{r.sourceFileName}</span> },
+            ]}
+          />
+        )}
+
+        {tab === "quarantinepayloads" && (
+          <div className="space-y-3">
+            {quarantinePayloads.length === 0 ? (
+              <p className="text-sm text-zinc-600 py-12 text-center rounded-xl border border-dashed border-zinc-800">
+                No Defender quarantine payloads — upload one or more Quarantine\ResourceData files to populate this tab.
+              </p>
+            ) : (
+              <>
+                <p className="flex items-center gap-1.5 text-xs text-amber-500">
+                  <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                  Decrypted payloads are real (if previously quarantined) malware samples. Handle with care.
+                </p>
+                <SimpleTable
+                  rows={quarantinePayloads}
+                  exportName={`windows-artifacts-${id}-quarantine-payloads`}
+                  empty=""
+                  columns={[
+                    { header: "Source File", wrap: true, csv: (r) => r.sourceFileName, render: (r) => <span className="font-mono text-xs">{r.sourceFileName}</span> },
+                    { header: "SHA256", wrap: true, csv: (r) => r.sha256 ?? "", render: (r) => r.sha256 ? <Link href={`/intelligence/ioc/${encodeURIComponent(r.sha256)}`} className="font-mono text-xs text-amber-300 hover:underline">{r.sha256}</Link> : "—" },
+                    { header: "Type", csv: (r) => r.fileTypeSniff ?? "", render: (r) => <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-xs text-zinc-400">{r.fileTypeSniff ?? "—"}</span> },
+                    { header: "Size", csv: (r) => r.decryptedSizeBytes ?? "", render: (r) => r.decryptedSizeBytes ?? "—" },
+                    {
+                      header: "Download", csv: () => "",
+                      render: (r) => r.magicValid ? (
+                        <a href={`/api/windows-artifacts/payloads/${r.id}/download`} className="flex items-center gap-1 text-xs text-amber-400 hover:underline">
+                          <Download className="h-3 w-3" /> Decrypted
+                        </a>
+                      ) : <span className="text-xs text-zinc-600">—</span>,
+                    },
+                  ]}
+                />
+              </>
+            )}
+          </div>
+        )}
+
+        {tab === "bits" && (
+          <SimpleTable
+            rows={bitsJobs}
+            exportName={`windows-artifacts-${id}-bits`}
+            empty="No BITS job records — upload qmgr0.dat/qmgr1.dat to populate this tab."
+            columns={[
+              { header: "Name", wrap: true, csv: (r) => r.name ?? "", render: (r) => <span className="font-mono text-xs">{r.name ?? "—"}</span> },
+              { header: "Destination", wrap: true, csv: (r) => r.destFn ?? "", render: (r) => <span className="font-mono text-xs text-zinc-500">{r.destFn ?? "—"}</span> },
+              { header: "Source", wrap: true, csv: (r) => r.srcFn ?? "", render: (r) => <span className="font-mono text-xs text-zinc-500 break-all">{r.srcFn ?? "—"}</span> },
+              { header: "State", csv: (r) => r.state ?? "", render: (r) => r.state ?? "—" },
+              { header: "Created", csv: (r) => r.ctime ?? "", render: (r) => r.ctime ? formatDateTime(new Date(r.ctime)) : "—" },
+              { header: "Carved", csv: (r) => r.isCarved ? "Yes" : "No", render: (r) => r.isCarved ? <span className="text-amber-400">Yes</span> : "No" },
             ]}
           />
         )}

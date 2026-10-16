@@ -102,6 +102,22 @@ export const BUILTIN_RULES: BuiltinRuleDef[] = [
     conditions: [cond("has_timestomp", "equals", "true", "c1")],
   },
   {
+    name: "Recovered BITS Job Evidence",
+    description: "A BITS job record was recovered via carving (a partially-deleted/overwritten entry), not clean parsing — attackers and malware commonly delete BITS job records after using BITS to download/stage payloads",
+    severity: "medium",
+    logic: "AND",
+    tags: ["defense-evasion", "bits"],
+    conditions: [cond("is_carved", "equals", "true", "c1")],
+  },
+  {
+    name: "Defender Quarantine Payload Matches Known Threat-Intel IOC",
+    description: "A decrypted Windows Defender quarantine payload's SHA256 already carries prior enrichment from your organization's threat-intel providers",
+    severity: "critical",
+    logic: "AND",
+    tags: ["threat-intel", "defender"],
+    conditions: [cond("ioc_known", "equals", "true", "c1")],
+  },
+  {
     name: "AppInit_DLLs Configured",
     description: "AppInit_DLLs is set — a DLL-injection persistence vector affecting every process that loads user32.dll",
     severity: "high",

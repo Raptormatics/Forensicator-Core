@@ -3,8 +3,12 @@
 # Installs the system-level tools Windows Artifact Analysis needs:
 # python3-libscca (Prefetch — src/lib/windows-artifacts/prefetch-parse.py),
 # libfsntfs/pyfsntfs ($MFT — mft-parse.py), libesedb/pyesedb (SRUDB.dat —
-# srum-parse.py), and a Python venv with regipy[full]/LnkParse3/olefile
-# (registry hives, LNK, Jump Lists, Shellbags, $UsnJrnl:$J).
+# srum-parse.py, and now also Windows.edb — search-parse.py), and a Python
+# venv with regipy[full]/LnkParse3/olefile/bits_parser/minidump (registry
+# hives, LNK, Jump Lists, Shellbags, $UsnJrnl:$J, BITS queue files, and
+# WER crash dumps). bits_parser and minidump are both pure-Python/MIT, no
+# C build needed — same venv as everything else here, not the system
+# python3.
 #
 # Unlike deploy/install-system-deps.sh (PCAP/RAM Analysis's equivalent),
 # which ships from the Enterprise overlay because those are overlay
@@ -161,7 +165,7 @@ if ! python3 -c "import pyesedb" >/dev/null 2>&1; then
 fi
 
 if [[ ! -x "${APP_DIR}/.venvs/winartifacts/bin/python3" ]]; then
-  echo "==> Installing regipy, LnkParse3, olefile (Windows Artifact Analysis registry/LNK/Jump List/Shellbag dependencies)"
+  echo "==> Creating Windows Artifact Analysis venv"
   # python3-venv isn't pulled in by the libscca branch above when libscca
   # is already new enough to skip it — needed unconditionally here for
   # `python3 -m venv` itself. No-op (apt skips it instantly) if already present.
@@ -171,9 +175,18 @@ if [[ ! -x "${APP_DIR}/.venvs/winartifacts/bin/python3" ]]; then
   fi
   mkdir -p "${APP_DIR}/.venvs"
   chown "${SERVICE_USER}:${SERVICE_USER}" "${APP_DIR}/.venvs"
-  runuser -u "$SERVICE_USER" -- bash -lc "
-    python3 -m venv '${APP_DIR}/.venvs/winartifacts' &&
-    '${APP_DIR}/.venvs/winartifacts/bin/pip' install --upgrade pip &&
-    '${APP_DIR}/.venvs/winartifacts/bin/pip' install 'regipy[full]' LnkParse3 olefile
-  " || echo "WARNING: regipy/LnkParse3/olefile install failed — Windows Artifact Analysis will be unavailable until installed manually"
+  runuser -u "$SERVICE_USER" -- bash -lc "python3 -m venv '${APP_DIR}/.venvs/winartifacts'"
 fi
+
+# Always re-run pip install against the current package list (not just on
+# first creation) — pip itself is idempotent for already-satisfied
+# packages, and this is what actually backfills a NEW dependency (like
+# bits_parser/minidump, added after this venv already existed on an
+# already-deployed instance) onto every instance that updates in place,
+# not just fresh installs. Matches this script's own stated idempotency
+# goal — see the header comment on why provision.sh alone isn't enough.
+echo "==> Installing regipy, LnkParse3, olefile, bits_parser, minidump (Windows Artifact Analysis pure-Python dependencies)"
+runuser -u "$SERVICE_USER" -- bash -lc "
+  '${APP_DIR}/.venvs/winartifacts/bin/pip' install --upgrade pip &&
+  '${APP_DIR}/.venvs/winartifacts/bin/pip' install 'regipy[full]' LnkParse3 olefile bits_parser minidump
+" || echo "WARNING: one or more pure-Python Windows Artifact Analysis dependencies failed to install — affected artifact types will be unavailable until installed manually"

@@ -56,6 +56,8 @@ model WindowsArtifactFile {
 
   // system_hive | software_hive | security_hive | ntuser_hive | amcache_hive | usrclass_hive
   // | prefetch | lnk | jumplist_automatic | jumplist_custom | mft | usnjrnl | srum_db
+  // | wer_report | wer_dump | recycle_bin | notification_db | search_edb | quarantine_entry
+  // | quarantine_resource | bits_queue
   role     String
   filename String
   fileSize Int    @map("file_size")
@@ -93,6 +95,14 @@ model WindowsArtifactFile {
   mftEntries        MftEntry[]
   usnJrnlEntries    UsnJrnlEntry[]
   srumEntries       SrumEntry[]
+  werReportEntries  WerReportEntry[]
+  werDumpEntries    WerDumpEntry[]
+  recycleBinEntries RecycleBinEntry[]
+  notificationEntries NotificationEntry[]
+  searchIndexEntries  SearchIndexEntry[]
+  quarantineEntries   DefenderQuarantineEntry[]
+  quarantinePayloads  DefenderQuarantinePayload[]
+  bitsJobEntries      BitsJobEntry[]
   findings          WindowsArtifactFinding[]
 
   createdAt DateTime  @default(now()) @map("created_at")
@@ -475,4 +485,237 @@ model WindowsArtifactRule {
   @@index([severity])
   @@index([isBuiltin])
   @@map("windows_artifact_rules")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Windows Error Reporting — Report.wer (text key=value) and the associated
+// minidump (.dmp), each uploaded independently via the collector's own
+// per-report folder structure (WER\<System|profile>\ReportArchive|
+// ReportQueue\<report-folder>\...) — see wer-engine.ts/wer-parse.py and
+// wer-dump-engine.ts/wer-dump-parse.py.
+// ─────────────────────────────────────────────────────────────────────────
+model WerReportEntry {
+  id     String              @id @default(uuid()) @db.Uuid
+  fileId String              @map("file_id") @db.Uuid
+  file   WindowsArtifactFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  sourceFileName String @map("source_file_name") @db.Text // relative path preserved from the collector (e.g. "jsmith/ReportArchive/.../Report.wer")
+
+  eventType String? @map("event_type") // e.g. APPCRASH, BEX, CLR20r3 — drives which Sig[n] slots mean what
+  eventTime DateTime? @map("event_time")
+  reportGuid String? @map("report_guid")
+
+  // Microsoft's documented APPCRASH bucket parameters (Sig[0..7]) — only
+  // meaningful when eventType is APPCRASH-shaped; left null otherwise.
+  appName                String?   @map("app_name") @db.Text
+  appVersion             String?   @map("app_version")
+  appTimestamp           String?   @map("app_timestamp")
+  faultModuleName        String?   @map("fault_module_name") @db.Text
+  faultModuleVersion     String?   @map("fault_module_version")
+  faultModuleTimestamp   String?   @map("fault_module_timestamp")
+  exceptionCode          String?   @map("exception_code")
+  exceptionOffset        String?   @map("exception_offset")
+
+  sigFields Json @db.JsonB @map("sig_fields") // full Sig[n]/DynamicSig[n] Name/Value list, any eventType
+  rawFields Json @db.JsonB @map("raw_fields") // every Key=Value line verbatim — nothing dropped
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([fileId])
+  @@map("wer_report_entries")
+}
+
+model WerDumpEntry {
+  id     String              @id @default(uuid()) @db.Uuid
+  fileId String              @map("file_id") @db.Uuid
+  file   WindowsArtifactFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  sourceFileName String @map("source_file_name") @db.Text
+
+  exceptionCode    String? @map("exception_code")
+  exceptionAddress String? @map("exception_address")
+  faultingThreadId Int?    @map("faulting_thread_id")
+
+  processId         Int?      @map("process_id")
+  processCreateTime DateTime? @map("process_create_time")
+
+  osVersion       String? @map("os_version")
+  cpuArchitecture String? @map("cpu_architecture")
+
+  moduleList Json @db.JsonB @map("module_list") // [{name, baseAddress, size}] — loaded modules, feeds existing LOLBin/path rules via refKey per module
+  miscInfo   Json @db.JsonB @map("misc_info")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([fileId])
+  @@map("wer_dump_entries")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Recycle Bin $I metadata files — see recyclebin-engine.ts/recyclebin-parse.py.
+// ─────────────────────────────────────────────────────────────────────────
+model RecycleBinEntry {
+  id     String              @id @default(uuid()) @db.Uuid
+  fileId String              @map("file_id") @db.Uuid
+  file   WindowsArtifactFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  sid            String @map("sid") // the $Recycle.Bin\<SID> folder this came from
+  sourceFileName String @map("source_file_name") @db.Text // the $I filename itself
+  formatVersion  Int    @map("format_version") // 1 (pre-Win10) or 2
+
+  originalPath   String    @db.Text @map("original_path")
+  deletedTime    DateTime? @map("deleted_time")
+  fileSizeBytes  BigInt?   @map("file_size_bytes")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([fileId])
+  @@index([sid])
+  @@map("recycle_bin_entries")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Windows notification platform database (wpndatabase.db/appdb.dat) — see
+// notification-engine.ts/notification-parse.py. SQLite is self-describing,
+// so this leans on live PRAGMA table_info() introspection rather than a
+// hardcoded schema; `details` always carries the full row regardless of
+// whether the well-known Notification/NotificationHandler columns matched.
+// ─────────────────────────────────────────────────────────────────────────
+model NotificationEntry {
+  id     String              @id @default(uuid()) @db.Uuid
+  fileId String              @map("file_id") @db.Uuid
+  file   WindowsArtifactFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  profileName String? @map("profile_name")
+
+  arrivalTime DateTime? @map("arrival_time")
+  expiryTime  DateTime? @map("expiry_time")
+  notifType   String?   @map("notif_type")
+  tag         String?
+  groupName   String?   @map("group_name")
+  handlerId   String?   @map("handler_id")
+  handlerLabel String?  @map("handler_label") // resolved via the same file's NotificationHandler table, when present
+
+  payload String? @db.Text // the notification's own XML/text payload, verbatim
+
+  details Json @db.JsonB // the full row, every column this DB actually has
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([fileId])
+  @@map("notification_entries")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Windows Search database (Windows.edb) — see search-engine.ts/search-
+// parse.py. Real-world column names are frequently per-install-specific/
+// obfuscated on modern Windows, so this is a structural dump for manual
+// review (table/column -> value), not a semantic decode — deliberately not
+// fed into the rule engine (see windows-artifacts plan's Decisions).
+// ─────────────────────────────────────────────────────────────────────────
+model SearchIndexEntry {
+  id     String              @id @default(uuid()) @db.Uuid
+  fileId String              @map("file_id") @db.Uuid
+  file   WindowsArtifactFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  tableName   String @map("table_name")
+  recordIndex Int    @map("record_index")
+
+  details Json @db.JsonB
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([fileId])
+  @@index([tableName])
+  @@map("search_index_entries")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Windows Defender quarantine — Entries (detection metadata, RC4-decrypted
+// TLV) and ResourceData (the quarantined file's own decrypted bytes), see
+// defender-quarantine-engine.ts/defender-quarantine-parse.py. These are
+// uploaded as two independent file roles (quarantine_entry/
+// quarantine_resource) — there's no verified filename/ID convention
+// linking a specific Entries resource record to a specific ResourceData
+// file, so `resources` stays a JSON blob rather than a fabricated FK.
+// ─────────────────────────────────────────────────────────────────────────
+model DefenderQuarantineEntry {
+  id     String              @id @default(uuid()) @db.Uuid
+  fileId String              @map("file_id") @db.Uuid
+  file   WindowsArtifactFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  sourceFileName String  @map("source_file_name") @db.Text
+  entryIdHex     String? @map("entry_id_hex")
+  scanIdHex      String? @map("scan_id_hex")
+  threatId       String? @map("threat_id")
+  detectionName  String? @map("detection_name")
+  timestamp      DateTime?
+
+  resources Json @db.JsonB // [{detectionPath, detectionType, creationTime, lastAccessTime, lastWriteTime, physicalPath, flags, unknownFields}]
+  rawFields Json @db.JsonB @map("raw_fields") // every decoded TLV field, including unrecognized IDs — nothing dropped
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([fileId])
+  @@map("defender_quarantine_entries")
+}
+
+model DefenderQuarantinePayload {
+  id     String              @id @default(uuid()) @db.Uuid
+  fileId String              @map("file_id") @db.Uuid
+  file   WindowsArtifactFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  sourceFileName     String  @map("source_file_name") @db.Text
+  magicValid         Boolean @map("magic_valid") // did the RC4-decrypted 0x0BAD00 header magic check pass
+  sha256             String?
+  decryptedSizeBytes BigInt? @map("decrypted_size_bytes")
+  decryptedStoragePath String? @map("decrypted_storage_path") // where the decrypted payload was written — see the new download route
+  fileTypeSniff      String? @map("file_type_sniff") // e.g. "PE32", "text", "unknown" — simple magic-byte sniff, not a full file-type library
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([fileId])
+  @@index([sha256])
+  @@map("defender_quarantine_payloads")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// BITS job database (qmgr0.dat/qmgr1.dat, legacy format only — see
+// windows-artifacts plan's Decisions for why the newer ESE-based qmgr.db
+// is out of scope) — see bits-engine.ts/bits-parse.py, which wraps the
+// MIT-licensed bits_parser library. One row per (job, file-transfer) pair;
+// isCarved marks a job recovered via carving rather than clean parsing
+// (e.g. a deleted job record) — forensically notable on its own, see the
+// "Recovered BITS Job Evidence" built-in rule.
+// ─────────────────────────────────────────────────────────────────────────
+model BitsJobEntry {
+  id     String              @id @default(uuid()) @db.Uuid
+  fileId String              @map("file_id") @db.Uuid
+  file   WindowsArtifactFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  jobId    String? @map("job_id")
+  name     String? @db.Text
+  desc     String? @db.Text
+  cmd      String? @db.Text
+  sid      String?
+  jobType  String? @map("job_type")
+  priority String?
+  state    String?
+
+  ctime DateTime?
+  mtime DateTime?
+
+  destFn             String? @map("dest_fn") @db.Text
+  srcFn              String? @map("src_fn") @db.Text
+  tmpFn              String? @map("tmp_fn") @db.Text
+  downloadSizeBytes  BigInt? @map("download_size_bytes")
+  transferSizeBytes  BigInt? @map("transfer_size_bytes")
+
+  isCarved Boolean @default(false) @map("is_carved")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([fileId])
+  @@index([jobId])
+  @@map("bits_job_entries")
 }

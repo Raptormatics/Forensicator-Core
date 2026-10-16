@@ -30,7 +30,11 @@ export async function GET(req: NextRequest, props: Params) {
 
     const fileIds = upload.files.map((f) => f.id);
 
-    const [shimcache, amcache, userAssist, bam, autoruns, prefetch, lnk, jumpList, shellbags, mft, usnJrnl, srum, findings] = await Promise.all([
+    const [
+      shimcache, amcache, userAssist, bam, autoruns, prefetch, lnk, jumpList, shellbags, mft, usnJrnl, srum,
+      werReports, werDumps, recycleBin, notifications, searchIndex, quarantineEntries, quarantinePayloads, bitsJobs,
+      findings,
+    ] = await Promise.all([
       prisma.shimcacheEntry.findMany({ where: { fileId: { in: fileIds } }, orderBy: { order: "asc" }, take: ROW_CAP }),
       prisma.amcacheEntry.findMany({ where: { fileId: { in: fileIds } }, orderBy: { createdAt: "asc" }, take: ROW_CAP }),
       prisma.userAssistEntry.findMany({ where: { fileId: { in: fileIds } }, orderBy: { lastExecuted: "desc" }, take: ROW_CAP }),
@@ -48,6 +52,17 @@ export async function GET(req: NextRequest, props: Params) {
       prisma.mftEntry.findMany({ where: { fileId: { in: fileIds } }, orderBy: { mftEntryNumber: "asc" }, take: ROW_CAP }),
       prisma.usnJrnlEntry.findMany({ where: { fileId: { in: fileIds } }, orderBy: { usn: "asc" }, take: ROW_CAP }),
       prisma.srumEntry.findMany({ where: { fileId: { in: fileIds } }, orderBy: { timestamp: "desc" }, take: ROW_CAP }),
+      prisma.werReportEntry.findMany({ where: { fileId: { in: fileIds } }, orderBy: { eventTime: "desc" }, take: ROW_CAP }),
+      prisma.werDumpEntry.findMany({ where: { fileId: { in: fileIds } }, orderBy: { createdAt: "desc" }, take: ROW_CAP }),
+      prisma.recycleBinEntry.findMany({ where: { fileId: { in: fileIds } }, orderBy: { deletedTime: "desc" }, take: ROW_CAP }),
+      prisma.notificationEntry.findMany({ where: { fileId: { in: fileIds } }, orderBy: { arrivalTime: "desc" }, take: ROW_CAP }),
+      // Windows Search can realistically index hundreds of thousands of
+      // files — same ROW_CAP-limited browsable-tab convention as
+      // $MFT/$UsnJrnl, every row is still in the DB regardless.
+      prisma.searchIndexEntry.findMany({ where: { fileId: { in: fileIds } }, orderBy: { recordIndex: "asc" }, take: ROW_CAP }),
+      prisma.defenderQuarantineEntry.findMany({ where: { fileId: { in: fileIds } }, orderBy: { timestamp: "desc" }, take: ROW_CAP }),
+      prisma.defenderQuarantinePayload.findMany({ where: { fileId: { in: fileIds } }, orderBy: { createdAt: "desc" }, take: ROW_CAP }),
+      prisma.bitsJobEntry.findMany({ where: { fileId: { in: fileIds } }, orderBy: { ctime: "desc" }, take: ROW_CAP }),
       prisma.windowsArtifactFinding.findMany({
         where: { fileId: { in: fileIds } },
         orderBy: { matchCount: "desc" },
@@ -72,6 +87,18 @@ export async function GET(req: NextRequest, props: Params) {
       mft: mft.map((r) => ({ ...r, fileSize: r.fileSize?.toString() ?? null })),
       usnJrnl: usnJrnl.map((r) => ({ ...r, usn: r.usn.toString() })),
       srum,
+      werReports,
+      werDumps,
+      recycleBin: recycleBin.map((r) => ({ ...r, fileSizeBytes: r.fileSizeBytes?.toString() ?? null })),
+      notifications,
+      searchIndex,
+      quarantineEntries,
+      quarantinePayloads: quarantinePayloads.map((r) => ({ ...r, decryptedSizeBytes: r.decryptedSizeBytes?.toString() ?? null })),
+      bitsJobs: bitsJobs.map((r) => ({
+        ...r,
+        downloadSizeBytes: r.downloadSizeBytes?.toString() ?? null,
+        transferSizeBytes: r.transferSizeBytes?.toString() ?? null,
+      })),
       findings,
     });
   } catch (err: unknown) {
@@ -89,7 +116,18 @@ export async function DELETE(req: NextRequest, props: Params) {
 
     const upload = await prisma.windowsArtifactUpload.findUnique({
       where: { id },
-      include: { files: { select: { storagePath: true } } },
+      include: {
+        files: {
+          select: {
+            storagePath: true,
+            // Defender quarantine payloads write a SECOND file to disk
+            // (the decrypted bytes) at a path independent of the
+            // uploaded file's own storagePath — needs its own cleanup
+            // here or it's orphaned once the DB row is gone.
+            quarantinePayloads: { select: { decryptedStoragePath: true } },
+          },
+        },
+      },
     });
     if (!upload) return NextResponse.json({ error: "not_found" }, { status: 404 });
 
@@ -98,6 +136,11 @@ export async function DELETE(req: NextRequest, props: Params) {
     for (const f of upload.files) {
       if (f.storagePath) {
         try { fs.unlinkSync(f.storagePath); } catch { /* best-effort — DB row is already gone either way */ }
+      }
+      for (const payload of f.quarantinePayloads) {
+        if (payload.decryptedStoragePath) {
+          try { fs.unlinkSync(payload.decryptedStoragePath); } catch { /* best-effort */ }
+        }
       }
     }
 

@@ -17,9 +17,11 @@
  * 7. notifyCriticalFindings() best-effort
  * 8. Update file status "ready" + findingCount; recompute parent upload's findingCount
  */
+import fs from "fs";
 import path from "path";
+import { randomUUID } from "crypto";
 import { prisma } from "@/lib/db/prisma";
-import { getWinArtifactsPythonPath, getPrefetchPythonPath, getWinArtifactsSystemPythonPath } from "@/lib/settings/system";
+import { getWinArtifactsPythonPath, getPrefetchPythonPath, getWinArtifactsSystemPythonPath, getWinArtifactsDir } from "@/lib/settings/system";
 import {
   runRegistryParse, mapShimcacheEntries, mapAmcacheEntries, mapBamEntries, mapShellbagEntries,
   type RegistryRole,
@@ -30,6 +32,13 @@ import { runJumpListParse, type JumpListEntryRow } from "./jumplist-engine";
 import { runMftParse, type MftEntryRow } from "./mft-engine";
 import { runUsnJrnlParse, type UsnJrnlEntryRow } from "./usnjrnl-engine";
 import { runSrumParse, type SrumEntryRow } from "./srum-engine";
+import { runWerReportParse, type WerReportRow } from "./wer-engine";
+import { runWerDumpParse, type WerDumpRow } from "./wer-dump-engine";
+import { runRecycleBinParse, type RecycleBinRow } from "./recyclebin-engine";
+import { runNotificationParse, type NotificationRow } from "./notification-engine";
+import { runSearchIndexParse, type SearchIndexRow } from "./search-engine";
+import { runBitsParse, type BitsJobRow } from "./bits-engine";
+import { runQuarantineEntryParse, runQuarantinePayloadParse, type QuarantineEntryRow, type QuarantinePayloadRow } from "./defender-quarantine-engine";
 import { buildSubjects, runRules, type StoredWinArtifactRule } from "./rule-engine";
 import { isEnriched, type IocLookupMap } from "@/lib/rule-engine/ioc-lookup";
 import { autoEnrichNewIocs, type NewIocRecord } from "@/lib/intelligence/auto-enrich";
@@ -76,6 +85,14 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
       prisma.mftEntry.deleteMany({ where: { fileId } }),
       prisma.usnJrnlEntry.deleteMany({ where: { fileId } }),
       prisma.srumEntry.deleteMany({ where: { fileId } }),
+      prisma.werReportEntry.deleteMany({ where: { fileId } }),
+      prisma.werDumpEntry.deleteMany({ where: { fileId } }),
+      prisma.recycleBinEntry.deleteMany({ where: { fileId } }),
+      prisma.notificationEntry.deleteMany({ where: { fileId } }),
+      prisma.searchIndexEntry.deleteMany({ where: { fileId } }),
+      prisma.defenderQuarantineEntry.deleteMany({ where: { fileId } }),
+      prisma.defenderQuarantinePayload.deleteMany({ where: { fileId } }),
+      prisma.bitsJobEntry.deleteMany({ where: { fileId } }),
       prisma.windowsArtifactFinding.deleteMany({ where: { fileId } }),
     ]);
 
@@ -92,6 +109,11 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
     let mftRows: MftEntryRow[] = [];
     let usnJrnlRows: UsnJrnlEntryRow[] = [];
     let srumRows: SrumEntryRow[] = [];
+    let werReportRows: WerReportRow[] = [];
+    let werDumpRows: WerDumpRow[] = [];
+    let bitsRows: BitsJobRow[] = [];
+    let recycleBinRows: RecycleBinRow[] = [];
+    let quarantinePayloadRows: QuarantinePayloadRow[] = [];
     const iocLookupMap: IocLookupMap = new Map();
 
     if (REGISTRY_ROLES.includes(file.role as RegistryRole)) {
@@ -498,6 +520,363 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
         });
       }
       // No IOC upsert step — SRUM carries no hash to look up.
+    } else if (file.role === "wer_report") {
+      // 3. Run the Report.wer parser — pure text parsing, same
+      // winartifacts venv as regipy (no library dependency at all).
+      const pythonPath = await getWinArtifactsPythonPath();
+      const result = await runWerReportParse(pythonPath, filePath);
+
+      if (result.status === "not_installed") {
+        throw new Error("wer-parse.py reported itself unavailable.");
+      }
+      if (result.status === "timeout") {
+        throw new Error("Report.wer parsing timed out.");
+      }
+      if (result.status === "error") {
+        throw new Error(result.message);
+      }
+      for (const err of result.scriptErrors) {
+        console.warn(`[windows-artifacts] wer-parse.py reported: ${err}`);
+      }
+
+      // 4. One WerReportEntry row for this report.
+      if (result.entry) {
+        werReportRows = [result.entry];
+        await prisma.werReportEntry.create({
+          data: {
+            fileId,
+            sourceFileName: file.filename,
+            eventType: result.entry.eventType ?? undefined,
+            eventTime: result.entry.eventTime ? new Date(result.entry.eventTime) : undefined,
+            reportGuid: result.entry.reportGuid ?? undefined,
+            appName: result.entry.appName ?? undefined,
+            appVersion: result.entry.appVersion ?? undefined,
+            appTimestamp: result.entry.appTimestamp ?? undefined,
+            faultModuleName: result.entry.faultModuleName ?? undefined,
+            faultModuleVersion: result.entry.faultModuleVersion ?? undefined,
+            faultModuleTimestamp: result.entry.faultModuleTimestamp ?? undefined,
+            exceptionCode: result.entry.exceptionCode ?? undefined,
+            exceptionOffset: result.entry.exceptionOffset ?? undefined,
+            sigFields: result.entry.sigFields as object,
+            rawFields: result.entry.rawFields as object,
+          },
+        });
+      }
+      // No IOC upsert step — Report.wer carries no hash to look up.
+    } else if (file.role === "wer_dump") {
+      // 3. Run the minidump parser (pure-Python `minidump` package, same
+      // winartifacts venv — no C library involved).
+      const pythonPath = await getWinArtifactsPythonPath();
+      const result = await runWerDumpParse(pythonPath, filePath);
+
+      if (result.status === "not_installed") {
+        throw new Error("minidump is not installed in the Windows Artifacts venv.");
+      }
+      if (result.status === "timeout") {
+        throw new Error("Minidump parsing timed out.");
+      }
+      if (result.status === "error") {
+        throw new Error(result.message);
+      }
+      for (const err of result.scriptErrors) {
+        console.warn(`[windows-artifacts] wer-dump-parse.py reported: ${err}`);
+      }
+
+      // 4. One WerDumpEntry row for this dump.
+      if (result.entry) {
+        werDumpRows = [result.entry];
+        await prisma.werDumpEntry.create({
+          data: {
+            fileId,
+            sourceFileName: file.filename,
+            exceptionCode: result.entry.exceptionCode ?? undefined,
+            exceptionAddress: result.entry.exceptionAddress ?? undefined,
+            faultingThreadId: result.entry.faultingThreadId ?? undefined,
+            processId: result.entry.processId ?? undefined,
+            processCreateTime: result.entry.processCreateTime ? new Date(result.entry.processCreateTime) : undefined,
+            osVersion: result.entry.osVersion ?? undefined,
+            cpuArchitecture: result.entry.cpuArchitecture ?? undefined,
+            moduleList: result.entry.moduleList as object,
+            miscInfo: result.entry.miscInfo as object,
+          },
+        });
+      }
+      // No IOC upsert step — a minidump carries no hash to look up.
+    } else if (file.role === "recycle_bin") {
+      // 3. Run the $I metadata parser — pure stdlib struct, same
+      // winartifacts venv as $UsnJrnl:$J (no library needed).
+      const pythonPath = await getWinArtifactsPythonPath();
+      const result = await runRecycleBinParse(pythonPath, filePath);
+
+      if (result.status === "not_installed") {
+        throw new Error("recyclebin-parse.py reported itself unavailable.");
+      }
+      if (result.status === "timeout") {
+        throw new Error("Recycle Bin parsing timed out.");
+      }
+      if (result.status === "error") {
+        throw new Error(result.message);
+      }
+      for (const err of result.scriptErrors) {
+        console.warn(`[windows-artifacts] recyclebin-parse.py reported: ${err}`);
+      }
+
+      // 4. One RecycleBinEntry row for this $I file. `sid` comes from the
+      // collector's own folder structure ($Recycle.Bin\<SID>\$I...),
+      // preserved in profileName at upload time the same way LNK/Jump
+      // Lists preserve a per-profile relative path.
+      recycleBinRows = result.entries;
+      if (recycleBinRows.length > 0) {
+        await prisma.recycleBinEntry.createMany({
+          data: recycleBinRows.map((r) => ({
+            fileId,
+            sid: file.profileName ?? "unknown",
+            sourceFileName: file.filename,
+            formatVersion: r.formatVersion,
+            originalPath: r.originalPath,
+            deletedTime: r.deletedTime ? new Date(r.deletedTime) : undefined,
+            fileSizeBytes: r.fileSizeBytes != null ? BigInt(r.fileSizeBytes) : undefined,
+          })),
+        });
+      }
+      // No IOC upsert step — Recycle Bin metadata carries no hash to look up.
+    } else if (file.role === "notification_db") {
+      // 3. Run the notification database parser — stdlib sqlite3 only,
+      // same winartifacts venv (no new dependency at all).
+      const pythonPath = await getWinArtifactsPythonPath();
+      const result = await runNotificationParse(pythonPath, filePath);
+
+      if (result.status === "not_installed") {
+        throw new Error("notification-parse.py reported itself unavailable.");
+      }
+      if (result.status === "timeout") {
+        throw new Error("Notification database parsing timed out.");
+      }
+      if (result.status === "error") {
+        throw new Error(result.message);
+      }
+      for (const err of result.scriptErrors) {
+        console.warn(`[windows-artifacts] notification-parse.py reported: ${err}`);
+      }
+
+      // 4. One NotificationEntry row per notification record.
+      if (result.entries.length > 0) {
+        await prisma.notificationEntry.createMany({
+          data: result.entries.map((r) => ({
+            fileId,
+            profileName: file.profileName ?? undefined,
+            arrivalTime: r.arrivalTime ? new Date(r.arrivalTime) : undefined,
+            expiryTime: r.expiryTime ? new Date(r.expiryTime) : undefined,
+            notifType: r.notifType ?? undefined,
+            tag: r.tag ?? undefined,
+            groupName: r.groupName ?? undefined,
+            handlerId: r.handlerId ?? undefined,
+            handlerLabel: r.handlerLabel ?? undefined,
+            payload: r.payload ?? undefined,
+            details: r.details as object,
+          })),
+        });
+      }
+      // No IOC upsert step — deliberately not fed into the rule engine
+      // either (see windows-artifacts plan's Decisions) — no reliable
+      // structured path/hash field across realistic real-world schemas.
+    } else if (file.role === "search_edb") {
+      // 3. Run the Windows Search parser (system python3 + pyesedb, same
+      // C-linked-library tier as SRUM/$MFT).
+      const pythonPath = await getWinArtifactsSystemPythonPath();
+      const result = await runSearchIndexParse(pythonPath, filePath);
+
+      if (result.status === "not_installed") {
+        throw new Error("pyesedb (libesedb-python) is not installed — see deploy/install-winartifacts-deps.sh.");
+      }
+      if (result.status === "timeout") {
+        throw new Error("Windows Search database parsing timed out.");
+      }
+      if (result.status === "error") {
+        throw new Error(result.message);
+      }
+      for (const err of result.scriptErrors) {
+        console.warn(`[windows-artifacts] search-parse.py reported: ${err}`);
+      }
+
+      // 4. One SearchIndexEntry row per ESE record — can be large (every
+      // indexed file on the host), same chunked-insert reasoning as
+      // $MFT/$UsnJrnl.
+      const searchRows: SearchIndexRow[] = result.entries;
+      await chunkedCreateMany(
+        (data) => prisma.searchIndexEntry.createMany({ data }),
+        searchRows.map((r) => ({
+          fileId,
+          tableName: r.tableName,
+          recordIndex: r.recordIndex,
+          details: r.details as object,
+        }))
+      );
+      // No IOC upsert step — deliberately not fed into the rule engine
+      // either (see windows-artifacts plan's Decisions) — real-world
+      // column names are frequently per-install-specific/obfuscated.
+    } else if (file.role === "quarantine_entry") {
+      // 3. RC4-decrypt and parse the QuarantineEntry metadata file — pure
+      // Python (hand-rolled RC4 + TLV reader), same winartifacts venv.
+      const pythonPath = await getWinArtifactsPythonPath();
+      const result = await runQuarantineEntryParse(pythonPath, filePath);
+
+      if (result.status === "not_installed") {
+        throw new Error("defender-quarantine-parse.py reported itself unavailable.");
+      }
+      if (result.status === "timeout") {
+        throw new Error("Defender quarantine entry parsing timed out.");
+      }
+      if (result.status === "error") {
+        throw new Error(result.message);
+      }
+      for (const err of result.scriptErrors) {
+        console.warn(`[windows-artifacts] defender-quarantine-parse.py reported: ${err}`);
+      }
+
+      // 4. One DefenderQuarantineEntry row for this file — resources
+      // stored as JSON (see Prisma schema comment: no verified filename/
+      // ID convention links a specific resource to a specific
+      // ResourceData file, so this isn't modeled as a relational FK).
+      if (result.entry) {
+        const entry: QuarantineEntryRow = result.entry;
+        await prisma.defenderQuarantineEntry.create({
+          data: {
+            fileId,
+            sourceFileName: file.filename,
+            entryIdHex: entry.entryIdHex ?? undefined,
+            scanIdHex: entry.scanIdHex ?? undefined,
+            threatId: entry.threatId ?? undefined,
+            detectionName: entry.detectionName ?? undefined,
+            timestamp: entry.timestamp ? new Date(entry.timestamp) : undefined,
+            resources: entry.resources as unknown as object,
+            rawFields: entry.rawFields as object,
+          },
+        });
+      }
+      // No IOC upsert step here — the hash-bearing artifact is the
+      // paired ResourceData file (quarantine_resource role, below).
+    } else if (file.role === "quarantine_resource") {
+      // 3. RC4-decrypt the ResourceData payload file, writing the
+      // decrypted bytes to disk (user-confirmed: Core stores and offers
+      // the decrypted file for download, not just hash+metadata — see
+      // windows-artifacts plan's Decisions). Deterministic filename
+      // (fileId-keyed, not random) so reprocessing overwrites cleanly
+      // instead of orphaning a stale copy.
+      const pythonPath = await getWinArtifactsPythonPath();
+      const winArtifactsDir = await getWinArtifactsDir();
+      const payloadDir = path.join(winArtifactsDir, "quarantine-payloads");
+      fs.mkdirSync(payloadDir, { recursive: true });
+      const decryptedOutputPath = path.join(payloadDir, `${fileId}.bin`);
+
+      const result = await runQuarantinePayloadParse(pythonPath, filePath, decryptedOutputPath);
+
+      if (result.status === "not_installed") {
+        throw new Error("defender-quarantine-parse.py reported itself unavailable.");
+      }
+      if (result.status === "timeout") {
+        throw new Error("Defender quarantine payload parsing timed out.");
+      }
+      if (result.status === "error") {
+        throw new Error(result.message);
+      }
+      for (const err of result.scriptErrors) {
+        console.warn(`[windows-artifacts] defender-quarantine-parse.py reported: ${err}`);
+      }
+
+      // 4. One DefenderQuarantinePayload row for this file.
+      if (result.entry) {
+        quarantinePayloadRows = [result.entry];
+        await prisma.defenderQuarantinePayload.create({
+          data: {
+            fileId,
+            sourceFileName: file.filename,
+            magicValid: result.entry.magicValid,
+            sha256: result.entry.sha256 ?? undefined,
+            decryptedSizeBytes: result.entry.decryptedSizeBytes != null ? BigInt(result.entry.decryptedSizeBytes) : undefined,
+            decryptedStoragePath: result.entry.magicValid ? decryptedOutputPath : undefined,
+            fileTypeSniff: result.entry.fileTypeSniff ?? undefined,
+          },
+        });
+      }
+
+      // 5. Decrypted payload SHA256 -> global IocRecord — identical
+      // pattern to the existing Amcache-SHA1 block above, just a
+      // different subject kind feeding it (see rule-engine.ts's
+      // iocCandidates(), which already checks both subject.sha1 and
+      // subject.sha256).
+      const now = new Date();
+      const newIocRecords: NewIocRecord[] = [];
+      const distinctHashes = new Set(quarantinePayloadRows.map((r) => r.sha256).filter((h): h is string => !!h));
+
+      for (const hash of distinctHashes) {
+        try {
+          const existing = await prisma.iocRecord.findUnique({ where: { value: hash } });
+          if (existing) {
+            iocLookupMap.set(hash, { reputation: existing.reputation, threatType: existing.threatType, malwareFamily: existing.malwareFamily });
+          }
+          const rec = await prisma.iocRecord.upsert({
+            where: { value: hash },
+            create: { value: hash, type: "hash", firstSeen: now, lastSeen: now },
+            update: { lastSeen: now },
+          });
+          if (!existing) newIocRecords.push({ id: rec.id, value: rec.value, type: "hash" });
+        } catch (iocErr) {
+          console.warn("[windows-artifacts] IocRecord row skipped:", hash, iocErr instanceof Error ? iocErr.message : iocErr);
+        }
+      }
+      if (newIocRecords.length > 0) {
+        await autoEnrichNewIocs(newIocRecords, file.upload.organizationId ?? undefined).catch((err) =>
+          console.warn("[windows-artifacts] Auto-enrichment skipped:", err instanceof Error ? err.message : err)
+        );
+      }
+    } else if (file.role === "bits_queue") {
+      // 3. Run the BITS queue parser (bits_parser package, same
+      // winartifacts venv — pure Python, no C library). Legacy
+      // qmgr0.dat/qmgr1.dat format only — see windows-artifacts plan's
+      // Decisions for why the newer ESE-based qmgr.db is out of scope.
+      const pythonPath = await getWinArtifactsPythonPath();
+      const result = await runBitsParse(pythonPath, filePath);
+
+      if (result.status === "not_installed") {
+        throw new Error("bits_parser is not installed in the Windows Artifacts venv.");
+      }
+      if (result.status === "timeout") {
+        throw new Error("BITS queue parsing timed out.");
+      }
+      if (result.status === "error") {
+        throw new Error(result.message);
+      }
+      for (const err of result.scriptErrors) {
+        console.warn(`[windows-artifacts] bits-parse.py reported: ${err}`);
+      }
+
+      // 4. One BitsJobEntry row per (job, file-transfer) pair.
+      bitsRows = result.entries;
+      if (bitsRows.length > 0) {
+        await prisma.bitsJobEntry.createMany({
+          data: bitsRows.map((r) => ({
+            fileId,
+            jobId: r.jobId ?? undefined,
+            name: r.name ?? undefined,
+            desc: r.desc ?? undefined,
+            cmd: r.cmd ?? undefined,
+            sid: r.sid ?? undefined,
+            jobType: r.jobType ?? undefined,
+            priority: r.priority ?? undefined,
+            state: r.state ?? undefined,
+            ctime: r.ctime ? new Date(r.ctime) : undefined,
+            mtime: r.mtime ? new Date(r.mtime) : undefined,
+            destFn: r.destFn ?? undefined,
+            srcFn: r.srcFn ?? undefined,
+            tmpFn: r.tmpFn ?? undefined,
+            downloadSizeBytes: r.downloadSizeBytes != null ? BigInt(r.downloadSizeBytes) : undefined,
+            transferSizeBytes: r.transferSizeBytes != null ? BigInt(r.transferSizeBytes) : undefined,
+            isCarved: r.isCarved,
+          })),
+        });
+      }
+      // No IOC upsert step — BITS job records carry no hash to look up.
     } else {
       throw new Error(`Unsupported artifact role (not yet implemented): ${file.role}`);
     }
@@ -521,6 +900,8 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
         shimcache: shimcacheRows, amcache: amcacheRows, userAssist: userAssistRows, bam: bamRows, autoruns: autorunRows,
         prefetch: prefetchRows, lnk: lnkRows, jumplist: jumpListRows, shellbag: shellbagRows,
         mft: mftRows, usnjrnl: usnJrnlRows, srum: srumRows,
+        wer: werReportRows, werDump: werDumpRows, recyclebin: recycleBinRows, bits: bitsRows,
+        quarantinePayload: quarantinePayloadRows,
       });
       const matches = runRules(rules as unknown as StoredWinArtifactRule[], subjects, iocLookupMap);
 

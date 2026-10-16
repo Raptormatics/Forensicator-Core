@@ -16,14 +16,20 @@ import type { JumpListEntryRow } from "./jumplist-engine";
 import type { MftEntryRow } from "./mft-engine";
 import type { UsnJrnlEntryRow } from "./usnjrnl-engine";
 import type { SrumEntryRow } from "./srum-engine";
+import type { WerReportRow } from "./wer-engine";
+import type { WerDumpRow } from "./wer-dump-engine";
+import type { RecycleBinRow } from "./recyclebin-engine";
+import type { BitsJobRow } from "./bits-engine";
+import type { QuarantinePayloadRow } from "./defender-quarantine-engine";
 
-export type WinArtifactSubjectKind = "shimcache" | "amcache" | "userassist" | "bam" | "autorun" | "prefetch" | "prefetch_reference" | "lnk" | "jumplist" | "shellbag" | "mft" | "usnjrnl" | "srum";
+export type WinArtifactSubjectKind = "shimcache" | "amcache" | "userassist" | "bam" | "autorun" | "prefetch" | "prefetch_reference" | "lnk" | "jumplist" | "shellbag" | "mft" | "usnjrnl" | "srum" | "wer" | "wer_dump_module" | "recyclebin" | "bits" | "quarantine_payload";
 
 export interface WinArtifactRuleSubject {
   kind: WinArtifactSubjectKind;
   refKey: string;
   path: string | null;
   sha1: string | null;
+  sha256: string | null;
   runCount: number | null;
   category: string | null;
   valueName: string | null;
@@ -33,14 +39,16 @@ export interface WinArtifactRuleSubject {
   hasTimestomp: boolean | null;
   usnReason: string | null;
   providerLabel: string | null;
+  exceptionCode: string | null;
+  isCarved: boolean | null;
 }
 
 // Every field a specific subject kind doesn't use stays at this default
 // (null) — spread this first, then override only the fields that kind
-// actually has, rather than repeating all ~13 nulls at every call site.
+// actually has, rather than repeating all ~15 nulls at every call site.
 const BLANK_SUBJECT_FIELDS: Omit<WinArtifactRuleSubject, "kind" | "refKey"> = {
-  path: null, sha1: null, runCount: null, category: null, valueName: null, keyPath: null, sid: null,
-  isAllocated: null, hasTimestomp: null, usnReason: null, providerLabel: null,
+  path: null, sha1: null, sha256: null, runCount: null, category: null, valueName: null, keyPath: null, sid: null,
+  isAllocated: null, hasTimestomp: null, usnReason: null, providerLabel: null, exceptionCode: null, isCarved: null,
 };
 
 export function buildSubjects(data: {
@@ -56,6 +64,11 @@ export function buildSubjects(data: {
   mft?: MftEntryRow[];
   usnjrnl?: UsnJrnlEntryRow[];
   srum?: SrumEntryRow[];
+  wer?: WerReportRow[];
+  werDump?: WerDumpRow[];
+  recyclebin?: RecycleBinRow[];
+  bits?: BitsJobRow[];
+  quarantinePayload?: QuarantinePayloadRow[];
 }): WinArtifactRuleSubject[] {
   const subjects: WinArtifactRuleSubject[] = [];
 
@@ -141,15 +154,86 @@ export function buildSubjects(data: {
       providerLabel: r.providerLabel,
     });
   }
+  // Reuses the existing LOLBin/Temp-Downloads built-ins via `path` =
+  // the crashing module's name — the most forensically useful WER field,
+  // since it's often the actual payload (a LOLBin or a dropped file in
+  // Temp/Downloads) rather than the host application.
+  for (const w of data.wer ?? []) {
+    subjects.push({
+      ...BLANK_SUBJECT_FIELDS,
+      kind: "wer",
+      refKey: w.reportGuid ?? `${w.appName ?? ""}:${w.faultModuleName ?? ""}`,
+      path: w.faultModuleName ?? w.appName,
+      exceptionCode: w.exceptionCode,
+    });
+  }
+  // One subject per loaded module in a minidump — `exceptionCode` is only
+  // set on the module whose address range actually contains the
+  // exception address (computed below), so a rule on exception_code only
+  // fires for the genuinely faulting module, not every DLL the process
+  // happened to have loaded.
+  for (const d of data.werDump ?? []) {
+    let faultingModuleIndex = -1;
+    if (d.exceptionAddress) {
+      try {
+        const exAddr = BigInt(d.exceptionAddress);
+        faultingModuleIndex = d.moduleList.findIndex((m) => {
+          try {
+            const base = BigInt(m.baseAddress);
+            return exAddr >= base && exAddr < base + BigInt(m.size);
+          } catch {
+            return false;
+          }
+        });
+      } catch {
+        faultingModuleIndex = -1;
+      }
+    }
+    d.moduleList.forEach((m, i) => {
+      subjects.push({
+        ...BLANK_SUBJECT_FIELDS,
+        kind: "wer_dump_module",
+        refKey: `${d.exceptionAddress ?? ""}:${m.name}`,
+        path: m.name,
+        exceptionCode: i === faultingModuleIndex ? d.exceptionCode : null,
+      });
+    });
+  }
+  // Reuses the existing removable-media/network-path built-in via `path`
+  // = the deleted item's original location — free reuse, no new rule
+  // needed for Recycle Bin specifically.
+  for (const r of data.recyclebin ?? []) {
+    subjects.push({ ...BLANK_SUBJECT_FIELDS, kind: "recyclebin", refKey: r.originalPath, path: r.originalPath });
+  }
+  // Reuses the existing path-based built-ins via `path` = the transfer's
+  // destination (falling back to source URL); `isCarved` feeds the new
+  // "Recovered BITS Job Evidence" built-in (see rule-engine/seed.ts).
+  for (const b of data.bits ?? []) {
+    subjects.push({
+      ...BLANK_SUBJECT_FIELDS,
+      kind: "bits",
+      refKey: `${b.jobId ?? ""}:${b.destFn ?? b.srcFn ?? ""}`,
+      path: b.destFn ?? b.srcFn,
+      isCarved: b.isCarved,
+    });
+  }
+  // Feeds the new "Defender Quarantine Payload Matches Known Threat-Intel
+  // IOC" built-in — identical ioc_known mechanism the existing Amcache
+  // SHA1 rule already uses, just a different subject kind/hash field
+  // (see iocCandidates() below).
+  for (const q of data.quarantinePayload ?? []) {
+    subjects.push({ ...BLANK_SUBJECT_FIELDS, kind: "quarantine_payload", refKey: q.sha256 ?? "unknown", sha256: q.sha256 });
+  }
 
   return subjects;
 }
 
-/** Only sha1 (Amcache) is a plausible threat-intel IOC on a Windows
- * Artifact subject — "path" isn't an IocRecord type (ip/hash/url/domain/
- * email), so ioc_* fields only ever resolve against the hash. */
+/** sha1 (Amcache) and sha256 (decrypted Defender quarantine payload) are
+ * the only plausible threat-intel IOCs on a Windows Artifact subject —
+ * "path" isn't an IocRecord type (ip/hash/url/domain/email), so ioc_*
+ * fields only ever resolve against one of the two hash fields. */
 function iocCandidates(subject: WinArtifactRuleSubject): (string | null)[] {
-  return [subject.sha1];
+  return [subject.sha1, subject.sha256];
 }
 
 function getFieldValue(subject: WinArtifactRuleSubject, field: WinArtifactField, iocMap: IocLookupMap): string {
@@ -160,6 +244,7 @@ function getFieldValue(subject: WinArtifactRuleSubject, field: WinArtifactField,
     artifact_type:  subject.kind,
     path:           subject.path,
     sha1:           subject.sha1,
+    sha256:         subject.sha256,
     run_count:      subject.runCount,
     category:       subject.category,
     value_name:     subject.valueName,
@@ -169,6 +254,8 @@ function getFieldValue(subject: WinArtifactRuleSubject, field: WinArtifactField,
     has_timestomp:  subject.hasTimestomp,
     usn_reason:     subject.usnReason,
     provider_label: subject.providerLabel,
+    exception_code: subject.exceptionCode,
+    is_carved:      subject.isCarved,
   };
   const val = fieldMap[field as Exclude<WinArtifactField, IocRuleField>];
   if (val === null || val === undefined) return "";
