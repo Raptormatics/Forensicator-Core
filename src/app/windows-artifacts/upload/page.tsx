@@ -21,6 +21,31 @@ function makeProfileFile(): ProfileFile {
   return { id: Math.random().toString(36).slice(2), profileName: "", file: null };
 }
 
+// A hive file's own .LOG1/.LOG2 transaction-log companions live alongside
+// it in the exact same source folder (e.g. C:\Windows\System32\config\) —
+// so rather than add 2 more picker slots per hive, HiveFileSlot/
+// HiveProfileFileList accept a multi-select and classify by filename
+// suffix, letting an analyst grab all 3 files for one hive in one dialog.
+type HiveFile = { file: File | null; log1: File | null; log2: File | null };
+type HiveProfileFile = { id: string; profileName: string; file: File | null; log1: File | null; log2: File | null };
+
+function makeHiveFile(): HiveFile {
+  return { file: null, log1: null, log2: null };
+}
+function makeHiveProfileFile(): HiveProfileFile {
+  return { id: Math.random().toString(36).slice(2), profileName: "", file: null, log1: null, log2: null };
+}
+function classifyHiveFiles(files: File[]): { main: File | null; log1: File | null; log2: File | null } {
+  let main: File | null = null, log1: File | null = null, log2: File | null = null;
+  for (const f of files) {
+    const lower = f.name.toLowerCase();
+    if (lower.endsWith(".log1")) log1 = f;
+    else if (lower.endsWith(".log2")) log2 = f;
+    else if (!main) main = f;
+  }
+  return { main, log1, log2 };
+}
+
 export default function UploadWindowsArtifactsPage() {
   const router = useRouter();
 
@@ -35,12 +60,13 @@ export default function UploadWindowsArtifactsPage() {
   const [caseError, setCaseError] = useState("");
 
   // ── File state ───────────────────────────────────────────────────────────
-  const [systemFile, setSystemFile] = useState<File | null>(null);
-  const [softwareFile, setSoftwareFile] = useState<File | null>(null);
-  const [securityFile, setSecurityFile] = useState<File | null>(null);
-  const [amcacheFile, setAmcacheFile] = useState<File | null>(null);
-  const [ntuserFiles, setNtuserFiles] = useState<ProfileFile[]>([makeProfileFile()]);
-  const [usrclassFiles, setUsrclassFiles] = useState<ProfileFile[]>([]);
+  const [systemFile, setSystemFile] = useState<HiveFile>(makeHiveFile());
+  const [softwareFile, setSoftwareFile] = useState<HiveFile>(makeHiveFile());
+  const [securityFile, setSecurityFile] = useState<HiveFile>(makeHiveFile());
+  const [amcacheFile, setAmcacheFile] = useState<HiveFile>(makeHiveFile());
+  const [ntuserFiles, setNtuserFiles] = useState<HiveProfileFile[]>([makeHiveProfileFile()]);
+  const [usrclassFiles, setUsrclassFiles] = useState<HiveProfileFile[]>([]);
+  const [timelineFiles, setTimelineFiles] = useState<ProfileFile[]>([]);
   const [prefetchFiles, setPrefetchFiles] = useState<File[]>([]);
   const [lnkFiles, setLnkFiles] = useState<File[]>([]);
   const [jumplistAutomaticFiles, setJumplistAutomaticFiles] = useState<File[]>([]);
@@ -106,8 +132,8 @@ export default function UploadWindowsArtifactsPage() {
   }
 
   function reset() {
-    setSystemFile(null); setSoftwareFile(null); setSecurityFile(null); setAmcacheFile(null);
-    setNtuserFiles([makeProfileFile()]); setUsrclassFiles([]);
+    setSystemFile(makeHiveFile()); setSoftwareFile(makeHiveFile()); setSecurityFile(makeHiveFile()); setAmcacheFile(makeHiveFile());
+    setNtuserFiles([makeHiveProfileFile()]); setUsrclassFiles([]); setTimelineFiles([]);
     setPrefetchFiles([]); setLnkFiles([]); setJumplistAutomaticFiles([]); setJumplistCustomFiles([]);
     setMftFile(null); setUsnjrnlFile(null); setUsnJournalMetadataFile(null); setSrudbFile(null);
     setWerReportFiles([]); setWerDumpFiles([]); setRecycleBinFiles([]); setNotificationFiles([]);
@@ -118,10 +144,14 @@ export default function UploadWindowsArtifactsPage() {
     setUploadPercent(0); setResultId("");
   }
 
+  const hiveFileBytes = (h: HiveFile) => (h.file?.size ?? 0) + (h.log1?.size ?? 0) + (h.log2?.size ?? 0);
+  const hiveProfileFileBytes = (h: HiveProfileFile) => (h.file?.size ?? 0) + (h.log1?.size ?? 0) + (h.log2?.size ?? 0);
+
   const totalBytes =
-    (systemFile?.size ?? 0) + (softwareFile?.size ?? 0) + (securityFile?.size ?? 0) + (amcacheFile?.size ?? 0) +
-    ntuserFiles.reduce((s, f) => s + (f.file?.size ?? 0), 0) +
-    usrclassFiles.reduce((s, f) => s + (f.file?.size ?? 0), 0) +
+    hiveFileBytes(systemFile) + hiveFileBytes(softwareFile) + hiveFileBytes(securityFile) + hiveFileBytes(amcacheFile) +
+    ntuserFiles.reduce((s, f) => s + hiveProfileFileBytes(f), 0) +
+    usrclassFiles.reduce((s, f) => s + hiveProfileFileBytes(f), 0) +
+    timelineFiles.reduce((s, f) => s + (f.file?.size ?? 0), 0) +
     prefetchFiles.reduce((s, f) => s + f.size, 0) +
     lnkFiles.reduce((s, f) => s + f.size, 0) +
     jumplistAutomaticFiles.reduce((s, f) => s + f.size, 0) +
@@ -135,7 +165,8 @@ export default function UploadWindowsArtifactsPage() {
     (qmgr0File?.size ?? 0) + (qmgr1File?.size ?? 0);
 
   const hasAnyFile = !!(
-    systemFile || softwareFile || securityFile || amcacheFile || ntuserFiles.some(f => f.file) || usrclassFiles.some(f => f.file) ||
+    systemFile.file || softwareFile.file || securityFile.file || amcacheFile.file ||
+    ntuserFiles.some(f => f.file) || usrclassFiles.some(f => f.file) || timelineFiles.some(f => f.file) ||
     prefetchFiles.length > 0 || lnkFiles.length > 0 || jumplistAutomaticFiles.length > 0 || jumplistCustomFiles.length > 0 ||
     mftFile || usnjrnlFile || srudbFile ||
     werReportFiles.length > 0 || werDumpFiles.length > 0 || recycleBinFiles.length > 0 || notificationFiles.some(f => f.file) ||
@@ -157,15 +188,38 @@ export default function UploadWindowsArtifactsPage() {
     form.append("caseId", selectedCase.id);
     if (hostname) form.append("hostname", hostname);
     if (notes) form.append("notes", notes);
-    if (systemFile) form.append("system", systemFile);
-    if (softwareFile) form.append("software", softwareFile);
-    if (securityFile) form.append("security", securityFile);
-    if (amcacheFile) form.append("amcache", amcacheFile);
+    const appendHive = (field: string, h: HiveFile) => {
+      if (!h.file) return;
+      form.append(field, h.file);
+      if (h.log1) form.append(`${field}Log1`, h.log1);
+      if (h.log2) form.append(`${field}Log2`, h.log2);
+    };
+    appendHive("system", systemFile);
+    appendHive("software", softwareFile);
+    appendHive("security", securityFile);
+    appendHive("amcache", amcacheFile);
+    // ntuserLog1/ntuserLog2 are OPTIONAL per profile row, but the server
+    // zips them to ntuserFiles positionally via formData.getAll() — so a
+    // row with no log must still send an (empty, size-0) placeholder to
+    // keep every array's indices aligned with ntuserFiles, same reasoning
+    // for usrclass below.
+    const EMPTY_LOG_PLACEHOLDER = new File([], "");
     for (const f of ntuserFiles) {
-      if (f.file) { form.append("ntuser", f.file); form.append("ntuserProfileName", f.profileName); }
+      if (f.file) {
+        form.append("ntuser", f.file); form.append("ntuserProfileName", f.profileName);
+        form.append("ntuserLog1", f.log1 ?? EMPTY_LOG_PLACEHOLDER);
+        form.append("ntuserLog2", f.log2 ?? EMPTY_LOG_PLACEHOLDER);
+      }
     }
     for (const f of usrclassFiles) {
-      if (f.file) { form.append("usrclass", f.file); form.append("usrclassProfileName", f.profileName); }
+      if (f.file) {
+        form.append("usrclass", f.file); form.append("usrclassProfileName", f.profileName);
+        form.append("usrclassLog1", f.log1 ?? EMPTY_LOG_PLACEHOLDER);
+        form.append("usrclassLog2", f.log2 ?? EMPTY_LOG_PLACEHOLDER);
+      }
+    }
+    for (const f of timelineFiles) {
+      if (f.file) { form.append("timeline", f.file); form.append("timelineProfileName", f.profileName); }
     }
     for (const f of prefetchFiles) {
       form.append("prefetch", f);
@@ -407,23 +461,25 @@ export default function UploadWindowsArtifactsPage() {
             <CaseBanner selectedCase={selectedCase} onChangeCase={() => setPhase("case")} />
 
             <div>
-              <h2 className="text-sm font-semibold text-zinc-300 mb-3">Registry Hives</h2>
+              <h2 className="text-sm font-semibold text-zinc-300 mb-3">
+                Registry Hives <span className="text-zinc-600 font-normal">(select a hive together with its .LOG1/.LOG2 files, if you have them, in one multi-select)</span>
+              </h2>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <FileSlot label="SYSTEM" file={systemFile} onChange={setSystemFile} />
-                <FileSlot label="SOFTWARE" file={softwareFile} onChange={setSoftwareFile} />
-                <FileSlot label="SECURITY" file={securityFile} onChange={setSecurityFile} optionalNote="optional" />
-                <FileSlot label="Amcache.hve" file={amcacheFile} onChange={setAmcacheFile} />
+                <HiveFileSlot label="SYSTEM" value={systemFile} onChange={setSystemFile} />
+                <HiveFileSlot label="SOFTWARE" value={softwareFile} onChange={setSoftwareFile} />
+                <HiveFileSlot label="SECURITY" value={securityFile} onChange={setSecurityFile} optionalNote="optional" />
+                <HiveFileSlot label="Amcache.hve" value={amcacheFile} onChange={setAmcacheFile} />
               </div>
             </div>
 
-            <ProfileFileList
+            <HiveProfileFileList
               title="NTUSER.DAT (one per user profile)"
               files={ntuserFiles}
               setFiles={setNtuserFiles}
               profilePlaceholder="e.g. jsmith"
             />
 
-            <ProfileFileList
+            <HiveProfileFileList
               title="UsrClass.dat (one per user profile — used by Shellbags)"
               files={usrclassFiles}
               setFiles={setUsrclassFiles}
@@ -516,6 +572,13 @@ export default function UploadWindowsArtifactsPage() {
               title="Notification Database (wpndatabase.db / appdb.dat, one per user profile)"
               files={notificationFiles}
               setFiles={setNotificationFiles}
+              profilePlaceholder="e.g. jsmith"
+            />
+
+            <ProfileFileList
+              title="Windows Timeline (ActivitiesCache.db, one per user profile)"
+              files={timelineFiles}
+              setFiles={setTimelineFiles}
               profilePlaceholder="e.g. jsmith"
             />
 
@@ -721,6 +784,97 @@ function ProfileFileList({
       <button
         type="button"
         onClick={() => setFiles((prev) => [...prev, makeProfileFile()])}
+        className="mt-2 flex items-center gap-1.5 text-xs text-teal-400 hover:text-teal-300"
+      >
+        <Plus className="h-3.5 w-3.5" /> Add another profile
+      </button>
+    </div>
+  );
+}
+
+function HiveFileSlot({
+  label, value, onChange, optionalNote,
+}: {
+  label: string;
+  value: HiveFile;
+  onChange: (v: HiveFile) => void;
+  optionalNote?: string;
+}) {
+  const logCount = (value.log1 ? 1 : 0) + (value.log2 ? 1 : 0);
+  return (
+    <label className="flex items-center gap-3 rounded-lg border border-dashed border-zinc-700 px-3 py-2.5 text-sm text-zinc-400 hover:border-teal-600 hover:text-teal-400 cursor-pointer">
+      <FileIcon className="h-4 w-4 shrink-0" />
+      <span className="flex-1 min-w-0 truncate">
+        {value.file ? (
+          <>
+            {value.file.name}
+            {logCount > 0 && <span className="ml-1.5 text-xs text-teal-500">+{logCount} log{logCount === 1 ? "" : "s"}</span>}
+          </>
+        ) : (
+          <>{label} {optionalNote && <span className="text-zinc-600">({optionalNote})</span>}</>
+        )}
+      </span>
+      {value.file && (
+        <button type="button" onClick={(e) => { e.preventDefault(); onChange(makeHiveFile()); }} className="shrink-0 text-zinc-600 hover:text-red-400">
+          <X className="h-3.5 w-3.5" />
+        </button>
+      )}
+      <input
+        type="file"
+        multiple
+        className="hidden"
+        onChange={(e) => {
+          const { main, log1, log2 } = classifyHiveFiles(Array.from(e.target.files ?? []));
+          onChange({ file: main, log1, log2 });
+        }}
+      />
+    </label>
+  );
+}
+
+function HiveProfileFileList({
+  title, files, setFiles, profilePlaceholder,
+}: {
+  title: string;
+  files: HiveProfileFile[];
+  setFiles: (updater: (prev: HiveProfileFile[]) => HiveProfileFile[]) => void;
+  profilePlaceholder: string;
+}) {
+  return (
+    <div>
+      <h2 className="text-sm font-semibold text-zinc-300 mb-3">
+        {title} <span className="text-zinc-600 font-normal">(select together with .LOG1/.LOG2, if you have them)</span>
+      </h2>
+      <div className="space-y-2">
+        {files.map((pf) => (
+          <div key={pf.id} className="flex items-center gap-2">
+            <input
+              value={pf.profileName}
+              onChange={(e) => setFiles((prev) => prev.map((f) => f.id === pf.id ? { ...f, profileName: e.target.value } : f))}
+              placeholder={profilePlaceholder}
+              className="w-40 shrink-0 rounded-md border border-zinc-700 bg-zinc-800 px-2.5 py-2 text-xs text-zinc-200 placeholder-zinc-600 outline-none focus:border-teal-500"
+            />
+            <div className="flex-1">
+              <HiveFileSlot
+                label="Choose file(s)…"
+                value={{ file: pf.file, log1: pf.log1, log2: pf.log2 }}
+                onChange={(v) => setFiles((prev) => prev.map((x) => x.id === pf.id ? { ...x, file: v.file, log1: v.log1, log2: v.log2 } : x))}
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => setFiles((prev) => prev.length > 1 ? prev.filter((f) => f.id !== pf.id) : prev)}
+              className="shrink-0 p-2 text-zinc-600 hover:text-red-400"
+              title="Remove"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        ))}
+      </div>
+      <button
+        type="button"
+        onClick={() => setFiles((prev) => [...prev, makeHiveProfileFile()])}
         className="mt-2 flex items-center gap-1.5 text-xs text-teal-400 hover:text-teal-300"
       >
         <Plus className="h-3.5 w-3.5" /> Add another profile

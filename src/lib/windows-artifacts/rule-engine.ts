@@ -21,8 +21,9 @@ import type { WerDumpRow } from "./wer-dump-engine";
 import type { RecycleBinRow } from "./recyclebin-engine";
 import type { BitsJobRow } from "./bits-engine";
 import type { QuarantinePayloadRow } from "./defender-quarantine-engine";
+import type { TimelineEntryRow } from "./timeline-engine";
 
-export type WinArtifactSubjectKind = "shimcache" | "amcache" | "userassist" | "bam" | "autorun" | "prefetch" | "prefetch_reference" | "lnk" | "jumplist" | "shellbag" | "mft" | "usnjrnl" | "srum" | "wer" | "wer_dump_module" | "recyclebin" | "bits" | "quarantine_payload";
+export type WinArtifactSubjectKind = "shimcache" | "amcache" | "userassist" | "bam" | "autorun" | "prefetch" | "prefetch_reference" | "lnk" | "jumplist" | "shellbag" | "mft" | "usnjrnl" | "srum" | "wer" | "wer_dump_module" | "recyclebin" | "bits" | "quarantine_payload" | "timeline";
 
 export interface WinArtifactRuleSubject {
   kind: WinArtifactSubjectKind;
@@ -69,6 +70,7 @@ export function buildSubjects(data: {
   recyclebin?: RecycleBinRow[];
   bits?: BitsJobRow[];
   quarantinePayload?: QuarantinePayloadRow[];
+  timeline?: TimelineEntryRow[];
 }): WinArtifactRuleSubject[] {
   const subjects: WinArtifactRuleSubject[] = [];
 
@@ -223,6 +225,15 @@ export function buildSubjects(data: {
   // (see iocCandidates() below).
   for (const q of data.quarantinePayload ?? []) {
     subjects.push({ ...BLANK_SUBJECT_FIELDS, kind: "quarantine_payload", refKey: q.sha256 ?? "unknown", sha256: q.sha256 });
+  }
+  // Unlike Search/Notifications, Windows Timeline genuinely has a
+  // reliable structured application-identity field — reuses the
+  // existing LOLBin/Temp-Downloads path-based built-ins for free via
+  // `path`, no new rule needed.
+  for (const t of data.timeline ?? []) {
+    const identity = t.appDisplayName ?? t.packageIdentifier;
+    if (!identity) continue;
+    subjects.push({ ...BLANK_SUBJECT_FIELDS, kind: "timeline", refKey: `${t.startTime ?? ""}:${identity}`, path: identity });
   }
 
   return subjects;

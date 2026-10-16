@@ -29,7 +29,8 @@ export type WinArtifactFileRole =
   | "search_edb"
   | "quarantine_entry"
   | "quarantine_resource"
-  | "bits_queue";
+  | "bits_queue"
+  | "timeline_db";
 
 /** All normalized field names Windows Artifact rules can operate against —
  * mirrors RamField/PcapField's role, rooted in the heterogeneous
@@ -37,7 +38,7 @@ export type WinArtifactFileRole =
  * row shape, since one WindowsArtifactFile can yield several different
  * kinds of subject. */
 export type WinArtifactField =
-  | "artifact_type" // shimcache | amcache | userassist | bam | autorun | prefetch | prefetch_reference | lnk | jumplist | shellbag | mft | usnjrnl | srum | wer | wer_dump | recyclebin | bits | quarantine_payload
+  | "artifact_type" // shimcache | amcache | userassist | bam | autorun | prefetch | prefetch_reference | lnk | jumplist | shellbag | mft | usnjrnl | srum | wer | wer_dump | recyclebin | bits | quarantine_payload | timeline
   | "path"
   | "sha1"
   | "run_count"

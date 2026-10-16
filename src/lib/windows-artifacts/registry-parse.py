@@ -6,8 +6,17 @@ installed as the `regipy[full]` pip extra so pyfwsi/pyfwps are available
 for Shellbags), routed by the `role` argument the caller already
 determined at upload time (the same role the file was uploaded under —
 see WindowsArtifactFile.role in schema.prisma). Invoked as:
-registry-parse.py <hive_path> <role>
+registry-parse.py <hive_path> <role> [log1_path] [log2_path]
 role is one of: system_hive | software_hive | ntuser_hive | amcache_hive | usrclass_hive
+
+The optional log1_path/log2_path are the hive's own <HIVE>.LOG1/.LOG2
+transaction log files, when the collector gathered them alongside the
+hive — regipy.recovery.apply_transaction_logs() (already part of this
+project's existing regipy dependency) replays their "dirty page"
+transactions into a recovered hive, parsed instead of the original.
+Recovery failing for any reason (missing/corrupt/mismatched log) falls
+back to parsing the original hive directly and logs a non-fatal
+scriptError — never aborts the file's processing.
 
 Two extraction strategies, deliberately split:
 
@@ -43,6 +52,7 @@ Emits one JSON object per line to stdout:
   {"type": "error", "message": str}                             — unrecoverable failure for this hive
 """
 import sys
+import os
 import json
 import codecs
 import struct
@@ -327,17 +337,58 @@ def run_userassist(reg):
             emit({"type": "error", "message": f"UserAssist Count walk failed: {e}"})
 
 
+def recover_hive_with_transaction_logs(hive_path, log1_path, log2_path):
+    """Replays <HIVE>.LOG1 (primary) and <HIVE>.LOG2 (secondary) "dirty
+    page" transactions — uncommitted writes not yet flushed into the hive
+    itself — into a recovered copy, via regipy's own
+    regipy.recovery.apply_transaction_logs(). Confirmed directly against
+    the installed regipy package: this is a real, complete function
+    (raises RegistryRecoveryException on a corrupt/mismatched log rather
+    than silently producing a wrong result), already part of this
+    project's existing regipy dependency — nothing new to install.
+
+    Returns the recovered hive's path on success, or None on any
+    failure (log missing/corrupt/mismatched) — callers fall back to
+    parsing the original hive_path, never aborting the run over this.
+    """
+    if not log1_path:
+        return None
+    try:
+        from regipy.recovery import apply_transaction_logs
+    except ImportError:
+        return None
+
+    restored_path = hive_path + ".recovered"
+    try:
+        apply_transaction_logs(
+            hive_path,
+            primary_log_path=log1_path,
+            secondary_log_path=log2_path if log2_path else None,
+            restored_hive_path=restored_path,
+        )
+        return restored_path
+    except Exception as e:
+        emit({"type": "error", "message": f"transaction log recovery failed, parsing original hive instead: {e}"})
+        return None
+
+
 def main():
     if len(sys.argv) < 3:
-        emit({"type": "error", "message": "usage: registry-parse.py <hive_path> <role>"})
+        emit({"type": "error", "message": "usage: registry-parse.py <hive_path> <role> [log1_path] [log2_path]"})
         sys.exit(1)
     hive_path, role = sys.argv[1], sys.argv[2]
+    log1_path = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] else None
+    log2_path = sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] else None
 
     try:
         from regipy.registry import RegistryHive
     except ImportError:
         emit({"type": "not_installed"})
         sys.exit(0)
+
+    recovered_path = recover_hive_with_transaction_logs(hive_path, log1_path, log2_path)
+    if recovered_path:
+        hive_path = recovered_path
 
     # Pass the hive type explicitly rather than relying on regipy's own
     # auto-detection (identify_hive_type(), keyed off the ORIGINAL absolute
@@ -358,6 +409,20 @@ def main():
         emit({"type": "error", "message": f"failed to open hive: {e}"})
         sys.exit(1)
 
+    try:
+        _dispatch_role(reg, role)
+    finally:
+        # Clean up the recovered-hive tempfile regardless of which
+        # sys.exit() path above was taken — SystemExit still runs this,
+        # same as any other exception passing through a finally block.
+        if recovered_path and os.path.exists(recovered_path):
+            try:
+                os.remove(recovered_path)
+            except Exception:
+                pass
+
+
+def _dispatch_role(reg, role):
     if role == "system_hive":
         if not run_plugins(reg):
             sys.exit(0)

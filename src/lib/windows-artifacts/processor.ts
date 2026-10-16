@@ -38,6 +38,7 @@ import { runRecycleBinParse, type RecycleBinRow } from "./recyclebin-engine";
 import { runNotificationParse, type NotificationRow } from "./notification-engine";
 import { runSearchIndexParse, type SearchIndexRow } from "./search-engine";
 import { runBitsParse, type BitsJobRow } from "./bits-engine";
+import { runTimelineParse, type TimelineEntryRow } from "./timeline-engine";
 import { runQuarantineEntryParse, runQuarantinePayloadParse, type QuarantineEntryRow, type QuarantinePayloadRow } from "./defender-quarantine-engine";
 import { buildSubjects, runRules, type StoredWinArtifactRule } from "./rule-engine";
 import { isEnriched, type IocLookupMap } from "@/lib/rule-engine/ioc-lookup";
@@ -93,6 +94,7 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
       prisma.defenderQuarantineEntry.deleteMany({ where: { fileId } }),
       prisma.defenderQuarantinePayload.deleteMany({ where: { fileId } }),
       prisma.bitsJobEntry.deleteMany({ where: { fileId } }),
+      prisma.timelineActivityEntry.deleteMany({ where: { fileId } }),
       prisma.windowsArtifactFinding.deleteMany({ where: { fileId } }),
     ]);
 
@@ -112,14 +114,19 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
     let werReportRows: WerReportRow[] = [];
     let werDumpRows: WerDumpRow[] = [];
     let bitsRows: BitsJobRow[] = [];
+    let timelineRows: TimelineEntryRow[] = [];
     let recycleBinRows: RecycleBinRow[] = [];
     let quarantinePayloadRows: QuarantinePayloadRow[] = [];
     const iocLookupMap: IocLookupMap = new Map();
 
     if (REGISTRY_ROLES.includes(file.role as RegistryRole)) {
-      // 3. Run the registry parser
+      // 3. Run the registry parser — passing along this hive's own
+      // .LOG1/.LOG2 transaction logs, when the collector gathered them,
+      // so regipy can replay their uncommitted "dirty page" transactions
+      // into a recovered hive before parsing (see registry-parse.py's
+      // recover_hive_with_transaction_logs()).
       const pythonPath = await getWinArtifactsPythonPath();
-      const result = await runRegistryParse(pythonPath, filePath, file.role as RegistryRole);
+      const result = await runRegistryParse(pythonPath, filePath, file.role as RegistryRole, file.log1StoragePath, file.log2StoragePath);
 
       if (result.status === "not_installed") {
         throw new Error("regipy is not installed in the Windows Artifacts venv — see Settings > Windows Artifact Storage Directory.");
@@ -877,6 +884,44 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
         });
       }
       // No IOC upsert step — BITS job records carry no hash to look up.
+    } else if (file.role === "timeline_db") {
+      // 3. Run the Windows Timeline parser — stdlib sqlite3 only, same
+      // winartifacts venv (no new dependency at all).
+      const pythonPath = await getWinArtifactsPythonPath();
+      const result = await runTimelineParse(pythonPath, filePath);
+
+      if (result.status === "not_installed") {
+        throw new Error("timeline-parse.py reported itself unavailable.");
+      }
+      if (result.status === "timeout") {
+        throw new Error("Windows Timeline database parsing timed out.");
+      }
+      if (result.status === "error") {
+        throw new Error(result.message);
+      }
+      for (const err of result.scriptErrors) {
+        console.warn(`[windows-artifacts] timeline-parse.py reported: ${err}`);
+      }
+
+      // 4. One TimelineActivityEntry row per activity record.
+      timelineRows = result.entries;
+      if (timelineRows.length > 0) {
+        await prisma.timelineActivityEntry.createMany({
+          data: timelineRows.map((r) => ({
+            fileId,
+            profileName: file.profileName ?? undefined,
+            startTime: r.startTime ? new Date(r.startTime) : undefined,
+            activityKind: r.activityKind,
+            appDisplayName: r.appDisplayName ?? undefined,
+            description: r.description ?? undefined,
+            packageIdentifier: r.packageIdentifier ?? undefined,
+            activeDurationSeconds: r.activeDurationSeconds ?? undefined,
+            reportingApp: r.reportingApp ?? undefined,
+            details: r.details as object,
+          })),
+        });
+      }
+      // No IOC upsert step — Windows Timeline carries no hash to look up.
     } else {
       throw new Error(`Unsupported artifact role (not yet implemented): ${file.role}`);
     }
@@ -901,7 +946,7 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
         prefetch: prefetchRows, lnk: lnkRows, jumplist: jumpListRows, shellbag: shellbagRows,
         mft: mftRows, usnjrnl: usnJrnlRows, srum: srumRows,
         wer: werReportRows, werDump: werDumpRows, recyclebin: recycleBinRows, bits: bitsRows,
-        quarantinePayload: quarantinePayloadRows,
+        quarantinePayload: quarantinePayloadRows, timeline: timelineRows,
       });
       const matches = runRules(rules as unknown as StoredWinArtifactRule[], subjects, iocLookupMap);
 

@@ -48,12 +48,21 @@ export async function runRegistryParse(
   pythonPath: string,
   hivePath: string,
   role: RegistryRole,
+  log1Path: string | null = null,
+  log2Path: string | null = null,
   timeoutSeconds: number = DEFAULT_TIMEOUT_SECONDS
 ): Promise<RegistryParseResult> {
   const scriptPath = path.join(process.cwd(), "src", "lib", "windows-artifacts", "registry-parse.py");
+  // log2 is only meaningful alongside log1 (regipy's apply_transaction_logs
+  // takes the primary log as its main positional arg) — an empty-string
+  // placeholder keeps argv positional when only log2 is somehow present.
+  const args = [scriptPath, hivePath, role];
+  if (log1Path) {
+    args.push(log1Path, log2Path ?? "");
+  }
 
   return new Promise<RegistryParseResult>((resolve) => {
-    const child = spawn(pythonPath, [scriptPath, hivePath, role], { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(pythonPath, args, { stdio: ["ignore", "pipe", "pipe"] });
 
     let stdout = "";
     let stderr = "";

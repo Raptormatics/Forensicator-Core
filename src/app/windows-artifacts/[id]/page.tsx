@@ -36,6 +36,7 @@ type SearchIndexRow = { id: string; fileId: string; tableName: string; recordInd
 type QuarantineEntryRow = { id: string; fileId: string; sourceFileName: string; detectionName: string | null; timestamp: string | null; threatId: string | null; resources: { detection_path: string | null; detection_type: string | null }[] };
 type QuarantinePayloadRow = { id: string; fileId: string; sourceFileName: string; magicValid: boolean; sha256: string | null; decryptedSizeBytes: string | null; fileTypeSniff: string | null };
 type BitsJobRow = { id: string; fileId: string; name: string | null; destFn: string | null; srcFn: string | null; state: string | null; ctime: string | null; isCarved: boolean };
+type TimelineRow = { id: string; fileId: string; profileName: string | null; startTime: string | null; activityKind: string; appDisplayName: string | null; description: string | null; packageIdentifier: string | null; activeDurationSeconds: number | null; reportingApp: string | null };
 type Finding = { id: string; title: string; description: string | null; severity: string; matchCount: number; matchedField: string | null; matchedValue: string | null; rule: { id: string; name: string } | null };
 
 type Detail = {
@@ -60,11 +61,12 @@ type Detail = {
   quarantineEntries: QuarantineEntryRow[];
   quarantinePayloads: QuarantinePayloadRow[];
   bitsJobs: BitsJobRow[];
+  timeline: TimelineRow[];
   findings: Finding[];
 };
 
 type Tab = "overview" | "shimcache" | "amcache" | "userassist" | "bam" | "autoruns" | "prefetch" | "lnk" | "jumplist" | "shellbags" | "mft" | "usnjrnl" | "srum"
-  | "wer" | "werdump" | "recyclebin" | "notifications" | "search" | "quarantine" | "quarantinepayloads" | "bits" | "findings";
+  | "wer" | "werdump" | "recyclebin" | "notifications" | "search" | "quarantine" | "quarantinepayloads" | "bits" | "timeline" | "findings";
 
 const STATUS_ICON: Record<string, React.ReactNode> = {
   ready:      <CheckCircle2 className="h-3.5 w-3.5 text-teal-400" />,
@@ -123,7 +125,7 @@ export default function WindowsArtifactDetailPage() {
   const {
     upload, shimcache, amcache, userAssist, bam, autoruns, prefetch, lnk, jumpList, shellbags, mft, usnJrnl, srum,
     werReports, werDumps, recycleBin, notifications, searchIndex, quarantineEntries, quarantinePayloads, bitsJobs,
-    findings,
+    timeline, findings,
   } = data;
 
   // filename carries the source subfolder when the upload form's folder
@@ -154,6 +156,7 @@ export default function WindowsArtifactDetailPage() {
     { key: "quarantine", label: "Quarantine Entries", count: quarantineEntries.length },
     { key: "quarantinepayloads", label: "Quarantine Payloads", count: quarantinePayloads.length },
     { key: "bits", label: "BITS", count: bitsJobs.length },
+    { key: "timeline", label: "Timeline", count: timeline.length },
     { key: "findings", label: "Findings", count: findings.length },
   ];
 
@@ -534,6 +537,23 @@ export default function WindowsArtifactDetailPage() {
               { header: "State", csv: (r) => r.state ?? "", render: (r) => r.state ?? "—" },
               { header: "Created", csv: (r) => r.ctime ?? "", render: (r) => r.ctime ? formatDateTime(new Date(r.ctime)) : "—" },
               { header: "Carved", csv: (r) => r.isCarved ? "Yes" : "No", render: (r) => r.isCarved ? <span className="text-amber-400">Yes</span> : "No" },
+            ]}
+          />
+        )}
+
+        {tab === "timeline" && (
+          <SimpleTable
+            rows={timeline}
+            exportName={`windows-artifacts-${id}-timeline`}
+            empty="No Windows Timeline entries — upload one or more ActivitiesCache.db files to populate this tab."
+            filter={{ label: "Kind", getValue: (r) => r.activityKind }}
+            columns={[
+              { header: "Start Time", csv: (r) => r.startTime ?? "", render: (r) => r.startTime ? formatDateTime(new Date(r.startTime)) : "—" },
+              { header: "App / Package", wrap: true, csv: (r) => r.appDisplayName ?? r.packageIdentifier ?? "", render: (r) => <span className="font-mono text-xs">{r.appDisplayName ?? r.packageIdentifier ?? "—"}</span> },
+              { header: "Description", wrap: true, csv: (r) => r.description ?? "", render: (r) => <span className="text-xs text-zinc-500">{r.description ?? "—"}</span> },
+              { header: "Kind", csv: (r) => r.activityKind, render: (r) => <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-xs text-zinc-400">{r.activityKind}</span> },
+              { header: "Duration (s)", csv: (r) => String(r.activeDurationSeconds ?? ""), render: (r) => r.activeDurationSeconds ?? "—" },
+              { header: "Profile", wrap: true, csv: (r) => r.profileName ?? "", render: (r) => r.profileName ?? "—" },
             ]}
           />
         )}

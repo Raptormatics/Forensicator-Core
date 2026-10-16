@@ -30,8 +30,21 @@ const SINGLE_FILE_FIELDS: { field: string; role: WinArtifactFileRole }[] = [
   { field: "qmgr1", role: "bits_queue" },
 ];
 
+// Which SINGLE_FILE_FIELDS/per-profile fields can carry an optional
+// <field>Log1/<field>Log2 pair (the hive's own .LOG1/.LOG2 transaction
+// logs) — only registry hives have these, not $MFT/SRUDB.dat/etc.
+const HIVE_FIELDS_WITH_LOGS = new Set(["system", "software", "security", "amcache"]);
+
 function isUploadedFile(v: FormDataEntryValue | null): v is File {
   return !!v && typeof v !== "string" && "arrayBuffer" in v;
+}
+
+// A real uploaded log1/log2 file; filters out the zero-byte placeholder
+// the upload page sends for a profile row with no log file, to keep
+// getAll()'s positional zip against the main file array aligned (a
+// skipped `form.append` for an absent log would desync indices otherwise).
+function isRealUploadedFile(v: FormDataEntryValue | null): v is File {
+  return isUploadedFile(v) && v.size > 0;
 }
 
 // ── GET /api/windows-artifacts/uploads ──────────────────────────────────────
@@ -88,21 +101,48 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "case_closed", message: "This case is closed and cannot accept new uploads. Reopen it first." }, { status: 403 });
     }
 
-    type PendingFile = { role: WinArtifactFileRole; file: File; profileName: string | null; relativePath?: string | null; journalMetadataText?: string | null };
+    type PendingFile = {
+      role: WinArtifactFileRole; file: File; profileName: string | null; relativePath?: string | null;
+      journalMetadataText?: string | null; log1File?: File | null; log2File?: File | null;
+    };
     const pending: PendingFile[] = [];
 
     for (const { field, role } of SINGLE_FILE_FIELDS) {
       const f = formData.get(field);
-      if (isUploadedFile(f)) pending.push({ role, file: f, profileName: null });
+      if (isUploadedFile(f)) {
+        const entry: PendingFile = { role, file: f, profileName: null };
+        if (HIVE_FIELDS_WITH_LOGS.has(field)) {
+          const log1 = formData.get(`${field}Log1`);
+          const log2 = formData.get(`${field}Log2`);
+          entry.log1File = isUploadedFile(log1) ? log1 : null;
+          entry.log2File = isUploadedFile(log2) ? log2 : null;
+        }
+        pending.push(entry);
+      }
     }
 
     const ntuserFiles = formData.getAll("ntuser").filter(isUploadedFile);
     const ntuserNames = formData.getAll("ntuserProfileName").map((v) => String(v));
-    ntuserFiles.forEach((file, i) => pending.push({ role: "ntuser_hive", file, profileName: ntuserNames[i]?.trim() || null }));
+    // NOT pre-filtered — a row with no log sends a zero-byte placeholder
+    // (see upload/page.tsx) specifically to keep these positionally
+    // aligned with ntuserFiles; only check isRealUploadedFile per-index.
+    const ntuserLog1sRaw = formData.getAll("ntuserLog1");
+    const ntuserLog2sRaw = formData.getAll("ntuserLog2");
+    ntuserFiles.forEach((file, i) => pending.push({
+      role: "ntuser_hive", file, profileName: ntuserNames[i]?.trim() || null,
+      log1File: isRealUploadedFile(ntuserLog1sRaw[i] ?? null) ? ntuserLog1sRaw[i] as File : null,
+      log2File: isRealUploadedFile(ntuserLog2sRaw[i] ?? null) ? ntuserLog2sRaw[i] as File : null,
+    }));
 
     const usrclassFiles = formData.getAll("usrclass").filter(isUploadedFile);
     const usrclassNames = formData.getAll("usrclassProfileName").map((v) => String(v));
-    usrclassFiles.forEach((file, i) => pending.push({ role: "usrclass_hive", file, profileName: usrclassNames[i]?.trim() || null }));
+    const usrclassLog1sRaw = formData.getAll("usrclassLog1");
+    const usrclassLog2sRaw = formData.getAll("usrclassLog2");
+    usrclassFiles.forEach((file, i) => pending.push({
+      role: "usrclass_hive", file, profileName: usrclassNames[i]?.trim() || null,
+      log1File: isRealUploadedFile(usrclassLog1sRaw[i] ?? null) ? usrclassLog1sRaw[i] as File : null,
+      log2File: isRealUploadedFile(usrclassLog2sRaw[i] ?? null) ? usrclassLog2sRaw[i] as File : null,
+    }));
 
     // Prefetch .pf files — a whole folder's worth collected at once, no
     // per-file profile pairing needed (unlike NTUSER, which is per-user).
@@ -173,6 +213,12 @@ export async function POST(req: NextRequest) {
     const quarantineResourcePaths = formData.getAll("quarantineResourcesRelativePath").map((v) => String(v));
     quarantineResourceFiles.forEach((file, i) => pending.push({ role: "quarantine_resource", file, profileName: null, relativePath: quarantineResourcePaths[i] || null }));
 
+    // Windows Timeline — one per user profile, same ProfileFileList
+    // pairing convention as the Notification database above.
+    const timelineFiles = formData.getAll("timeline").filter(isUploadedFile);
+    const timelineNames = formData.getAll("timelineProfileName").map((v) => String(v));
+    timelineFiles.forEach((file, i) => pending.push({ role: "timeline_db", file, profileName: timelineNames[i]?.trim() || null }));
+
     if (pending.length === 0) {
       return NextResponse.json({ error: "no_files", message: "Upload at least one artifact file (SYSTEM, SOFTWARE, NTUSER.DAT, or Amcache.hve)." }, { status: 400 });
     }
@@ -217,10 +263,24 @@ export async function POST(req: NextRequest) {
       const storagePath = path.join(dir, `${fileRow.id}${ext}`);
       fs.writeFileSync(storagePath, buffer);
 
+      // This hive's own .LOG1/.LOG2 transaction logs, when provided —
+      // written alongside the hive under the same fileRow.id so
+      // registry-parse.py can find and replay them (see processor.ts).
+      let log1StoragePath: string | null = null;
+      let log2StoragePath: string | null = null;
+      if (p.log1File) {
+        log1StoragePath = path.join(dir, `${fileRow.id}.log1`);
+        fs.writeFileSync(log1StoragePath, Buffer.from(await p.log1File.arrayBuffer()));
+      }
+      if (p.log2File) {
+        log2StoragePath = path.join(dir, `${fileRow.id}.log2`);
+        fs.writeFileSync(log2StoragePath, Buffer.from(await p.log2File.arrayBuffer()));
+      }
+
       const job = await queue.add("process-winartifact-file", { winArtifactFileId: fileRow.id });
       const updated = await prisma.windowsArtifactFile.update({
         where: { id: fileRow.id },
-        data: { storagePath, jobId: job.id ?? null },
+        data: { storagePath, jobId: job.id ?? null, log1StoragePath, log2StoragePath },
       });
       createdFiles.push(updated);
     }

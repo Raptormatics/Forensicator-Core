@@ -33,6 +33,7 @@ export async function GET(req: NextRequest, props: Params) {
     const [
       shimcache, amcache, userAssist, bam, autoruns, prefetch, lnk, jumpList, shellbags, mft, usnJrnl, srum,
       werReports, werDumps, recycleBin, notifications, searchIndex, quarantineEntries, quarantinePayloads, bitsJobs,
+      timeline,
       findings,
     ] = await Promise.all([
       prisma.shimcacheEntry.findMany({ where: { fileId: { in: fileIds } }, orderBy: { order: "asc" }, take: ROW_CAP }),
@@ -63,6 +64,7 @@ export async function GET(req: NextRequest, props: Params) {
       prisma.defenderQuarantineEntry.findMany({ where: { fileId: { in: fileIds } }, orderBy: { timestamp: "desc" }, take: ROW_CAP }),
       prisma.defenderQuarantinePayload.findMany({ where: { fileId: { in: fileIds } }, orderBy: { createdAt: "desc" }, take: ROW_CAP }),
       prisma.bitsJobEntry.findMany({ where: { fileId: { in: fileIds } }, orderBy: { ctime: "desc" }, take: ROW_CAP }),
+      prisma.timelineActivityEntry.findMany({ where: { fileId: { in: fileIds } }, orderBy: { startTime: "desc" }, take: ROW_CAP }),
       prisma.windowsArtifactFinding.findMany({
         where: { fileId: { in: fileIds } },
         orderBy: { matchCount: "desc" },
@@ -94,6 +96,7 @@ export async function GET(req: NextRequest, props: Params) {
       searchIndex,
       quarantineEntries,
       quarantinePayloads: quarantinePayloads.map((r) => ({ ...r, decryptedSizeBytes: r.decryptedSizeBytes?.toString() ?? null })),
+      timeline,
       bitsJobs: bitsJobs.map((r) => ({
         ...r,
         downloadSizeBytes: r.downloadSizeBytes?.toString() ?? null,
@@ -120,6 +123,12 @@ export async function DELETE(req: NextRequest, props: Params) {
         files: {
           select: {
             storagePath: true,
+            // A hive's own .LOG1/.LOG2 transaction logs are written to
+            // their own paths too — needs cleanup here or they're
+            // orphaned once the DB row is gone, same reasoning as
+            // quarantinePayloads below.
+            log1StoragePath: true,
+            log2StoragePath: true,
             // Defender quarantine payloads write a SECOND file to disk
             // (the decrypted bytes) at a path independent of the
             // uploaded file's own storagePath — needs its own cleanup
@@ -136,6 +145,12 @@ export async function DELETE(req: NextRequest, props: Params) {
     for (const f of upload.files) {
       if (f.storagePath) {
         try { fs.unlinkSync(f.storagePath); } catch { /* best-effort — DB row is already gone either way */ }
+      }
+      if (f.log1StoragePath) {
+        try { fs.unlinkSync(f.log1StoragePath); } catch { /* best-effort */ }
+      }
+      if (f.log2StoragePath) {
+        try { fs.unlinkSync(f.log2StoragePath); } catch { /* best-effort */ }
       }
       for (const payload of f.quarantinePayloads) {
         if (payload.decryptedStoragePath) {

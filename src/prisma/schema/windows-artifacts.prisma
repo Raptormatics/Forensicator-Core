@@ -57,7 +57,7 @@ model WindowsArtifactFile {
   // system_hive | software_hive | security_hive | ntuser_hive | amcache_hive | usrclass_hive
   // | prefetch | lnk | jumplist_automatic | jumplist_custom | mft | usnjrnl | srum_db
   // | wer_report | wer_dump | recycle_bin | notification_db | search_edb | quarantine_entry
-  // | quarantine_resource | bits_queue
+  // | quarantine_resource | bits_queue | timeline_db
   role     String
   filename String
   fileSize Int    @map("file_size")
@@ -83,6 +83,18 @@ model WindowsArtifactFile {
   // it lives here rather than on UsnJrnlEntry.
   journalMetadataText String? @map("journal_metadata_text") @db.Text
 
+  // For registry-hive roles only: this hive's own <HIVE>.LOG1/.LOG2
+  // transaction log companions, when the collector gathered them —
+  // regipy's apply_transaction_logs() replays their "dirty page"
+  // transactions into a recovered hive before parsing, for a more
+  // complete/accurate result. Not a per-record artifact of its own
+  // (unlike journalMetadataText's analogue above, these ARE themselves
+  // files that must round-trip through disk to reach the Python
+  // subprocess), so they get their own storagePath-style columns here
+  // rather than an inline text field.
+  log1StoragePath String? @map("log1_storage_path")
+  log2StoragePath String? @map("log2_storage_path")
+
   shimcacheEntries  ShimcacheEntry[]
   amcacheEntries    AmcacheEntry[]
   userAssistEntries UserAssistEntry[]
@@ -103,6 +115,7 @@ model WindowsArtifactFile {
   quarantineEntries   DefenderQuarantineEntry[]
   quarantinePayloads  DefenderQuarantinePayload[]
   bitsJobEntries      BitsJobEntry[]
+  timelineEntries     TimelineActivityEntry[]
   findings          WindowsArtifactFinding[]
 
   createdAt DateTime  @default(now()) @map("created_at")
@@ -718,4 +731,39 @@ model BitsJobEntry {
   @@index([fileId])
   @@index([jobId])
   @@map("bits_job_entries")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Windows Timeline (ActivitiesCache.db, one per user profile) — see
+// timeline-engine.ts/timeline-parse.py. Column facts sourced from Plaso's
+// own windows_timeline.py SQLite plugin (Apache-2.0, used here as a
+// documented-facts reference, not vendored code): StartTime is a Unix
+// epoch integer despite the column being declared DATETIME; Payload is a
+// UTF-8 JSON blob whose keys differ by activityKind; AppId/PackageName
+// resolve a "generic" row's application identity. Unlike Search/
+// Notifications, this has a genuinely reliable structured `path`-style
+// field, so it IS fed into the rule engine (see rule-engine.ts).
+// ─────────────────────────────────────────────────────────────────────────
+model TimelineActivityEntry {
+  id     String              @id @default(uuid()) @db.Uuid
+  fileId String              @map("file_id") @db.Uuid
+  file   WindowsArtifactFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  profileName String? @map("profile_name")
+
+  startTime  DateTime? @map("start_time")
+  activityKind String  @map("activity_kind") // generic | user_engaged
+
+  appDisplayName     String? @map("app_display_name") @db.Text
+  description        String? @db.Text
+  packageIdentifier  String? @map("package_identifier") @db.Text
+  activeDurationSeconds Int? @map("active_duration_seconds")
+  reportingApp       String? @map("reporting_app")
+
+  details Json @db.JsonB // full Payload JSON + AppId array, verbatim
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([fileId])
+  @@map("timeline_activity_entries")
 }
