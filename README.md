@@ -134,6 +134,58 @@ Each of the following is its own upload type with independent background process
 
 ---
 
+## 📸 Screenshots
+
+<details>
+<summary>Windows Artifacts</summary>
+
+<img width="1244" height="507" alt="image" src="https://github.com/user-attachments/assets/472efe06-a3b7-4ce5-b39f-82983cbeda1f" />
+<br>
+<img width="1112" height="568" alt="image" src="https://github.com/user-attachments/assets/770c8914-e07c-4999-afbe-3b29becb93e3" />
+<br>
+<img width="1104" height="845" alt="image" src="https://github.com/user-attachments/assets/6c43890b-e407-4507-9f4a-6bb39e00ae38" />
+<br>
+<img width="980" height="970" alt="image" src="https://github.com/user-attachments/assets/5dc867bf-363b-43d6-8b77-bf10b0209c28" />
+
+</details>
+
+<details>
+
+<summary>Artifact Explorer</summary>
+
+<img width="1759" height="1228" alt="image" src="https://github.com/user-attachments/assets/41198ddf-5bb1-423f-9701-f7270ebd398e" />
+<br>
+<img width="1235" height="1115" alt="image" src="https://github.com/user-attachments/assets/de3f2987-eedd-4c53-aab6-aec0d4dd226c" />
+<br>
+<img width="976" height="977" alt="image" src="https://github.com/user-attachments/assets/7c1eea34-0900-43f3-ab10-d04921d1835f" />
+
+
+</details>
+
+<details>
+
+<summary>Case Management</summary>
+
+<img width="1015" height="1095" alt="image" src="https://github.com/user-attachments/assets/296e5e5a-fcc9-441f-886e-2ed5af69491d" />
+<br>
+<img width="669" height="765" alt="image" src="https://github.com/user-attachments/assets/11916155-47c4-4d0a-8bc8-8d611510e9f8" />
+<br>
+<img width="1124" height="905" alt="image" src="https://github.com/user-attachments/assets/7adc591d-50d0-4b60-a6bb-841c7ed51fa9" />
+<br>
+<img width="2248" height="648" alt="image" src="https://github.com/user-attachments/assets/f70802f6-dfd7-4f46-97b1-7320afc56b66" />
+
+</details>
+
+<details>
+
+<summary>Full Functions</summary>
+
+<img width="227" height="1247" alt="image" src="https://github.com/user-attachments/assets/4360ab7c-9296-4cfc-84b6-7a4a43c5b49b" />
+
+</details>
+
+
+
 ## 🔄 Updates
 
 Three ways to update an existing install, covered in more detail in-app (Settings → Updates):
