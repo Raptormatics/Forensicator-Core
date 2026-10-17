@@ -23,10 +23,14 @@ export default function SettingsPage() {
   const [volatilityStatus, setVolatilityStatus] = useState<{ available: boolean; path: string; version: string | null } | null>(null);
   const [winArtifactsDir, setWinArtifactsDir]             = useState("");
   const [winArtifactsPythonPath, setWinArtifactsPythonPath] = useState("");
+  const [winArtifactsBitsPythonPath, setWinArtifactsBitsPythonPath] = useState("");
   // Held in the input as MB for readability; converted to/from bytes at
   // the API boundary (winArtifactsMaxUploadBytes).
   const [winArtifactsMaxUploadMb, setWinArtifactsMaxUploadMb] = useState("");
-  const [winArtifactsStatus, setWinArtifactsStatus] = useState<{ available: boolean; path: string; version: string | null } | null>(null);
+  const [winArtifactsStatus, setWinArtifactsStatus] = useState<{
+    available: boolean; path: string; version: string | null;
+    bits: { available: boolean; path: string; version: string | null };
+  } | null>(null);
   const [loading, setLoading]       = useState(true);
   const [saving, setSaving]         = useState(false);
   const [error, setError]           = useState("");
@@ -45,6 +49,7 @@ export default function SettingsPage() {
         setVolatilitySymbolsDir(d.volatilitySymbolsDir ?? "");
         setWinArtifactsDir(d.winArtifactsDir ?? "");
         setWinArtifactsPythonPath(d.winArtifactsPythonPath ?? "");
+        setWinArtifactsBitsPythonPath(d.winArtifactsBitsPythonPath ?? "");
         setWinArtifactsMaxUploadMb(d.winArtifactsMaxUploadBytes ? String(Math.round(d.winArtifactsMaxUploadBytes / 1024 / 1024)) : "");
       })
       .finally(() => setLoading(false));
@@ -84,6 +89,7 @@ export default function SettingsPage() {
           volatilitySymbolsDir: volatilitySymbolsDir.trim(),
           winArtifactsDir: winArtifactsDir.trim(),
           winArtifactsPythonPath: winArtifactsPythonPath.trim(),
+          winArtifactsBitsPythonPath: winArtifactsBitsPythonPath.trim(),
           winArtifactsMaxUploadBytes: winArtifactsMaxUploadMb.trim() ? Math.round(Number(winArtifactsMaxUploadMb.trim()) * 1024 * 1024) : 0,
         }),
       });
@@ -101,6 +107,7 @@ export default function SettingsPage() {
       setVolatilitySymbolsDir(data.volatilitySymbolsDir ?? "");
       setWinArtifactsDir(data.winArtifactsDir ?? "");
       setWinArtifactsPythonPath(data.winArtifactsPythonPath ?? "");
+      setWinArtifactsBitsPythonPath(data.winArtifactsBitsPythonPath ?? "");
       setWinArtifactsMaxUploadMb(data.winArtifactsMaxUploadBytes ? String(Math.round(data.winArtifactsMaxUploadBytes / 1024 / 1024)) : "");
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
@@ -320,6 +327,34 @@ export default function SettingsPage() {
             Path to the Windows Artifact Analysis venv&apos;s <code className="text-zinc-500">python3</code>. Leave blank to use the{" "}
             <code className="text-zinc-500">WIN_ARTIFACTS_PYTHON_PATH</code> environment variable, or the bundled venv at{" "}
             <code className="text-zinc-500">.venvs/winartifacts/bin/python3</code> if that&apos;s not set either.
+          </p>
+
+          <div className="flex items-center gap-2 pt-1 text-xs">
+            {winArtifactsStatus === null ? (
+              <span className="flex items-center gap-1.5 text-zinc-500"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Checking bits_parser…</span>
+            ) : winArtifactsStatus.bits.available ? (
+              <span className="flex items-center gap-1.5 text-teal-400">
+                <CheckCircle2 className="h-3.5 w-3.5" /> bits_parser available
+              </span>
+            ) : (
+              <span className="flex items-center gap-1.5 text-red-400">
+                <AlertCircle className="h-3.5 w-3.5" /> bits_parser not found at &quot;{winArtifactsStatus.bits.path}&quot; — install it (see deploy/provision.sh) or set the path below.
+              </span>
+            )}
+          </div>
+          <input
+            type="text"
+            disabled={!isAdmin}
+            value={winArtifactsBitsPythonPath}
+            onChange={e => setWinArtifactsBitsPythonPath(e.target.value)}
+            placeholder="/opt/forensicator/.venvs/winartifacts-bits/bin/python3"
+            className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500/30 disabled:opacity-60"
+          />
+          <p className="text-xs text-zinc-600">
+            Path to the BITS job database venv&apos;s <code className="text-zinc-500">python3</code> — kept separate from the venv above
+            because bits_parser and regipy need incompatible versions of a shared dependency and can never install together. Leave blank
+            to use the <code className="text-zinc-500">WIN_ARTIFACTS_BITS_PYTHON_PATH</code> environment variable, or the bundled venv at{" "}
+            <code className="text-zinc-500">.venvs/winartifacts-bits/bin/python3</code> if that&apos;s not set either.
           </p>
 
           <label className="block pt-2 text-xs text-zinc-400">Max upload size (MB)</label>

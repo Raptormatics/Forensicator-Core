@@ -202,6 +202,27 @@ export async function getWinArtifactsSystemPythonPath(): Promise<string> {
 }
 
 /**
+ * DB override > WIN_ARTIFACTS_BITS_PYTHON_PATH env var > <APP_DIR>/.venvs/winartifacts-bits/bin/python3.
+ * bits_parser (BITS job database parsing) lives in its OWN venv, separate
+ * from getWinArtifactsPythonPath()'s — confirmed directly that
+ * bits_parser==1.0.1 hard-pins construct==2.8.12 and needs its old
+ * `Embedded` API (removed in construct 2.10+), while regipy needs
+ * construct>=2.10 for `EnumIntegerString` (added in 2.10). Installing
+ * both into the same venv means whichever pip installs second silently
+ * breaks the other's import (regipy "not found" after an update is this
+ * exact failure) — not a resolver quirk, a real, permanent API
+ * incompatibility. See deploy/install-winartifacts-deps.sh.
+ */
+export async function getWinArtifactsBitsPythonPath(): Promise<string> {
+  const settings = await getSystemSettings();
+  return (
+    settings?.winArtifactsBitsPythonPath ??
+    process.env.WIN_ARTIFACTS_BITS_PYTHON_PATH ??
+    path.join(process.cwd(), ".venvs", "winartifacts-bits", "bin", "python3")
+  );
+}
+
+/**
  * Forensicator AI provider config — DB-backed, schema defaults cover an
  * unconfigured instance. Decrypts the stored API key (if any) so callers
  * get something directly usable; never returns aiApiKeyEncrypted itself.

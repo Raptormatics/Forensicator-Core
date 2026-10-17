@@ -299,6 +299,14 @@ model SystemSettings {
   // since they're installed together by the same deploy step and have
   // identical requirements, unlike Prefetch's separate dedicated setting.
   winArtifactsSystemPythonPath String? @map("win_artifacts_system_python_path")
+  // Path to a SEPARATE venv's python3 with bits_parser installed — kept
+  // apart from winArtifactsPythonPath because bits_parser hard-pins
+  // construct==2.8.12 while regipy needs construct>=2.10 for an API
+  // added in that version; the two packages can never coexist in one
+  // venv. See getWinArtifactsBitsPythonPath()'s own comment for the
+  // full story and deploy/install-winartifacts-deps.sh for the venv
+  // this defaults to.
+  winArtifactsBitsPythonPath String? @map("win_artifacts_bits_python_path")
   // Overrides WIN_ARTIFACTS_MAX_UPLOAD_BYTES when set — the combined size
   // cap for one Windows Artifact Analysis upload (registry hives + their
   // .LOG1/.LOG2, $MFT, Prefetch, WER dumps, etc. all add up — a busy

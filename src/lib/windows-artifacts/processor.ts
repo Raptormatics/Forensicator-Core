@@ -21,7 +21,7 @@ import fs from "fs";
 import path from "path";
 import { randomUUID } from "crypto";
 import { prisma } from "@/lib/db/prisma";
-import { getWinArtifactsPythonPath, getPrefetchPythonPath, getWinArtifactsSystemPythonPath, getWinArtifactsDir } from "@/lib/settings/system";
+import { getWinArtifactsPythonPath, getPrefetchPythonPath, getWinArtifactsSystemPythonPath, getWinArtifactsBitsPythonPath, getWinArtifactsDir } from "@/lib/settings/system";
 import {
   runRegistryParse, mapShimcacheEntries, mapAmcacheEntries, mapBamEntries, mapShellbagEntries,
   type RegistryRole,
@@ -838,15 +838,18 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
         );
       }
     } else if (file.role === "bits_queue") {
-      // 3. Run the BITS queue parser (bits_parser package, same
-      // winartifacts venv — pure Python, no C library). Legacy
+      // 3. Run the BITS queue parser (bits_parser package, its OWN
+      // dedicated venv — NOT getWinArtifactsPythonPath()'s, since
+      // bits_parser hard-pins construct==2.8.12 while regipy needs
+      // construct>=2.10; the two can never coexist in one venv, see
+      // getWinArtifactsBitsPythonPath()'s own comment. Legacy
       // qmgr0.dat/qmgr1.dat format only — see windows-artifacts plan's
       // Decisions for why the newer ESE-based qmgr.db is out of scope.
-      const pythonPath = await getWinArtifactsPythonPath();
+      const pythonPath = await getWinArtifactsBitsPythonPath();
       const result = await runBitsParse(pythonPath, filePath);
 
       if (result.status === "not_installed") {
-        throw new Error("bits_parser is not installed in the Windows Artifacts venv.");
+        throw new Error("bits_parser is not installed in the BITS venv.");
       }
       if (result.status === "timeout") {
         throw new Error("BITS queue parsing timed out.");

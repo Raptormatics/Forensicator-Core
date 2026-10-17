@@ -207,12 +207,36 @@ fi
 # Always re-run pip install against the current package list (not just on
 # first creation) — pip itself is idempotent for already-satisfied
 # packages, and this is what actually backfills a NEW dependency (like
-# bits_parser/minidump, added after this venv already existed on an
-# already-deployed instance) onto every instance that updates in place,
-# not just fresh installs. Matches this script's own stated idempotency
-# goal — see the header comment on why provision.sh alone isn't enough.
-echo "==> Installing regipy, LnkParse3, olefile, bits_parser, minidump (Windows Artifact Analysis pure-Python dependencies)"
+# minidump, added after this venv already existed on an already-deployed
+# instance) onto every instance that updates in place, not just fresh
+# installs. Matches this script's own stated idempotency goal — see the
+# header comment on why provision.sh alone isn't enough.
+#
+# bits_parser does NOT go in this venv (see the separate winartifacts-bits
+# venv below) — confirmed directly in this sandbox: bits_parser==1.0.1
+# hard-pins construct==2.8.12 and genuinely needs its old `Embedded` API
+# (removed in construct 2.10+), while regipy needs construct>=2.10 for
+# `EnumIntegerString` (added in 2.10). Neither package can be loosened to
+# meet the other — this isn't a resolver quirk, it's a real API
+# incompatibility — so whichever package pip installs second silently
+# breaks the other's import. They're invoked as separate subprocesses
+# anyway (registry-engine.ts / bits-engine.ts each spawn their own
+# python3), so there's no need for them to share an interpreter.
+echo "==> Installing regipy, LnkParse3, olefile, minidump (Windows Artifact Analysis pure-Python dependencies)"
 runuser -u "$SERVICE_USER" -- bash -lc "
   '${APP_DIR}/.venvs/winartifacts/bin/pip' install --upgrade pip &&
-  '${APP_DIR}/.venvs/winartifacts/bin/pip' install 'regipy[full]' LnkParse3 olefile bits_parser minidump
+  '${APP_DIR}/.venvs/winartifacts/bin/pip' install 'regipy[full]' LnkParse3 olefile minidump
 " || echo "WARNING: one or more pure-Python Windows Artifact Analysis dependencies failed to install — affected artifact types will be unavailable until installed manually"
+
+if [[ ! -x "${APP_DIR}/.venvs/winartifacts-bits/bin/python3" ]]; then
+  echo "==> Creating BITS job database venv (kept separate from the main winartifacts venv — see the comment above)"
+  mkdir -p "${APP_DIR}/.venvs"
+  chown "${SERVICE_USER}:${SERVICE_USER}" "${APP_DIR}/.venvs"
+  runuser -u "$SERVICE_USER" -- bash -lc "python3 -m venv '${APP_DIR}/.venvs/winartifacts-bits'"
+fi
+
+echo "==> Installing bits_parser (BITS job database dependency, isolated venv)"
+runuser -u "$SERVICE_USER" -- bash -lc "
+  '${APP_DIR}/.venvs/winartifacts-bits/bin/pip' install --upgrade pip &&
+  '${APP_DIR}/.venvs/winartifacts-bits/bin/pip' install bits_parser
+" || echo "WARNING: bits_parser failed to install — BITS job database parsing will be unavailable until installed manually"
