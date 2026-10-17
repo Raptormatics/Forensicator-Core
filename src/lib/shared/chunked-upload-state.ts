@@ -1,10 +1,15 @@
 /**
- * Per-process, in-memory state for chunked RAM uploads
- * (src/app/api/ram-analysis/uploads/chunked/**). Safe because this app runs
- * as a single long-running `next start` process (not serverless/multi-
- * instance) — see deploy/systemd/forensicator.service.
+ * Per-process, in-memory state for chunked uploads — shared by RAM Analysis
+ * (src/app/api/ram-analysis/uploads/chunked/**) and Windows Artifact
+ * Analysis (src/app/api/windows-artifacts/uploads/staged/**). Safe because
+ * this app runs as a single long-running `next start` process (not
+ * serverless/multi-instance) — see deploy/systemd/forensicator.service.
+ * Contains no RAM- or Windows-Artifacts-specific logic — every function is
+ * keyed by a plain session/staged-file id string, so callers from either
+ * feature share the same maps without collision as long as ids are UUIDs
+ * (which both RamUploadSession and WindowsArtifactStagedFile use).
  *
- * Two maps, both keyed by RamUploadSession.id:
+ * Two maps, both keyed by the session/staged-file id:
  *   - hashes: the session's live running SHA-256, updated as chunks land.
  *     If the process restarts mid-session (KillMode=process is used
  *     deliberately so the Admin UI's self-update installer can restart this
