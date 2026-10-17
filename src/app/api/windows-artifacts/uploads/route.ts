@@ -37,6 +37,22 @@ function isUploadedFile(v: FormDataEntryValue | null): v is File {
   return !!v && typeof v !== "string" && "arrayBuffer" in v;
 }
 
+// Streams the hash instead of buffering the whole file — used for staged
+// (chunk-uploaded) files, which can be multi-GB; see
+// src/app/api/windows-artifacts/uploads/staged/**. No resume case here
+// (unlike chunked-upload-state.ts's getOrRebuildHash) since this only ever
+// runs once, after the staged file is already fully on disk.
+async function sha256OfFile(filePath: string): Promise<string> {
+  const hash = crypto.createHash("sha256");
+  await new Promise<void>((resolve, reject) => {
+    const stream = fs.createReadStream(filePath);
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.on("end", resolve);
+    stream.on("error", reject);
+  });
+  return hash.digest("hex");
+}
+
 // A real uploaded log1/log2 file; filters out the zero-byte placeholder
 // the upload page sends for a profile row with no log file, to keep
 // getAll()'s positional zip against the main file array aligned (a
@@ -100,15 +116,37 @@ export async function POST(req: NextRequest) {
     }
 
     type PendingFile = {
-      role: WinArtifactFileRole; file: File; profileName: string | null; relativePath?: string | null;
+      role: WinArtifactFileRole; profileName: string | null; relativePath?: string | null;
       journalMetadataText?: string | null; log1File?: File | null; log2File?: File | null;
+      // Exactly one of these is set. A plain multipart File for every field
+      // except the 9 SINGLE_FILE_FIELDS, which may instead reference an
+      // already chunk-uploaded file (see src/app/api/windows-artifacts/
+      // uploads/staged/** — large single files like $MFT can't safely go
+      // through formData() at all, see that route's own doc comment).
+      file?: File;
+      stagedFile?: { id: string; storagePath: string; totalBytes: bigint; filename: string };
     };
     const pending: PendingFile[] = [];
 
     for (const { field, role } of SINGLE_FILE_FIELDS) {
-      const f = formData.get(field);
-      if (isUploadedFile(f)) {
-        const entry: PendingFile = { role, file: f, profileName: null };
+      const stagedId = String(formData.get(`${field}StagedId`) ?? "").trim();
+      let entry: PendingFile | null = null;
+
+      if (stagedId) {
+        const staged = await prisma.windowsArtifactStagedFile.findUnique({ where: { id: stagedId } });
+        if (!staged || staged.uploadedById !== actor.id || staged.status !== "staged") {
+          return NextResponse.json(
+            { error: "invalid_staged_file", message: `The staged upload for "${field}" was not found or has already been used/expired. Re-select the file and try again.` },
+            { status: 400 }
+          );
+        }
+        entry = { role, profileName: null, stagedFile: { id: staged.id, storagePath: staged.storagePath, totalBytes: staged.totalBytes, filename: staged.filename } };
+      } else {
+        const f = formData.get(field);
+        if (isUploadedFile(f)) entry = { role, file: f, profileName: null };
+      }
+
+      if (entry) {
         if (HIVE_FIELDS_WITH_LOGS.has(field)) {
           const log1 = formData.get(`${field}Log1`);
           const log2 = formData.get(`${field}Log2`);
@@ -221,7 +259,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "no_files", message: "Upload at least one artifact file (SYSTEM, SOFTWARE, NTUSER.DAT, or Amcache.hve)." }, { status: 400 });
     }
 
-    const totalBytes = pending.reduce((sum, p) => sum + p.file.size, 0);
+    const totalBytes = pending.reduce((sum, p) => sum + (p.file ? p.file.size : Number(p.stagedFile!.totalBytes)), 0);
     const maxTotalBytes = await getWinArtifactsMaxUploadBytes();
     if (totalBytes > maxTotalBytes) {
       const maxMb = (maxTotalBytes / 1024 / 1024).toFixed(0);
@@ -243,15 +281,21 @@ export async function POST(req: NextRequest) {
 
     const createdFiles = [];
     for (const p of pending) {
-      const buffer = Buffer.from(await p.file.arrayBuffer());
-      const sha256 = crypto.createHash("sha256").update(buffer).digest("hex");
+      // Staged (chunk-uploaded) files are already fully on disk — stream
+      // the hash and rename into place instead of ever buffering a
+      // potentially multi-GB file in memory, same reasoning as the staged
+      // routes themselves.
+      const filename = p.relativePath || (p.file ? p.file.name : p.stagedFile!.filename);
+      const fileSize = p.file ? p.file.size : Number(p.stagedFile!.totalBytes);
+      const buffer = p.file ? Buffer.from(await p.file.arrayBuffer()) : null;
+      const sha256 = buffer ? crypto.createHash("sha256").update(buffer).digest("hex") : await sha256OfFile(p.stagedFile!.storagePath);
 
       const fileRow = await prisma.windowsArtifactFile.create({
         data: {
           uploadId: upload.id,
           role: p.role,
-          filename: p.relativePath || p.file.name,
-          fileSize: buffer.length,
+          filename,
+          fileSize,
           sha256,
           status: "queued",
           profileName: p.profileName,
@@ -259,9 +303,14 @@ export async function POST(req: NextRequest) {
         },
       });
 
-      const ext = path.extname(p.file.name);
+      const ext = path.extname(filename);
       const storagePath = path.join(dir, `${fileRow.id}${ext}`);
-      fs.writeFileSync(storagePath, buffer);
+      if (buffer) {
+        fs.writeFileSync(storagePath, buffer);
+      } else {
+        await fs.promises.rename(p.stagedFile!.storagePath, storagePath);
+        await prisma.windowsArtifactStagedFile.update({ where: { id: p.stagedFile!.id }, data: { status: "consumed" } });
+      }
 
       // This hive's own .LOG1/.LOG2 transaction logs, when provided —
       // written alongside the hive under the same fileRow.id so
@@ -285,7 +334,10 @@ export async function POST(req: NextRequest) {
       createdFiles.push(updated);
     }
 
-    return NextResponse.json({ upload: { ...upload, files: createdFiles } }, { status: 201 });
+    return NextResponse.json({
+      // fileSize is BigInt — not JSON-serializable as-is.
+      upload: { ...upload, files: createdFiles.map((f) => ({ ...f, fileSize: f.fileSize.toString() })) },
+    }, { status: 201 });
   } catch (err: unknown) {
     if (err && typeof err === "object" && "toResponse" in err) return (err as { toResponse(): Response }).toResponse();
     console.error("[windows-artifacts/uploads] error:", err);

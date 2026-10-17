@@ -1,7 +1,7 @@
 /**
  * POST /api/ram-analysis/uploads/chunked/init — starts a chunked RAM upload
  * session. See src/prisma/schema.prisma's RamUploadSession doc comment and
- * src/lib/ram-analysis/chunked-upload-state.ts for why this exists
+ * src/lib/shared/chunked-upload-state.ts for why this exists
  * (Cloudflare Tunnel's own edge-enforced body-size cap).
  */
 import { NextRequest, NextResponse } from "next/server";
@@ -12,7 +12,7 @@ import { prisma } from "@/lib/db/prisma";
 import { requireAuth } from "@/lib/auth/api-guard";
 import { getRamDir, getRamChunkSize } from "@/lib/settings/system";
 import { ALLOWED_OS_TYPES, getMaxBytes, matchedExtension } from "@/lib/ram-analysis/upload-shared";
-import { registerNewHash } from "@/lib/ram-analysis/chunked-upload-state";
+import { registerNewHash } from "@/lib/shared/chunked-upload-state";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

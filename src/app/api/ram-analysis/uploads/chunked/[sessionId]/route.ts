@@ -9,7 +9,7 @@ import { NextRequest, NextResponse } from "next/server";
 import fs from "fs";
 import { prisma } from "@/lib/db/prisma";
 import { requireAuth } from "@/lib/auth/api-guard";
-import { withSessionLock, deleteSessionState } from "@/lib/ram-analysis/chunked-upload-state";
+import { withSessionLock, deleteSessionState } from "@/lib/shared/chunked-upload-state";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

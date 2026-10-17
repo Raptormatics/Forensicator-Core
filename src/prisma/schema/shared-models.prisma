@@ -64,6 +64,7 @@ model User {
   ramSymbolTables        RamSymbolTable[]
   windowsArtifactUploads WindowsArtifactUpload[]
   windowsArtifactRules   WindowsArtifactRule[]  @relation("winArtifactRuleAuthor")
+  windowsArtifactStagedFiles WindowsArtifactStagedFile[]
   importedIocs           ImportedIoc[]
   caseKnownHashes        CaseKnownHash[]
 
@@ -316,6 +317,12 @@ model SystemSettings {
   // upload page) and server-side (the uploads route) — see
   // getWinArtifactsMaxUploadBytes().
   winArtifactsMaxUploadBytes BigInt? @map("win_artifacts_max_upload_bytes")
+  // Overrides WIN_ARTIFACTS_CHUNK_SIZE_BYTES when set — chunked Windows
+  // Artifact uploads (see WindowsArtifactStagedFile) split a large single
+  // file ($MFT chiefly) into pieces no larger than this, same reasoning as
+  // ramChunkSizeBytes above. Null resolves to the env var, then a 40MB
+  // default — same default as RAM's.
+  winArtifactsChunkSizeBytes Int? @map("win_artifacts_chunk_size_bytes")
 
   // Critical-finding email alerts — one channel, one recipient address.
   // Off by default (no SMTP server is assumed to exist). Read fresh per

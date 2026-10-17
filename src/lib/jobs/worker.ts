@@ -24,6 +24,7 @@ import { startPcapWorker } from "./pcap-worker";
 import { startRamWorker } from "./ram-worker";
 import { startRamSessionCleanupWorker, scheduleRamSessionCleanup } from "./ram-session-cleanup-worker";
 import { startWinArtifactsWorker } from "./winartifacts-worker";
+import { startWinArtifactsStagedCleanupWorker, scheduleWinArtifactsStagedCleanup } from "./winartifacts-staged-cleanup-worker";
 
 const reportWorker = startReportWorker();
 const enrichmentWorker = startEnrichmentWorker();
@@ -31,17 +32,19 @@ const pcapWorker = startPcapWorker();
 const ramWorker = startRamWorker();
 const ramSessionCleanupWorker = startRamSessionCleanupWorker();
 const winArtifactsWorker = startWinArtifactsWorker();
+const winArtifactsStagedCleanupWorker = startWinArtifactsStagedCleanupWorker();
 
 console.log("[workers] Report, enrichment, PCAP analysis, RAM analysis, and Windows Artifact Analysis workers started.");
 
 scheduleRamSessionCleanup().catch((err) => console.error("[workers] Failed to schedule RAM session cleanup:", err));
+scheduleWinArtifactsStagedCleanup().catch((err) => console.error("[workers] Failed to schedule Windows Artifacts staged-file cleanup:", err));
 
 async function gracefulShutdown() {
   console.log("[workers] Shutting down…");
   await Promise.all([
     reportWorker.close(), enrichmentWorker.close(),
     pcapWorker.close(), ramWorker.close(), ramSessionCleanupWorker.close(),
-    winArtifactsWorker.close(),
+    winArtifactsWorker.close(), winArtifactsStagedCleanupWorker.close(),
   ]);
   process.exit(0);
 }

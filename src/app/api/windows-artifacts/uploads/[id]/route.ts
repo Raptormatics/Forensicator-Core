@@ -76,7 +76,10 @@ export async function GET(req: NextRequest, props: Params) {
     findings.sort((a, b) => (RULE_SEVERITY_RANK[b.severity] ?? -1) - (RULE_SEVERITY_RANK[a.severity] ?? -1) || b.matchCount - a.matchCount);
 
     return NextResponse.json({
-      upload,
+      // fileSize is BigInt (a busy workstation's $MFT alone can exceed
+      // Int's ~2.1GB ceiling) — not JSON-serializable as-is, same
+      // stringify convention as every other bigint field in this response.
+      upload: { ...upload, files: upload.files.map((f) => ({ ...f, fileSize: f.fileSize.toString() })) },
       shimcache: shimcache.map((r) => ({ ...r, fileId: r.fileId })),
       amcache: amcache.map((r) => ({ ...r, fileSizeBytes: r.fileSizeBytes?.toString() ?? null })),
       userAssist,

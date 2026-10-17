@@ -23,6 +23,7 @@ const PCAP_QUEUE         = "forensicator-pcap";
 const RAM_QUEUE          = "forensicator-ram";
 const RAM_SESSION_CLEANUP_QUEUE = "forensicator-ram-session-cleanup";
 const WIN_ARTIFACTS_QUEUE = "forensicator-winartifacts";
+const WIN_ARTIFACTS_STAGED_CLEANUP_QUEUE = "forensicator-winartifacts-staged-cleanup";
 
 // ── Job data shapes ──────────────────────────────────────────────────────────
 
@@ -59,6 +60,8 @@ export type RamSessionCleanupJobData = Record<string, never>;
 export type WinArtifactJobData = {
   winArtifactFileId: string;
 };
+
+export type WinArtifactsStagedCleanupJobData = Record<string, never>;
 
 // ── Queue factories ───────────────────────────────────────────────────────────
 
@@ -124,5 +127,12 @@ export function getWinArtifactsQueue() {
     // fast to parse, so a transient failure is worth one retry, unlike
     // RAM's long-running per-plugin runs.
     defaultJobOptions: { attempts: 2, backoff: { type: "exponential", delay: 10000 } },
+  });
+}
+
+export function getWinArtifactsStagedCleanupQueue() {
+  return new Queue<WinArtifactsStagedCleanupJobData>(WIN_ARTIFACTS_STAGED_CLEANUP_QUEUE, {
+    connection: getRedisConnection(),
+    defaultJobOptions: { attempts: 2, backoff: { type: "exponential", delay: 30000 } },
   });
 }

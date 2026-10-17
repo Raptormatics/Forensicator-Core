@@ -1,14 +1,14 @@
 /**
  * PUT /api/ram-analysis/uploads/chunked/[sessionId]/chunk?offset=<bytes>
  * Accepts one raw-binary chunk of a chunked RAM upload session. See
- * src/lib/ram-analysis/chunked-upload-state.ts for the concurrency model.
+ * src/lib/shared/chunked-upload-state.ts for the concurrency model.
  */
 import { NextRequest, NextResponse } from "next/server";
 import fs from "fs";
 import { prisma } from "@/lib/db/prisma";
 import { requireAuth } from "@/lib/auth/api-guard";
 import { getRamChunkSize } from "@/lib/settings/system";
-import { withSessionLock, getOrRebuildHash } from "@/lib/ram-analysis/chunked-upload-state";
+import { withSessionLock, getOrRebuildHash } from "@/lib/shared/chunked-upload-state";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

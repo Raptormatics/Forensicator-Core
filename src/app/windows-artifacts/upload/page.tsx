@@ -21,6 +21,16 @@ const CASE_SEVERITIES = ["important", "notable", "interesting", "informational"]
 // shows — this is purely to fail fast client-side before uploading.
 const DEFAULT_MAX_TOTAL_BYTES = 5 * 1024 * 1024 * 1024;
 
+// A file at/above this size is staged via chunked upload (see
+// src/app/api/windows-artifacts/uploads/staged/**) instead of going into
+// the single combined multipart POST — req.formData() buffers the whole
+// body in memory, which OOMs or takes 50+ seconds per few hundred MB
+// (confirmed directly). Only applies to the 9 single-slot fields
+// (registry hives, $MFT, SRUDB.dat, Windows.edb/db, qmgr0/qmgr1) — the
+// only files in this form that can plausibly be this large; everything
+// else (Prefetch, LNK, WER, etc.) stays on the direct path.
+const STAGE_THRESHOLD_BYTES = 100 * 1024 * 1024;
+
 type ProfileFile = { id: string; profileName: string; file: File | null };
 
 function makeProfileFile(): ProfileFile {
@@ -96,11 +106,15 @@ export default function UploadWindowsArtifactsPage() {
   // ── Upload state ─────────────────────────────────────────────────────────
   const [phase, setPhase] = useState<Phase>("case");
   const [uploadPercent, setUploadPercent] = useState(0);
+  // Set while a large single file (e.g. $MFT) is being staged via chunked
+  // upload ahead of the main multipart POST — see STAGE_THRESHOLD_BYTES.
+  const [stagingLabel, setStagingLabel] = useState<string | null>(null);
   const [resultId, setResultId] = useState("");
   const [error, setError] = useState("");
   const [maxTotalBytes, setMaxTotalBytes] = useState(DEFAULT_MAX_TOTAL_BYTES);
 
   const xhrRef = useRef<XMLHttpRequest | null>(null);
+  const cancelledRef = useRef(false);
 
   useEffect(() => {
     fetch("/api/cases")
@@ -185,16 +199,154 @@ export default function UploadWindowsArtifactsPage() {
     searchedbFile || quarantineEntryFiles.length > 0 || quarantineResourceFiles.length > 0 || qmgr0File || qmgr1File
   );
 
-  function handleSubmit() {
+  // Uploads a large single file (chiefly $MFT) in chunks well under
+  // req.formData()'s practical memory limit, instead of as part of the main
+  // multipart POST — see STAGE_THRESHOLD_BYTES above and
+  // src/app/api/windows-artifacts/uploads/staged/**. Mirrors RAM Analysis's
+  // own chunked-upload client logic (src/app/ram-analysis/upload/page.tsx)
+  // almost exactly, scaled down to one file within a larger submission
+  // rather than the whole upload.
+  type ChunkResult = { receivedBytes: string; totalBytes: string };
+  type ChunkFailure =
+    | { type: "offset_mismatch"; expectedOffset: string }
+    | { type: "aborted" }
+    | { type: "http_error"; message?: string };
+
+  function putStagedChunk(stagedId: string, offset: number, blob: Blob, onProgress: (loaded: number) => void): Promise<ChunkResult> {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhrRef.current = xhr;
+      xhr.upload.addEventListener("progress", (e) => {
+        if (e.lengthComputable) onProgress(e.loaded);
+      });
+      xhr.addEventListener("load", () => {
+        let data: Record<string, unknown> | null = null;
+        try { data = JSON.parse(xhr.responseText); } catch { /* handled below */ }
+        if (xhr.status === 200 && data && typeof data.receivedBytes === "string") {
+          resolve(data as unknown as ChunkResult);
+        } else if (xhr.status === 409 && data && typeof data.expectedOffset === "string") {
+          reject({ type: "offset_mismatch", expectedOffset: data.expectedOffset } satisfies ChunkFailure);
+        } else {
+          reject({ type: "http_error", message: typeof data?.message === "string" ? data.message : undefined } satisfies ChunkFailure);
+        }
+      });
+      xhr.addEventListener("error", () => reject({ type: "http_error" } satisfies ChunkFailure));
+      xhr.addEventListener("abort", () => reject({ type: "aborted" } satisfies ChunkFailure));
+      xhr.open("PUT", `/api/windows-artifacts/uploads/staged/${stagedId}/chunk?offset=${offset}`);
+      xhr.setRequestHeader("Content-Type", "application/octet-stream");
+      xhr.send(blob);
+    });
+  }
+
+  // Resolves to a stagedId once the file is fully uploaded. onProgress is
+  // called with bytes transferred so far for THIS file, for the caller to
+  // fold into an overall multi-file progress percentage.
+  async function stageFile(file: File, onProgress: (loaded: number) => void): Promise<string> {
+    const initRes = await fetch("/api/windows-artifacts/uploads/staged/init", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ filename: file.name, totalBytes: file.size }),
+    });
+    const initData = await initRes.json().catch(() => null);
+    if (!initRes.ok || typeof initData?.stagedId !== "string") {
+      throw new Error(initData?.message ?? `Failed to start staging ${file.name}.`);
+    }
+    const stagedId: string = initData.stagedId;
+    const chunkSize: number = initData.chunkSize;
+
+    let offset = 0;
+    while (offset < file.size) {
+      if (cancelledRef.current) throw new Error("aborted");
+      const chunkStartOffset = offset;
+      const blob = file.slice(chunkStartOffset, Math.min(chunkStartOffset + chunkSize, file.size));
+
+      let attempt = 0;
+      let advanced = false;
+      while (!advanced) {
+        attempt++;
+        try {
+          const result = await putStagedChunk(stagedId, chunkStartOffset, blob, (loaded) => onProgress(chunkStartOffset + loaded));
+          offset = Number(result.receivedBytes);
+          advanced = true;
+        } catch (err) {
+          if (cancelledRef.current) throw new Error("aborted");
+          const failure = err as ChunkFailure;
+          if (failure.type === "aborted") throw new Error("aborted");
+          if (failure.type === "offset_mismatch") {
+            // Same reasoning as RAM's chunk loop: this exact chunk may have
+            // already succeeded once and we just never saw the response —
+            // trust the server's offset and reslice from there.
+            offset = Number(failure.expectedOffset);
+            break;
+          }
+          if (attempt >= 5) {
+            throw new Error(failure.message ?? `Failed to upload ${file.name} after several retries.`);
+          }
+          await new Promise((r) => setTimeout(r, Math.min(1000 * attempt, 5000)));
+        }
+      }
+    }
+
+    const completeRes = await fetch(`/api/windows-artifacts/uploads/staged/${stagedId}/complete`, { method: "POST" });
+    const completeData = await completeRes.json().catch(() => null);
+    if (!completeRes.ok) {
+      throw new Error(completeData?.message ?? `Failed to finalize staging ${file.name}.`);
+    }
+    return stagedId;
+  }
+
+  async function handleSubmit() {
     if (!hasAnyFile || !selectedCase) return;
     if (totalBytes > maxTotalBytes) {
       setError(`Combined upload (${(totalBytes / 1024 / 1024).toFixed(0)} MB) exceeds the ${(maxTotalBytes / 1024 / 1024).toFixed(0)} MB limit for one collection.`);
       setPhase("error");
       return;
     }
+    cancelledRef.current = false;
     setPhase("uploading");
     setUploadPercent(0);
+    setStagingLabel(null);
     setError("");
+
+    // Only the 9 single-slot fields can plausibly be large enough to need
+    // staging — see STAGE_THRESHOLD_BYTES's own comment for why array
+    // fields (Prefetch, LNK, WER, etc.) are excluded.
+    const singleSlotCandidates: { field: string; file: File | null }[] = [
+      { field: "system", file: systemFile.file },
+      { field: "software", file: softwareFile.file },
+      { field: "security", file: securityFile.file },
+      { field: "amcache", file: amcacheFile.file },
+      { field: "mft", file: mftFile },
+      { field: "srudb", file: srudbFile },
+      { field: "searchedb", file: searchedbFile },
+      { field: "qmgr0", file: qmgr0File },
+      { field: "qmgr1", file: qmgr1File },
+    ];
+    const toStage = singleSlotCandidates.filter((c) => c.file && c.file.size >= STAGE_THRESHOLD_BYTES) as { field: string; file: File }[];
+    const stagedIds: Record<string, string> = {};
+
+    try {
+      let bytesDoneBeforeCurrent = 0;
+      for (const { field, file } of toStage) {
+        setStagingLabel(`Staging ${file.name} (${(file.size / 1024 / 1024 / 1024).toFixed(2)} GB)…`);
+        const bytesDoneBeforeThis = bytesDoneBeforeCurrent;
+        stagedIds[field] = await stageFile(file, (loaded) => {
+          setUploadPercent(Math.round(((bytesDoneBeforeThis + loaded) / totalBytes) * 100));
+        });
+        bytesDoneBeforeCurrent += file.size;
+      }
+    } catch (err) {
+      if (cancelledRef.current || (err instanceof Error && err.message === "aborted")) {
+        setPhase("select");
+        return;
+      }
+      setError(err instanceof Error ? err.message : "Failed to stage a large file for upload.");
+      setPhase("error");
+      return;
+    }
+
+    setStagingLabel(null);
+    const stagedTotalBytes = toStage.reduce((sum, c) => sum + c.file.size, 0);
 
     const form = new FormData();
     form.append("caseId", selectedCase.id);
@@ -202,7 +354,10 @@ export default function UploadWindowsArtifactsPage() {
     if (notes) form.append("notes", notes);
     const appendHive = (field: string, h: HiveFile) => {
       if (!h.file) return;
-      form.append(field, h.file);
+      if (stagedIds[field]) form.append(`${field}StagedId`, stagedIds[field]);
+      else form.append(field, h.file);
+      // .LOG1/.LOG2 are always tiny — never staged, always sent directly
+      // regardless of whether the main hive file above was.
       if (h.log1) form.append(`${field}Log1`, h.log1);
       if (h.log2) form.append(`${field}Log2`, h.log2);
     };
@@ -253,10 +408,17 @@ export default function UploadWindowsArtifactsPage() {
       form.append("jumplistCustom", f);
       form.append("jumplistCustomRelativePath", f.webkitRelativePath || f.name);
     }
-    if (mftFile) form.append("mft", mftFile);
+    // Any of these 5 may have been staged above instead of appended
+    // directly — see singleSlotCandidates/toStage.
+    const appendSingle = (field: string, file: File | null) => {
+      if (!file) return;
+      if (stagedIds[field]) form.append(`${field}StagedId`, stagedIds[field]);
+      else form.append(field, file);
+    };
+    appendSingle("mft", mftFile);
     if (usnjrnlFile) form.append("usnjrnl", usnjrnlFile);
     if (usnJournalMetadataFile) form.append("usnJournalMetadata", usnJournalMetadataFile);
-    if (srudbFile) form.append("srudb", srudbFile);
+    appendSingle("srudb", srudbFile);
     for (const f of werReportFiles) {
       form.append("werReport", f);
       form.append("werReportRelativePath", f.webkitRelativePath || f.name);
@@ -272,7 +434,7 @@ export default function UploadWindowsArtifactsPage() {
     for (const f of notificationFiles) {
       if (f.file) { form.append("notification", f.file); form.append("notificationProfileName", f.profileName); }
     }
-    if (searchedbFile) form.append("searchedb", searchedbFile);
+    appendSingle("searchedb", searchedbFile);
     for (const f of quarantineEntryFiles) {
       form.append("quarantineEntries", f);
       form.append("quarantineEntriesRelativePath", f.webkitRelativePath || f.name);
@@ -281,14 +443,18 @@ export default function UploadWindowsArtifactsPage() {
       form.append("quarantineResources", f);
       form.append("quarantineResourcesRelativePath", f.webkitRelativePath || f.name);
     }
-    if (qmgr0File) form.append("qmgr0", qmgr0File);
-    if (qmgr1File) form.append("qmgr1", qmgr1File);
+    appendSingle("qmgr0", qmgr0File);
+    appendSingle("qmgr1", qmgr1File);
 
     const xhr = new XMLHttpRequest();
     xhrRef.current = xhr;
 
     xhr.upload.addEventListener("progress", (e) => {
-      if (e.lengthComputable) setUploadPercent(Math.round((e.loaded / e.total) * 100));
+      // Scale against the FULL submission's totalBytes, not just this
+      // (now smaller, since staged files aren't re-sent) POST's own body —
+      // keeps the bar reading a continuous 0→100% across staging + this
+      // final request instead of jumping back down partway through.
+      if (e.lengthComputable) setUploadPercent(Math.round(((stagedTotalBytes + e.loaded) / totalBytes) * 100));
     });
     xhr.addEventListener("load", () => {
       try {
@@ -315,7 +481,10 @@ export default function UploadWindowsArtifactsPage() {
     xhr.send(form);
   }
 
-  function handleCancel() { xhrRef.current?.abort(); }
+  function handleCancel() {
+    cancelledRef.current = true;
+    xhrRef.current?.abort();
+  }
 
   const filteredCases = cases.filter(c => {
     if (!caseSearch.trim()) return true;
@@ -328,7 +497,7 @@ export default function UploadWindowsArtifactsPage() {
       <div className="flex min-h-screen items-center justify-center">
         <div className="w-full max-w-sm text-center">
           <Upload className="mx-auto h-10 w-10 text-teal-400 mb-4" />
-          <p className="text-zinc-300 font-medium">Uploading artifact collection…</p>
+          <p className="text-zinc-300 font-medium">{stagingLabel ?? "Uploading artifact collection…"}</p>
           <div className="mt-4 h-2 w-full overflow-hidden rounded-full bg-zinc-800">
             <div className="h-full rounded-full bg-teal-500 transition-all duration-200" style={{ width: `${uploadPercent}%` }} />
           </div>

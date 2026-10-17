@@ -10,7 +10,7 @@ import { prisma } from "@/lib/db/prisma";
 import { requireAuth } from "@/lib/auth/api-guard";
 import { getRamQueue } from "@/lib/jobs/queues";
 import { matchedExtension } from "@/lib/ram-analysis/upload-shared";
-import { withSessionLock, getOrRebuildHash, deleteSessionState } from "@/lib/ram-analysis/chunked-upload-state";
+import { withSessionLock, getOrRebuildHash, deleteSessionState } from "@/lib/shared/chunked-upload-state";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

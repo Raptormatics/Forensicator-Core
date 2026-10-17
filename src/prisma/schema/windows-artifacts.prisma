@@ -60,7 +60,11 @@ model WindowsArtifactFile {
   // | quarantine_resource | bits_queue | timeline_db
   role     String
   filename String
-  fileSize Int    @map("file_size")
+  // BigInt, not Int — a busy workstation's $MFT alone can exceed Int's
+  // ~2.1GB ceiling; confirmed necessary once chunked uploads (see
+  // src/app/api/windows-artifacts/uploads/staged/**) made multi-GB files
+  // actually reach this far instead of failing earlier in the pipeline.
+  fileSize BigInt @map("file_size")
   sha256   String
 
   status       String  @default("queued") // queued | processing | ready | failed
@@ -125,6 +129,42 @@ model WindowsArtifactFile {
   @@index([role])
   @@index([status])
   @@map("windows_artifact_files")
+}
+
+// A large single file (chiefly $MFT, sometimes SRUDB.dat/Windows.edb/a
+// pathological hive) uploaded via chunked PUT before the rest of a
+// collection's multipart POST — see
+// src/app/api/windows-artifacts/uploads/staged/**. Not yet tied to a role,
+// upload, or case: that association only happens once the main upload
+// route consumes it by stagedId. Same shape as RamUploadSession, minus the
+// RAM-specific osType/case/hostname fields this doesn't need.
+model WindowsArtifactStagedFile {
+  id            String  @id @default(uuid()) @db.Uuid
+  filename      String
+  totalBytes    BigInt  @map("total_bytes")
+  receivedBytes BigInt  @default(0) @map("received_bytes")
+
+  // The .partial file's path under <getWinArtifactsDir()>/staged/, fixed
+  // at init time — same "never re-derive from the dir setting later"
+  // reasoning as RamUploadSession.storagePath.
+  storagePath String @map("storage_path")
+
+  status String @default("uploading") // uploading | staged | consumed | expired
+
+  uploadedById String @map("uploaded_by_id") @db.Uuid
+  uploadedBy   User   @relation(fields: [uploadedById], references: [id])
+
+  // createdAt + 24h, enforced lazily (chunk/complete against an expired
+  // row is rejected) and by winartifacts-staged-cleanup-worker.ts's sweep —
+  // same two-layer enforcement as RamUploadSession.
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([uploadedById])
+  @@index([status])
+  @@index([expiresAt])
+  @@map("windows_artifact_staged_files")
 }
 
 model ShimcacheEntry {

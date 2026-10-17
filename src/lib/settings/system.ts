@@ -137,6 +137,22 @@ export async function getWinArtifactsMaxUploadBytes(): Promise<number> {
   return envVal > 0 ? envVal : 5 * 1024 * 1024 * 1024;
 }
 
+/**
+ * DB override > WIN_ARTIFACTS_CHUNK_SIZE_BYTES env var > 40MB default.
+ * Chunked Windows Artifact uploads (see WindowsArtifactStagedFile) split a
+ * large single file ($MFT chiefly, sometimes SRUDB.dat/Windows.edb/a
+ * pathological hive) into pieces no larger than this — same reasoning as
+ * getRamChunkSize(), same default.
+ */
+export async function getWinArtifactsChunkSize(): Promise<number> {
+  const settings = await getSystemSettings();
+  if (settings?.winArtifactsChunkSizeBytes && settings.winArtifactsChunkSizeBytes > 0) {
+    return settings.winArtifactsChunkSizeBytes;
+  }
+  const envVal = Number(process.env.WIN_ARTIFACTS_CHUNK_SIZE_BYTES);
+  return envVal > 0 ? envVal : 40 * 1024 * 1024;
+}
+
 /** DB override > WIN_ARTIFACTS_DIR env var > default ./winartifacts-storage under the project root. */
 export async function getWinArtifactsDir(): Promise<string> {
   const settings = await getSystemSettings();
