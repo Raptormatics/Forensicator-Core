@@ -17,6 +17,7 @@ import path from "path";
 import readline from "readline";
 import type { BitsJobRow } from "./bits-engine";
 import type { SearchIndexRow } from "./search-engine";
+import { parseParserLine } from "./parser-line";
 
 export interface ArtifactRecordRow {
   kind: string;
@@ -39,107 +40,139 @@ export type RecordParseResult =
   | { status: "timeout" }
   | { status: "error"; message: string };
 
-const s = (v: unknown): string | null => (v == null || v === "" ? null : String(v));
+// Postgres rejects U+0000 in TEXT and JSONB ("invalid byte sequence",
+// 22021) — and these parsers read binary formats where a stray NUL in a
+// decoded string is easy to miss. Strip it everywhere before insert.
+const NUL = /\u0000/g;
+const s = (v: unknown): string | null => (v == null || v === "" ? null : String(v).replace(NUL, ""));
+
+function scrub(v: unknown): unknown {
+  if (typeof v === "string") return v.replace(NUL, "");
+  if (Array.isArray(v)) return v.map(scrub);
+  if (v && typeof v === "object") {
+    return Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, x]) => [k.replace(NUL, ""), scrub(x)]));
+  }
+  return v;
+}
+
+export interface RecordParseOptions {
+  /** When set, `search_entry` rows are handed over in batches of
+   * `searchBatchSize` (and not kept in the result) — a Windows 11 Search
+   * property store is tens of thousands of items with content snippets;
+   * holding them all, plus their insert copies, helped OOM-kill the worker
+   * on a 5 GB appliance. Reading pauses while the callback runs. */
+  onSearchBatch?: (rows: SearchIndexRow[]) => Promise<void>;
+  searchBatchSize?: number;
+}
 
 export async function runRecordParse(
   pythonPath: string,
   script: string,
   args: string[],
-  timeoutSeconds: number
+  timeoutSeconds: number,
+  options: RecordParseOptions = {}
 ): Promise<RecordParseResult> {
   const scriptPath = path.join(process.cwd(), "src", "lib", "windows-artifacts", script);
+  const child = spawn(pythonPath, [scriptPath, ...args], { stdio: ["ignore", "pipe", "pipe"] });
+  const records: ArtifactRecordRow[] = [];
+  let searchEntries: SearchIndexRow[] = [];
+  const bitsJobs: BitsJobRow[] = [];
+  const scriptErrors: string[] = [];
+  const batchSize = options.searchBatchSize ?? 2000;
+  let streamedSearch = 0;
+  let stderr = "";
+  let notInstalled = false;
+  let timedOut = false;
 
-  return new Promise<RecordParseResult>((resolve) => {
-    const child = spawn(pythonPath, [scriptPath, ...args], { stdio: ["ignore", "pipe", "pipe"] });
-    const records: ArtifactRecordRow[] = [];
-    const searchEntries: SearchIndexRow[] = [];
-    const bitsJobs: BitsJobRow[] = [];
-    const scriptErrors: string[] = [];
-    let stderr = "";
-    let notInstalled = false;
-    let timedOut = false;
-    let settled = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    child.kill("SIGKILL");
+  }, (timeoutSeconds + 10) * 1000);
+  child.stderr.on("data", (chunk) => { if (stderr.length < 20000) stderr += chunk.toString(); });
+  const exited = new Promise<number | null>((resolve) => child.on("close", resolve));
+  const spawnError = new Promise<Error>((resolve) => child.on("error", resolve));
 
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGKILL");
-    }, (timeoutSeconds + 10) * 1000);
-
-    const settle = (result: RecordParseResult) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve(result);
-    };
-
-    child.stderr.on("data", (chunk) => { if (stderr.length < 20000) stderr += chunk.toString(); });
-    child.on("error", (err) => settle({ status: "error", message: `Failed to run ${script} ("${pythonPath}"): ${err.message}` }));
-
-    const lines = readline.createInterface({ input: child.stdout });
-    let linesClosed = false;
-    lines.on("close", () => { linesClosed = true; });
-    lines.on("line", (line) => {
-      const trimmed = line.trim();
-      if (!trimmed) return;
-      let obj: Record<string, unknown>;
-      try { obj = JSON.parse(trimmed); } catch { return; }
-      switch (obj.type) {
-        case "not_installed":
-          notInstalled = true;
-          break;
-        case "record":
-          records.push({
-            kind: String(obj.kind ?? "unknown"),
-            title: String(obj.title ?? ""),
-            timestamp: s(obj.timestamp),
-            path: s(obj.path),
-            user: s(obj.user),
-            process: s(obj.process),
-            url: s(obj.url),
-            ip: s(obj.ip),
-            sha256: s(obj.sha256),
-            sha1: s(obj.sha1),
-            md5: s(obj.md5),
-            details: typeof obj.details === "object" && obj.details !== null ? (obj.details as Record<string, unknown>) : {},
-          });
-          break;
-        case "search_entry":
-          searchEntries.push({
-            tableName: String(obj.table_name ?? ""),
-            recordIndex: Number(obj.record_index ?? 0),
-            details: typeof obj.details === "object" && obj.details !== null ? (obj.details as Record<string, unknown>) : {},
-          });
-          break;
-        case "bits_job":
-          bitsJobs.push({
-            jobId: s(obj.job_id), name: s(obj.name), desc: s(obj.desc), cmd: s(obj.cmd), sid: s(obj.sid),
-            jobType: s(obj.job_type), priority: s(obj.priority), state: s(obj.state),
-            ctime: s(obj.ctime), mtime: s(obj.mtime), destFn: s(obj.dest_fn), srcFn: s(obj.src_fn), tmpFn: s(obj.tmp_fn),
-            downloadSizeBytes: s(obj.download_size_bytes), transferSizeBytes: s(obj.transfer_size_bytes),
-            isCarved: Boolean(obj.is_carved),
-          });
-          break;
-        case "error":
-          scriptErrors.push(String(obj.message));
-          break;
-      }
-    });
-
-    child.on("close", (exitCode) => {
-      // readline may still be draining when "close" fires on very fast
-      // exits — wait for its own close before settling.
-      const finish = () => {
-        if (timedOut) return settle({ status: "timeout" });
-        if (notInstalled) return settle({ status: "not_installed" });
-        const gotAnything = records.length > 0 || searchEntries.length > 0 || bitsJobs.length > 0;
-        if (exitCode !== 0 && !gotAnything) {
-          const detail = (stderr || scriptErrors.join("; ")).trim().slice(0, 500);
-          return settle({ status: "error", message: detail || `${script} exited with code ${exitCode}` });
+  const handle = async (obj: Record<string, unknown>) => {
+    switch (obj.type) {
+      case "not_installed":
+        notInstalled = true;
+        break;
+      case "record":
+        records.push({
+          kind: String(obj.kind ?? "unknown"),
+          title: String(obj.title ?? "").replace(NUL, ""),
+          timestamp: s(obj.timestamp),
+          path: s(obj.path),
+          user: s(obj.user),
+          process: s(obj.process),
+          url: s(obj.url),
+          ip: s(obj.ip),
+          sha256: s(obj.sha256),
+          sha1: s(obj.sha1),
+          md5: s(obj.md5),
+          details: typeof obj.details === "object" && obj.details !== null ? (scrub(obj.details) as Record<string, unknown>) : {},
+        });
+        break;
+      case "search_entry":
+        searchEntries.push({
+          tableName: String(obj.table_name ?? "").replace(NUL, ""),
+          recordIndex: Number(obj.record_index ?? 0),
+          details: typeof obj.details === "object" && obj.details !== null ? (scrub(obj.details) as Record<string, unknown>) : {},
+        });
+        if (options.onSearchBatch && searchEntries.length >= batchSize) {
+          const batch = searchEntries;
+          searchEntries = [];
+          streamedSearch += batch.length;
+          await options.onSearchBatch(batch);
         }
-        settle({ status: "ok", records, searchEntries, bitsJobs, scriptErrors });
-      };
-      if (linesClosed) finish();
-      else lines.once("close", finish);
-    });
-  });
+        break;
+      case "bits_job":
+        bitsJobs.push({
+          jobId: s(obj.job_id), name: s(obj.name), desc: s(obj.desc), cmd: s(obj.cmd), sid: s(obj.sid),
+          jobType: s(obj.job_type), priority: s(obj.priority), state: s(obj.state),
+          ctime: s(obj.ctime), mtime: s(obj.mtime), destFn: s(obj.dest_fn), srcFn: s(obj.src_fn), tmpFn: s(obj.tmp_fn),
+          downloadSizeBytes: s(obj.download_size_bytes), transferSizeBytes: s(obj.transfer_size_bytes),
+          isCarved: Boolean(obj.is_carved),
+        });
+        break;
+      case "error":
+        if (scriptErrors.length < 500) scriptErrors.push(String(obj.message));
+        break;
+    }
+  };
+
+  try {
+    const consume = (async () => {
+      // for-await gives real backpressure: the child's stdout isn't read
+      // further while a batch callback is inserting.
+      for await (const line of readline.createInterface({ input: child.stdout })) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        let obj: Record<string, unknown>;
+        try { obj = parseParserLine(trimmed); } catch { continue; }
+        await handle(obj);
+      }
+      if (options.onSearchBatch && searchEntries.length > 0) {
+        streamedSearch += searchEntries.length;
+        await options.onSearchBatch(searchEntries);
+        searchEntries = [];
+      }
+    })();
+    const outcome = await Promise.race([consume.then(() => null), spawnError]);
+    if (outcome instanceof Error) return { status: "error", message: `Failed to run ${script} ("${pythonPath}"): ${outcome.message}` };
+    const exitCode = await exited;
+    if (timedOut) return { status: "timeout" };
+    if (notInstalled) return { status: "not_installed" };
+    const gotAnything = records.length > 0 || searchEntries.length > 0 || streamedSearch > 0 || bitsJobs.length > 0;
+    if (exitCode !== 0 && !gotAnything) {
+      const detail = (stderr || scriptErrors.join("; ")).trim().slice(0, 500);
+      return { status: "error", message: detail || `${script} exited with code ${exitCode}` };
+    }
+    return { status: "ok", records, searchEntries, bitsJobs, scriptErrors };
+  } catch (err) {
+    child.kill("SIGKILL");
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 }

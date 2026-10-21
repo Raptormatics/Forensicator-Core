@@ -29,7 +29,7 @@ import {
 import { runPrefetchParse, type PrefetchEntryRow } from "./prefetch-engine";
 import { runLnkParse, type LnkEntryRow, type LnkRole } from "./lnk-engine";
 import { runJumpListParse, type JumpListEntryRow } from "./jumplist-engine";
-import { runMftParse, type MftEntryRow } from "./mft-engine";
+import { runMftParseStreaming } from "./mft-engine";
 import { runUsnJrnlParse, type UsnJrnlEntryRow } from "./usnjrnl-engine";
 import { runSrumParse, type SrumEntryRow } from "./srum-engine";
 import { runWerReportParse, type WerReportRow } from "./wer-engine";
@@ -92,6 +92,15 @@ const RECORD_ROLES: Record<string, RecordRoleSpec> = {
 // rows, so their createMany calls are chunked rather than one unbounded array.
 const BULK_INSERT_CHUNK_SIZE = 2000;
 
+// Parser timestamps come from many formats; one that JS can't parse must
+// not fail the whole file's insert (it did for every Windows 11 Report.wer,
+// whose EventTime is a raw FILETIME) — an invalid date is stored as null.
+function toDate(value: string | null | undefined): Date | undefined {
+  if (!value) return undefined;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? undefined : d;
+}
+
 async function chunkedCreateMany<T>(
   create: (data: T[]) => Promise<unknown>,
   rows: T[],
@@ -152,7 +161,6 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
     let prefetchRows: PrefetchEntryRow[] = [];
     let lnkRows: LnkEntryRow[] = [];
     let jumpListRows: JumpListEntryRow[] = [];
-    let mftRows: MftEntryRow[] = [];
     let usnJrnlRows: UsnJrnlEntryRow[] = [];
     let srumRows: SrumEntryRow[] = [];
     let werReportRows: WerReportRow[] = [];
@@ -162,6 +170,21 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
     let recycleBinRows: RecycleBinRow[] = [];
     let quarantinePayloadRows: QuarantinePayloadRow[] = [];
     const iocLookupMap: IocLookupMap = new Map();
+    // Rule hits from streamed artifacts ($MFT), merged into step 6's findings.
+    const streamedRuleHits = new Map<string, { count: number; matchedField: string; matchedValue: string }>();
+    let cachedRules: Awaited<ReturnType<typeof prisma.windowsArtifactRule.findMany>> | null = null;
+    const loadRules = async () => {
+      cachedRules ??= await prisma.windowsArtifactRule.findMany({
+        where: {
+          enabled: true,
+          OR: [
+            ...(file.upload.organizationId ? [{ organizationId: file.upload.organizationId }] : []),
+            { organizationId: null },
+          ],
+        },
+      });
+      return cachedRules;
+    };
 
     if (REGISTRY_ROLES.includes(file.role as RegistryRole)) {
       // 3. Run the registry parser — passing along this hive's own
@@ -220,7 +243,7 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
         await prisma.shimcacheEntry.createMany({
           data: shimcacheRows.map((r) => ({
             fileId, path: r.path,
-            lastModified: r.lastModified ? new Date(r.lastModified) : undefined,
+            lastModified: toDate(r.lastModified),
             executionFlag: r.executionFlag ?? undefined,
             order: r.order,
           })),
@@ -231,7 +254,7 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
           data: amcacheRows.map((r) => ({
             fileId, path: r.path, sha1: r.sha1 ?? undefined,
             fileSizeBytes: r.fileSizeBytes ?? undefined,
-            firstSeen: r.firstSeen ? new Date(r.firstSeen) : undefined,
+            firstSeen: toDate(r.firstSeen),
             publisher: r.publisher ?? undefined,
           })),
         });
@@ -241,7 +264,7 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
           data: userAssistRows.map((r) => ({
             fileId, programPath: r.programPath,
             runCount: r.runCount ?? undefined,
-            lastExecuted: r.lastExecuted ? new Date(r.lastExecuted) : undefined,
+            lastExecuted: toDate(r.lastExecuted),
             focusCount: r.focusCount ?? undefined,
             focusTimeMs: r.focusTimeMs ?? undefined,
           })),
@@ -251,7 +274,7 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
         await prisma.bamEntry.createMany({
           data: bamRows.map((r) => ({
             fileId, sid: r.sid, path: r.path,
-            lastExecuted: r.lastExecuted ? new Date(r.lastExecuted) : undefined,
+            lastExecuted: toDate(r.lastExecuted),
           })),
         });
       }
@@ -268,7 +291,7 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
         registryPluginRows.map((r) => ({
           fileId, plugin: r.plugin,
           keyPath: r.keyPath ?? undefined,
-          timestamp: r.timestamp ? new Date(r.timestamp) : undefined,
+          timestamp: toDate(r.timestamp),
           summary: r.summary,
           details: r.details as object,
         }))
@@ -278,9 +301,9 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
           data: shellbagRows.map((r) => ({
             fileId, path: r.path, nodeName: r.nodeName, nodeSlot: r.nodeSlot, depth: r.depth,
             itemType: r.itemType ?? undefined,
-            creationTime: r.creationTime ? new Date(r.creationTime) : undefined,
-            accessTime: r.accessTime ? new Date(r.accessTime) : undefined,
-            lastModified: r.lastModified ? new Date(r.lastModified) : undefined,
+            creationTime: toDate(r.creationTime),
+            accessTime: toDate(r.accessTime),
+            lastModified: toDate(r.lastModified),
           })),
         });
       }
@@ -381,9 +404,9 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
               arguments: r.arguments ?? undefined,
               workingDirectory: r.workingDirectory ?? undefined,
               iconLocation: r.iconLocation ?? undefined,
-              creationTime: r.creationTime ? new Date(r.creationTime) : undefined,
-              accessTime: r.accessTime ? new Date(r.accessTime) : undefined,
-              modificationTime: r.modificationTime ? new Date(r.modificationTime) : undefined,
+              creationTime: toDate(r.creationTime),
+              accessTime: toDate(r.accessTime),
+              modificationTime: toDate(r.modificationTime),
               fileSize: r.fileSize ?? undefined,
               driveSerialNumber: r.driveSerialNumber ?? undefined,
               driveType: r.driveType ?? undefined,
@@ -416,7 +439,7 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
               targetPath: r.targetPath ?? undefined,
               arguments: r.arguments ?? undefined,
               workingDirectory: r.workingDirectory ?? undefined,
-              lastAccessed: r.lastAccessed ? new Date(r.lastAccessed) : undefined,
+              lastAccessed: toDate(r.lastAccessed),
             })),
           });
         }
@@ -455,7 +478,7 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
             targetPath: r.targetPath ?? undefined,
             arguments: r.arguments ?? undefined,
             workingDirectory: r.workingDirectory ?? undefined,
-            lastAccessed: r.lastAccessed ? new Date(r.lastAccessed) : undefined,
+            lastAccessed: toDate(r.lastAccessed),
             accessRank: r.accessRank ?? undefined,
             pinned: r.pinned ?? undefined,
             machineName: r.machineName ?? undefined,
@@ -466,9 +489,42 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
       // No IOC upsert step — Jump Lists carry no hash to look up.
     } else if (file.role === "mft") {
       // 3. Run the $MFT parser (system python3 + pyfsntfs, same
-      // C-linked-library tier as Prefetch's pyscca).
+      // C-linked-library tier as Prefetch's pyscca) — STREAMED: rows are
+      // inserted and rule-checked in batches as they arrive rather than
+      // collected first (see runMftParseStreaming() for the OOM this avoids).
+      // Rule hits are folded into streamedRuleHits and turned into findings
+      // with everything else in step 6.
       const pythonPath = await getWinArtifactsSystemPythonPath();
-      const result = await runMftParse(pythonPath, filePath);
+      const rules = await loadRules();
+      const result = await runMftParseStreaming(pythonPath, filePath, async (batch) => {
+        await chunkedCreateMany(
+          (data) => prisma.mftEntry.createMany({ data }),
+          batch.map((r) => ({
+            fileId,
+            mftEntryNumber: r.mftEntryNumber,
+            sequenceNumber: r.sequenceNumber ?? undefined,
+            name: r.name,
+            path: r.path ?? undefined,
+            parentEntryNumber: r.parentEntryNumber ?? undefined,
+            isAllocated: r.isAllocated,
+            isDirectory: r.isDirectory,
+            creationTime: toDate(r.creationTime),
+            modificationTime: toDate(r.modificationTime),
+            accessTime: toDate(r.accessTime),
+            entryModificationTime: toDate(r.entryModificationTime),
+            fileSize: r.fileSize != null ? BigInt(r.fileSize) : undefined,
+            hasAlternateDataStreams: r.hasAlternateDataStreams,
+          }))
+        );
+        if (rules.length > 0) {
+          const subjects = buildSubjects({ shimcache: [], amcache: [], userAssist: [], bam: [], autoruns: [], mft: batch });
+          for (const m of runRules(rules as unknown as StoredWinArtifactRule[], subjects, iocLookupMap)) {
+            const hit = streamedRuleHits.get(m.ruleId);
+            if (hit) hit.count++;
+            else streamedRuleHits.set(m.ruleId, { count: 1, matchedField: m.matchedField, matchedValue: m.matchedValue });
+          }
+        }
+      });
 
       if (result.status === "not_installed") {
         throw new Error("pyfsntfs (libfsntfs-python) is not installed — see deploy/install-winartifacts-deps.sh.");
@@ -482,30 +538,9 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
       for (const err of result.scriptErrors) {
         console.warn(`[windows-artifacts] mft-parse.py reported: ${err}`);
       }
-
-      // 4. One MftEntry row per parsed entry — a real $MFT can run into
-      // the hundreds of thousands to low millions of rows, so inserted
-      // in chunks rather than one unbounded createMany call.
-      mftRows = result.entries;
-      await chunkedCreateMany(
-        (data) => prisma.mftEntry.createMany({ data }),
-        mftRows.map((r) => ({
-          fileId,
-          mftEntryNumber: r.mftEntryNumber,
-          sequenceNumber: r.sequenceNumber ?? undefined,
-          name: r.name,
-          path: r.path ?? undefined,
-          parentEntryNumber: r.parentEntryNumber ?? undefined,
-          isAllocated: r.isAllocated,
-          isDirectory: r.isDirectory,
-          creationTime: r.creationTime ? new Date(r.creationTime) : undefined,
-          modificationTime: r.modificationTime ? new Date(r.modificationTime) : undefined,
-          accessTime: r.accessTime ? new Date(r.accessTime) : undefined,
-          entryModificationTime: r.entryModificationTime ? new Date(r.entryModificationTime) : undefined,
-          fileSize: r.fileSize != null ? BigInt(r.fileSize) : undefined,
-          hasAlternateDataStreams: r.hasAlternateDataStreams,
-        }))
-      );
+      if (result.suppressedErrors > 0) {
+        console.warn(`[windows-artifacts] mft-parse.py reported ${result.suppressedErrors} more unreadable entries (not logged individually)`);
+      }
       // No IOC upsert step — $MFT carries no hash to look up.
     } else if (file.role === "usnjrnl") {
       // 3. Run the $UsnJrnl:$J parser — pure stdlib struct parsing, same
@@ -536,7 +571,7 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
           usn: BigInt(r.usn),
           fileReferenceNumber: r.fileReferenceNumber,
           parentFileReferenceNumber: r.parentFileReferenceNumber,
-          timestamp: r.timestamp ? new Date(r.timestamp) : undefined,
+          timestamp: toDate(r.timestamp),
           reason: r.reason,
           fileName: r.fileName ?? undefined,
           fileAttributes: r.fileAttributes ?? undefined,
@@ -576,7 +611,7 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
             fileId,
             tableName: r.tableName,
             providerLabel: r.providerLabel ?? undefined,
-            timestamp: r.timestamp ? new Date(r.timestamp) : undefined,
+            timestamp: toDate(r.timestamp),
             appId: r.appId ?? undefined,
             userSid: r.userSid ?? undefined,
             details: r.details as object,
@@ -611,7 +646,7 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
             fileId,
             sourceFileName: file.filename,
             eventType: result.entry.eventType ?? undefined,
-            eventTime: result.entry.eventTime ? new Date(result.entry.eventTime) : undefined,
+            eventTime: toDate(result.entry.eventTime),
             reportGuid: result.entry.reportGuid ?? undefined,
             appName: result.entry.appName ?? undefined,
             appVersion: result.entry.appVersion ?? undefined,
@@ -657,7 +692,7 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
             exceptionAddress: result.entry.exceptionAddress ?? undefined,
             faultingThreadId: result.entry.faultingThreadId ?? undefined,
             processId: result.entry.processId ?? undefined,
-            processCreateTime: result.entry.processCreateTime ? new Date(result.entry.processCreateTime) : undefined,
+            processCreateTime: toDate(result.entry.processCreateTime),
             osVersion: result.entry.osVersion ?? undefined,
             cpuArchitecture: result.entry.cpuArchitecture ?? undefined,
             moduleList: result.entry.moduleList as object,
@@ -701,7 +736,7 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
             sourceFileName: file.filename,
             formatVersion: r.formatVersion,
             originalPath: r.originalPath,
-            deletedTime: r.deletedTime ? new Date(r.deletedTime) : undefined,
+            deletedTime: toDate(r.deletedTime),
             fileSizeBytes: r.fileSizeBytes != null ? BigInt(r.fileSizeBytes) : undefined,
           })),
         });
@@ -732,8 +767,8 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
           data: result.entries.map((r) => ({
             fileId,
             profileName: file.profileName ?? undefined,
-            arrivalTime: r.arrivalTime ? new Date(r.arrivalTime) : undefined,
-            expiryTime: r.expiryTime ? new Date(r.expiryTime) : undefined,
+            arrivalTime: toDate(r.arrivalTime),
+            expiryTime: toDate(r.expiryTime),
             notifType: r.notifType ?? undefined,
             tag: r.tag ?? undefined,
             groupName: r.groupName ?? undefined,
@@ -815,7 +850,7 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
             scanIdHex: entry.scanIdHex ?? undefined,
             threatId: entry.threatId ?? undefined,
             detectionName: entry.detectionName ?? undefined,
-            timestamp: entry.timestamp ? new Date(entry.timestamp) : undefined,
+            timestamp: toDate(entry.timestamp),
             resources: entry.resources as unknown as object,
             rawFields: entry.rawFields as object,
           },
@@ -935,8 +970,8 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
             jobType: r.jobType ?? undefined,
             priority: r.priority ?? undefined,
             state: r.state ?? undefined,
-            ctime: r.ctime ? new Date(r.ctime) : undefined,
-            mtime: r.mtime ? new Date(r.mtime) : undefined,
+            ctime: toDate(r.ctime),
+            mtime: toDate(r.mtime),
             destFn: r.destFn ?? undefined,
             srcFn: r.srcFn ?? undefined,
             tmpFn: r.tmpFn ?? undefined,
@@ -973,7 +1008,7 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
           data: timelineRows.map((r) => ({
             fileId,
             profileName: file.profileName ?? undefined,
-            startTime: r.startTime ? new Date(r.startTime) : undefined,
+            startTime: toDate(r.startTime),
             activityKind: r.activityKind,
             appDisplayName: r.appDisplayName ?? undefined,
             description: r.description ?? undefined,
@@ -989,7 +1024,15 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
       // 3. Stage-2 artifact types — one shared runner (record-engine.ts).
       const spec = RECORD_ROLES[file.role];
       const pythonPath = spec.python === "system" ? await getWinArtifactsSystemPythonPath() : await getWinArtifactsPythonPath();
-      const result = await runRecordParse(pythonPath, spec.script, spec.args(file, filePath), spec.timeoutSeconds);
+      // Search rows go straight to the DB in batches (they don't feed rules).
+      const result = await runRecordParse(pythonPath, spec.script, spec.args(file, filePath), spec.timeoutSeconds, {
+        onSearchBatch: async (rows) => {
+          await chunkedCreateMany(
+            (data) => prisma.searchIndexEntry.createMany({ data }),
+            rows.map((r) => ({ fileId, tableName: r.tableName, recordIndex: r.recordIndex, details: r.details as object }))
+          );
+        },
+      });
 
       if (result.status === "not_installed") {
         throw new Error(`${spec.script} reported a missing dependency — see deploy/install-winartifacts-deps.sh.`);
@@ -1033,7 +1076,7 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
             fileId,
             jobId: r.jobId ?? undefined, name: r.name ?? undefined, desc: r.desc ?? undefined, cmd: r.cmd ?? undefined,
             sid: r.sid ?? undefined, jobType: r.jobType ?? undefined, priority: r.priority ?? undefined, state: r.state ?? undefined,
-            ctime: r.ctime ? new Date(r.ctime) : undefined, mtime: r.mtime ? new Date(r.mtime) : undefined,
+            ctime: toDate(r.ctime), mtime: toDate(r.mtime),
             destFn: r.destFn ?? undefined, srcFn: r.srcFn ?? undefined, tmpFn: r.tmpFn ?? undefined,
             downloadSizeBytes: r.downloadSizeBytes != null ? BigInt(r.downloadSizeBytes) : undefined,
             transferSizeBytes: r.transferSizeBytes != null ? BigInt(r.transferSizeBytes) : undefined,
@@ -1101,15 +1144,7 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
     }
 
     // 6. Analyst-defined rules (org-scoped OR global)
-    const rules = await prisma.windowsArtifactRule.findMany({
-      where: {
-        enabled: true,
-        OR: [
-          ...(file.upload.organizationId ? [{ organizationId: file.upload.organizationId }] : []),
-          { organizationId: null },
-        ],
-      },
-    });
+    const rules = await loadRules();
 
     const criticalCandidates: { title: string; severity: string; sourceLabel: string; detailPath: string }[] = [];
     const detailPath = `/windows-artifacts/${file.uploadId}`;
@@ -1118,7 +1153,7 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
       const subjects = buildSubjects({
         shimcache: shimcacheRows, amcache: amcacheRows, userAssist: userAssistRows, bam: bamRows, autoruns: autorunRows,
         prefetch: prefetchRows, lnk: lnkRows, jumplist: jumpListRows, shellbag: shellbagRows,
-        mft: mftRows, usnjrnl: usnJrnlRows, srum: srumRows,
+        usnjrnl: usnJrnlRows, srum: srumRows,
         wer: werReportRows, werDump: werDumpRows, recyclebin: recycleBinRows, bits: bitsRows,
         quarantinePayload: quarantinePayloadRows, timeline: timelineRows,
         registryPlugin: registryPluginRows,
@@ -1126,30 +1161,31 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
       });
       const matches = runRules(rules as unknown as StoredWinArtifactRule[], subjects, iocLookupMap);
 
-      const byRule = new Map<string, typeof matches>();
+      // One finding per rule: count + first sample, starting from any hits
+      // already accumulated while streaming ($MFT).
+      const byRule = new Map(streamedRuleHits);
       for (const m of matches) {
-        const arr = byRule.get(m.ruleId) ?? [];
-        arr.push(m);
-        byRule.set(m.ruleId, arr);
+        const hit = byRule.get(m.ruleId);
+        if (hit) hit.count++;
+        else byRule.set(m.ruleId, { count: 1, matchedField: m.matchedField, matchedValue: m.matchedValue });
       }
 
-      for (const [ruleId, hits] of byRule.entries()) {
+      for (const [ruleId, hit] of byRule.entries()) {
         const rule = rules.find((r) => r.id === ruleId);
         if (!rule) continue;
-        const sample = hits[0];
 
         await prisma.windowsArtifactFinding.create({
           data: {
             fileId, ruleId,
             title: rule.name, description: rule.description ?? undefined, severity: rule.severity,
-            matchCount: hits.length,
-            matchedField: sample.matchedField, matchedValue: sample.matchedValue,
+            matchCount: hit.count,
+            matchedField: hit.matchedField, matchedValue: hit.matchedValue,
           },
         });
         findingTotal++;
         criticalCandidates.push({ title: rule.name, severity: rule.severity, sourceLabel: "Windows Artifacts", detailPath });
 
-        await prisma.windowsArtifactRule.update({ where: { id: ruleId }, data: { hitCount: { increment: hits.length } } });
+        await prisma.windowsArtifactRule.update({ where: { id: ruleId }, data: { hitCount: { increment: hit.count } } });
       }
     }
 

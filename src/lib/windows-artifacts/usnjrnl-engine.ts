@@ -13,6 +13,7 @@
 import { spawn } from "child_process";
 import path from "path";
 import readline from "readline";
+import { parseParserLine } from "./parser-line";
 
 export interface UsnJrnlEntryRow {
   usn: string; // stringified — can exceed Number.MAX_SAFE_INTEGER
@@ -70,7 +71,7 @@ export async function runUsnJrnlParse(
       const trimmed = line.trim();
       if (!trimmed) return;
       let obj: Record<string, unknown>;
-      try { obj = JSON.parse(trimmed); } catch { return; }
+      try { obj = parseParserLine(trimmed); } catch { return; }
 
       switch (obj.type) {
         case "usn_entry":

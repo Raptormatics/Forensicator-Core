@@ -7,6 +7,7 @@
  */
 import { spawn } from "child_process";
 import path from "path";
+import { parseParserLine } from "./parser-line";
 
 export type RegistryRole = "system_hive" | "software_hive" | "security_hive" | "sam_hive" | "default_hive" | "ntuser_hive" | "amcache_hive" | "usrclass_hive";
 
@@ -109,7 +110,7 @@ export async function runRegistryParse(
         const trimmed = line.trim();
         if (!trimmed) continue;
         let obj: Record<string, unknown>;
-        try { obj = JSON.parse(trimmed); } catch { continue; }
+        try { obj = parseParserLine(trimmed); } catch { continue; }
 
         switch (obj.type) {
           case "not_installed":

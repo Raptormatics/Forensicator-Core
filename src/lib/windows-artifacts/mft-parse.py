@@ -103,12 +103,37 @@ def main():
         emit({"type": "not_installed"})
         sys.exit(0)
 
+    # A fragmented $MFT copied as one contiguous range only contains real
+    # records up to the end of its first run (see mft_fragmentation()) —
+    # seen on a real Windows 11 host: ~205k of ~1.42M records, the rest of
+    # the 1.4 GB file was unrelated disk data. Parse just the valid part and
+    # say so, instead of failing or emitting garbage entries.
+    try:
+        frag = mft_fragmentation(mft_path)
+    except Exception:
+        frag = None
+    if frag and frag[0] > 1:
+        runs, first_records, total_records = frag
+        emit({"type": "error", "message": (
+            f"This $MFT is fragmented on disk ({runs} data runs) but the copy only holds its first run: "
+            f"records 0-{first_records - 1} of {total_records} are real, the rest of the file is unrelated disk data "
+            f"and was not parsed. Re-collect the $MFT following its data runs to get the remaining "
+            f"{total_records - first_records} records.")})
+        parse_raw(mft_path, limit=first_records)
+        return
+
     try:
         mft_file = pyfsntfs.mft_metadata_file()
         mft_file.open(mft_path)
     except Exception as e:
-        emit({"type": "error", "message": f"failed to open $MFT file: {e}"})
-        sys.exit(1)
+        # libfsntfs reads the whole MFT entry list up front and refuses the
+        # file if ANY record is damaged — seen on a real live-acquired
+        # 1.4 GB Windows 11 $MFT (one bad record, entry 798530, failed the
+        # entire file). Fall back to parsing FILE records directly, skipping
+        # bad ones, rather than losing the whole $MFT.
+        emit({"type": "error", "message": f"pyfsntfs could not open the $MFT ({str(e)[:300]}) — using the raw FILE-record parser instead"})
+        parse_raw(mft_path)
+        return
 
     try:
         count = mft_file.get_number_of_file_entries()
@@ -244,6 +269,181 @@ def main():
         mft_file.close()
     except Exception:
         pass
+
+
+# ── Raw FILE-record fallback ────────────────────────────────────────────────
+# Layout per the NTFS on-disk format (MFT_RECORD / attribute headers, as
+# documented by libfsntfs/linux-ntfs): 1024-byte "FILE" records with an
+# update-sequence fixup array; $STANDARD_INFORMATION (0x10) carries the four
+# MACB times, $FILE_NAME (0x30) the parent reference and name, $DATA (0x80)
+# the size (named $DATA = alternate data stream). Two streaming passes keep
+# memory flat on multi-GB $MFTs: pass 1 keeps only directory names/parents
+# (all that path building needs), pass 2 re-reads and emits every entry.
+import struct as _struct
+from datetime import datetime as _dt, timedelta as _td
+
+RAW_RECORD = 1024
+ATTR_SI, ATTR_FN, ATTR_DATA, ATTR_END = 0x10, 0x30, 0x80, 0xFFFFFFFF
+
+
+def _ft(v):
+    if not (116444736000000000 <= v <= 139000000000000000):
+        return None
+    return (_dt(1601, 1, 1) + _td(microseconds=v / 10)).isoformat() + "Z"
+
+
+def _fixup(rec):
+    usa_off, usa_count = _struct.unpack_from("<HH", rec, 4)
+    if usa_count < 2 or usa_off + 2 * usa_count > len(rec):
+        return None
+    usn = rec[usa_off:usa_off + 2]
+    buf = bytearray(rec)
+    for i in range(1, usa_count):
+        end = i * 512 - 2
+        if end + 2 > len(buf) or buf[end:end + 2] != usn:
+            return None
+        buf[end:end + 2] = rec[usa_off + 2 * i:usa_off + 2 * i + 2]
+    return bytes(buf)
+
+
+def _parse_record(raw):
+    if raw[:4] != b"FILE":
+        return None
+    rec = _fixup(raw)
+    if rec is None:
+        return None
+    seq, _links, attr_off, flags = _struct.unpack_from("<HHHH", rec, 0x10)
+    base_ref = _struct.unpack_from("<Q", rec, 0x20)[0] & 0xFFFFFFFFFFFF
+    if base_ref:
+        return None  # extension record — its attributes belong to the base entry
+    out = {"sequence_number": seq, "is_allocated": bool(flags & 1), "is_directory": bool(flags & 2),
+           "name": "", "parent_entry_number": None, "creation_time": None, "modification_time": None,
+           "access_time": None, "entry_modification_time": None, "file_size": None, "has_alternate_data_streams": False}
+    best_rank = None
+    off = attr_off
+    while off + 16 <= len(rec):
+        atype, alen = _struct.unpack_from("<II", rec, off)
+        if atype == ATTR_END or alen < 16 or off + alen > len(rec):
+            break
+        nonres, name_len = rec[off + 8], rec[off + 9]
+        if not nonres:
+            clen, coff = _struct.unpack_from("<IH", rec, off + 0x10)
+            content = rec[off + coff:off + coff + clen]
+            if atype == ATTR_SI and len(content) >= 32:
+                c, m, e, a = _struct.unpack_from("<4Q", content, 0)
+                out.update(creation_time=_ft(c), modification_time=_ft(m), entry_modification_time=_ft(e), access_time=_ft(a))
+            elif atype == ATTR_FN and len(content) >= 66:
+                parent = _struct.unpack_from("<Q", content, 0)[0] & 0xFFFFFFFFFFFF
+                nlen, ns = content[64], content[65]
+                # Prefer the Win32 / Win32&DOS long name over the 8.3 DOS one.
+                rank = {1: 0, 3: 0, 0: 1, 2: 2}.get(ns, 3)
+                if best_rank is None or rank < best_rank:
+                    best_rank = rank
+                    out["name"] = content[66:66 + 2 * nlen].decode("utf-16-le", errors="replace")
+                    out["parent_entry_number"] = parent
+                    if out["file_size"] is None:
+                        out["file_size"] = _struct.unpack_from("<Q", content, 48)[0]
+            elif atype == ATTR_DATA:
+                if name_len:
+                    out["has_alternate_data_streams"] = True
+                else:
+                    out["file_size"] = clen
+        elif atype == ATTR_DATA:
+            if name_len:
+                out["has_alternate_data_streams"] = True
+            elif alen >= 0x38:
+                out["file_size"] = _struct.unpack_from("<Q", rec, off + 0x30)[0]
+        off += alen
+    return out
+
+
+def _records(path, limit=None):
+    with open(path, "rb") as fh:
+        idx = 0
+        while True:
+            chunk = fh.read(RAW_RECORD * 4096)
+            if not chunk:
+                break
+            for o in range(0, len(chunk) - RAW_RECORD + 1, RAW_RECORD):
+                if limit is not None and idx >= limit:
+                    return
+                yield idx, chunk[o:o + RAW_RECORD]
+                idx += 1
+
+
+def mft_fragmentation(path):
+    """Reads record 0 (the $MFT's own FILE record) and decodes its unnamed
+    $DATA run list. Returns (run_count, first_run_records, total_records) or
+    None if record 0 can't be decoded. A copy made by reading only the first
+    run off the volume (the collector's raw-read path) holds unrelated disk
+    clusters after first_run_records — record numbers past that point would
+    be wrong, so callers stop there."""
+    with open(path, "rb") as fh:
+        rec = _fixup(fh.read(RAW_RECORD))
+    if rec is None or rec[:4] != b"FILE":
+        return None
+    off = _struct.unpack_from("<H", rec, 0x14)[0]
+    while off + 16 <= len(rec):
+        atype, alen = _struct.unpack_from("<II", rec, off)
+        if atype == ATTR_END or alen < 16 or off + alen > len(rec):
+            return None
+        if atype == ATTR_DATA and rec[off + 8] and rec[off + 9] == 0:
+            runs_off = _struct.unpack_from("<H", rec, off + 0x20)[0]
+            alloc, real = _struct.unpack_from("<QQ", rec, off + 0x28)
+            pos, lengths = off + runs_off, []
+            while pos < off + alen and rec[pos] != 0:
+                hdr = rec[pos]
+                lsize, osize = hdr & 0x0F, hdr >> 4
+                lengths.append(int.from_bytes(rec[pos + 1:pos + 1 + lsize], "little"))
+                pos += 1 + lsize + osize
+            total_clusters = sum(lengths)
+            if not lengths or not total_clusters:
+                return None
+            cluster = alloc // total_clusters
+            return len(lengths), lengths[0] * cluster // RAW_RECORD, real // RAW_RECORD
+        off += alen
+    return None
+
+
+def parse_raw(path, limit=None):
+    dirs = {}
+    bad = 0
+    for i, raw in _records(path, limit):
+        try:
+            r = _parse_record(raw)
+        except Exception:
+            r = None
+            bad += 1
+        if r and r["is_directory"]:
+            dirs[i] = (r["name"], r["parent_entry_number"])
+    cache = {ROOT_ENTRY_NUMBER: ""}
+
+    def dir_path(n, depth=0):
+        if n in cache:
+            return cache[n]
+        if depth > MAX_PARENT_CHAIN_DEPTH or n not in dirs:
+            return None
+        name, parent = dirs[n]
+        if parent is None or parent == n:
+            cache[n] = name or None
+            return cache[n]
+        pp = dir_path(parent, depth + 1)
+        cache[n] = (f"{pp}\\{name}" if pp else name) if pp is not None else (name or None)
+        return cache[n]
+
+    for i, raw in _records(path, limit):
+        try:
+            r = _parse_record(raw)
+        except Exception:
+            continue
+        if not r:
+            continue
+        parent = r["parent_entry_number"]
+        pp = dir_path(parent) if parent is not None and parent != i else None
+        full = (f"{pp}\\{r['name']}" if pp else r["name"]) if pp is not None else (r["name"] or None)
+        emit({"type": "mft_entry", "mft_entry_number": i, "path": full if i != ROOT_ENTRY_NUMBER else "", **r})
+    if bad:
+        emit({"type": "error", "message": f"{bad} MFT records could not be parsed and were skipped"})
 
 
 if __name__ == "__main__":

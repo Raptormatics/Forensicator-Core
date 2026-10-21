@@ -31,6 +31,7 @@ Emits one JSON object per line to stdout:
   {"type": "error", "message": str}
 """
 import sys
+from datetime import datetime, timedelta
 import json
 import re
 
@@ -120,6 +121,12 @@ def main():
 
         event_type = pick(raw_fields, ["EventType"])
         event_time = pick(raw_fields, ["EventTime", "Response.time"])
+        # Report.wer stores EventTime as a raw FILETIME integer (e.g.
+        # "134128363916531015" on Windows 11) — `new Date()` on that is an
+        # Invalid Date and failed every report's insert. Convert to ISO UTC.
+        if event_time and str(event_time).strip().isdigit():
+            ft = int(str(event_time).strip())
+            event_time = (datetime(1601, 1, 1) + timedelta(microseconds=ft / 10)).isoformat() + "Z" if 116444736000000000 <= ft <= 139000000000000000 else None
         report_guid = pick(raw_fields, ["ReportIdentifier", "IntegratorReportIdentifier", "ReportGuid"])
 
         app_name = app_version = app_timestamp = None

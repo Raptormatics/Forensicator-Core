@@ -14,6 +14,7 @@
 import { spawn } from "child_process";
 import path from "path";
 import readline from "readline";
+import { parseParserLine } from "./parser-line";
 
 export interface SearchIndexRow {
   tableName: string;
@@ -67,7 +68,7 @@ export async function runSearchIndexParse(
       if (!trimmed) return;
       gotAnyLine = true;
       let obj: Record<string, unknown>;
-      try { obj = JSON.parse(trimmed); } catch { return; }
+      try { obj = parseParserLine(trimmed); } catch { return; }
 
       switch (obj.type) {
         case "not_installed":

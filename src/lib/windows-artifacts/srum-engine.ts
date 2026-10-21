@@ -13,6 +13,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { randomUUID } from "crypto";
+import { parseParserLine } from "./parser-line";
 
 export interface SrumEntryRow {
   tableName: string;
@@ -109,7 +110,7 @@ export async function runSrumParse(
         const trimmed = line.trim();
         if (!trimmed) continue;
         let obj: Record<string, unknown>;
-        try { obj = JSON.parse(trimmed); } catch { continue; }
+        try { obj = parseParserLine(trimmed); } catch { continue; }
 
         switch (obj.type) {
           case "not_installed":

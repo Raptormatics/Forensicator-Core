@@ -48,11 +48,56 @@ def enum_name(v):
     return getattr(v, "name", str(v))
 
 
+def emit_kernel_dump(head):
+    import struct
+    from datetime import datetime, timedelta
+    is64 = head[:8] == b"PAGEDU64"
+    major, minor = struct.unpack_from("<II", head, 8)
+    if is64:
+        machine, processors, bugcheck = struct.unpack_from("<III", head, 0x30)
+        params = [f"0x{p:X}" for p in struct.unpack_from("<4Q", head, 0x40)]
+        dump_type = struct.unpack_from("<I", head, 0xF98)[0]
+        ft = struct.unpack_from("<Q", head, 0xFA8)[0]
+    else:
+        machine, processors, bugcheck = struct.unpack_from("<III", head, 0x20)
+        params = [f"0x{p:X}" for p in struct.unpack_from("<4I", head, 0x2C)]
+        dump_type = struct.unpack_from("<I", head, 0xF88)[0]
+        ft = struct.unpack_from("<Q", head, 0xFC0)[0]
+    system_time = (datetime(1601, 1, 1) + timedelta(microseconds=ft / 10)).isoformat() + "Z" if 116444736000000000 <= ft <= 139000000000000000 else None
+    emit({
+        "type": "wer_dump",
+        "exception_code": f"BugCheck 0x{bugcheck:X}",
+        "exception_address": None,
+        "faulting_thread_id": None,
+        "process_id": None,
+        "process_create_time": None,
+        "os_version": f"Windows build {minor}",
+        "cpu_architecture": {0x8664: "AMD64", 0x14C: "x86", 0xAA64: "ARM64"}.get(machine, f"0x{machine:X}"),
+        "module_list": [],
+        "misc_info": {
+            "dump_kind": "kernel", "signature": head[:8].decode("ascii"), "bugcheck_code": f"0x{bugcheck:X}",
+            "bugcheck_parameters": params, "processors": processors, "dump_type": dump_type,
+            "crash_time": system_time,
+            "note": "Kernel memory dump — header fields only; load it in WinDbg (or upload to RAM Analysis if it is a full dump) for stacks and modules",
+        },
+    })
+
+
 def main():
     if len(sys.argv) < 2:
         emit({"type": "error", "message": "usage: wer-dump-parse.py <dmp_path>"})
         sys.exit(1)
     dump_path = sys.argv[1]
+
+    # Kernel memory dumps (WER Kernel_* reports, LiveKernelEvent/BugCheck)
+    # are "PAGEDU64"/"PAGEDUMP" crash dumps, not user-mode MDMP minidumps —
+    # the minidump library rejects them ("EGAP"). Their DUMP_HEADER is fixed
+    # and documented: report the bugcheck instead of failing the file.
+    with open(dump_path, "rb") as fh:
+        head = fh.read(0x2000)
+    if head[:8] in (b"PAGEDU64", b"PAGEDUMP"):
+        emit_kernel_dump(head)
+        return
 
     try:
         from minidump.minidumpfile import MinidumpFile

@@ -67,6 +67,14 @@ def main():
         emit({"type": "not_installed"})
         sys.exit(0)
 
+    # An all-zero .pf (seen on a real Windows 11 host — the source file was
+    # zero-filled on disk) would otherwise surface as an opaque libscca
+    # "unsupported signature" error.
+    with open(pf_path, "rb") as fh:
+        if not fh.read().strip(b"\x00"):
+            emit({"type": "error", "message": "file contains only zero bytes — the Prefetch file was empty/zero-filled on the source host"})
+            sys.exit(1)
+
     try:
         scca_file = pyscca.file()
         scca_file.open(pf_path)

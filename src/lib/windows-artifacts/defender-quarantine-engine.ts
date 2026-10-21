@@ -11,6 +11,7 @@
  */
 import { spawn } from "child_process";
 import path from "path";
+import { parseParserLine } from "./parser-line";
 
 export interface QuarantineResourceField {
   detectionPath: string | null;
@@ -80,7 +81,7 @@ function spawnAndCollect(pythonPath: string, args: string[], timeoutSeconds: num
       for (const line of stdout.split("\n")) {
         const trimmed = line.trim();
         if (!trimmed) continue;
-        try { lines.push(JSON.parse(trimmed)); } catch { continue; }
+        try { lines.push(parseParserLine(trimmed)); } catch { continue; }
       }
       resolve({ lines, stderr, exitCode, timedOut });
     });

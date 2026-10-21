@@ -70,7 +70,10 @@ def parse_v2(data):
     path_byte_len = path_len_chars * 2
     if path_len_chars < 0 or len(data) < 0x1C + path_byte_len:
         raise ValueError(f"v2 path length {path_len_chars} exceeds available data ({len(data) - 0x1C} bytes)")
-    path = data[0x1C:0x1C + path_byte_len].decode("utf-16-le", errors="ignore")
+    # The stored length INCLUDES the terminating NUL on real Windows 10/11
+    # $I files (confirmed on a Windows 11 host) — left in, it reaches
+    # Postgres as \u0000 and the whole insert fails (22021).
+    path = data[0x1C:0x1C + path_byte_len].decode("utf-16-le", errors="ignore").split("\x00", 1)[0]
     return file_size, deleted_filetime, path
 
 

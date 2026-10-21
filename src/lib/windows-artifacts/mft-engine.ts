@@ -17,6 +17,7 @@
 import { spawn } from "child_process";
 import path from "path";
 import readline from "readline";
+import { parseParserLine } from "./parser-line";
 
 export interface MftEntryRow {
   mftEntryNumber: number;
@@ -86,7 +87,7 @@ export async function runMftParse(
       if (!trimmed) return;
       gotAnyLine = true;
       let obj: Record<string, unknown>;
-      try { obj = JSON.parse(trimmed); } catch { return; }
+      try { obj = parseParserLine(trimmed); } catch { return; }
 
       switch (obj.type) {
         case "not_installed":
@@ -136,4 +137,104 @@ export async function runMftParse(
       settle({ status: "ok", entries, entryCount: entries.length, scriptErrors });
     });
   });
+}
+
+// ── Streaming variant ───────────────────────────────────────────────────────
+// A busy workstation's $MFT is 1-2 GB / 1-2M entries. Holding every parsed
+// row (plus its Prisma insert copy and rule subject) in one array OOM-killed
+// the whole worker on a 5 GB appliance with a real 1.4 GB Windows 11 $MFT —
+// taking every other in-flight job down with it. This variant hands rows to
+// `onBatch` in fixed-size batches and awaits it before reading further
+// (for-await over readline = real backpressure on the child's stdout), so
+// memory stays flat regardless of $MFT size.
+
+export type MftStreamResult =
+  | { status: "ok"; entryCount: number; scriptErrors: string[]; suppressedErrors: number }
+  | { status: "not_installed" }
+  | { status: "timeout" }
+  | { status: "error"; message: string };
+
+const MAX_KEPT_ERRORS = 200;
+
+function toMftRow(obj: Record<string, unknown>): MftEntryRow {
+  return {
+    mftEntryNumber: Number(obj.mft_entry_number ?? 0),
+    sequenceNumber: obj.sequence_number != null ? Number(obj.sequence_number) : null,
+    name: String(obj.name ?? ""),
+    path: obj.path != null ? String(obj.path) : null,
+    parentEntryNumber: obj.parent_entry_number != null ? Number(obj.parent_entry_number) : null,
+    isAllocated: Boolean(obj.is_allocated),
+    isDirectory: Boolean(obj.is_directory),
+    creationTime: obj.creation_time ? String(obj.creation_time) : null,
+    modificationTime: obj.modification_time ? String(obj.modification_time) : null,
+    accessTime: obj.access_time ? String(obj.access_time) : null,
+    entryModificationTime: obj.entry_modification_time ? String(obj.entry_modification_time) : null,
+    fileSize: obj.file_size != null ? String(obj.file_size) : null,
+    hasAlternateDataStreams: Boolean(obj.has_alternate_data_streams),
+  };
+}
+
+export async function runMftParseStreaming(
+  pythonPath: string,
+  mftPath: string,
+  onBatch: (rows: MftEntryRow[]) => Promise<void>,
+  batchSize = 5000,
+  timeoutSeconds: number = 2 * DEFAULT_TIMEOUT_SECONDS
+): Promise<MftStreamResult> {
+  const scriptPath = path.join(process.cwd(), "src", "lib", "windows-artifacts", "mft-parse.py");
+  const child = spawn(pythonPath, [scriptPath, mftPath], { stdio: ["ignore", "pipe", "pipe"] });
+  let stderr = "";
+  let timedOut = false;
+  child.stderr.on("data", (chunk) => { if (stderr.length < 20000) stderr += chunk.toString(); });
+  const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, (timeoutSeconds + 10) * 1000);
+  const exited = new Promise<number | null>((resolve) => child.on("close", resolve));
+  const spawnError = new Promise<Error>((resolve) => child.on("error", resolve));
+
+  const scriptErrors: string[] = [];
+  let suppressedErrors = 0;
+  let notInstalled = false;
+  let entryCount = 0;
+  let batch: MftEntryRow[] = [];
+
+  try {
+    const rl = readline.createInterface({ input: child.stdout });
+    const consume = (async () => {
+      for await (const line of rl) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        let obj: Record<string, unknown>;
+        try { obj = parseParserLine(trimmed); } catch { continue; }
+        if (obj.type === "mft_entry") {
+          batch.push(toMftRow(obj));
+          entryCount++;
+          if (batch.length >= batchSize) {
+            const full = batch;
+            batch = [];
+            await onBatch(full);
+          }
+        } else if (obj.type === "error") {
+          if (scriptErrors.length < MAX_KEPT_ERRORS) scriptErrors.push(String(obj.message));
+          else suppressedErrors++;
+        } else if (obj.type === "not_installed") {
+          notInstalled = true;
+        }
+      }
+      if (batch.length > 0) await onBatch(batch);
+    })();
+    const outcome = await Promise.race([consume.then(() => null), spawnError]);
+    if (outcome instanceof Error) return { status: "error", message: `Failed to run mft-parse.py ("${pythonPath}"): ${outcome.message}` };
+    const exitCode = await exited;
+    if (timedOut) return { status: "timeout" };
+    if (notInstalled) return { status: "not_installed" };
+    if (exitCode !== 0 && entryCount === 0) {
+      const detail = (stderr || scriptErrors.join("; ")).trim().slice(0, 500);
+      return { status: "error", message: detail || `mft-parse.py exited with code ${exitCode}` };
+    }
+    return { status: "ok", entryCount, scriptErrors, suppressedErrors };
+  } catch (err) {
+    child.kill("SIGKILL");
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 }

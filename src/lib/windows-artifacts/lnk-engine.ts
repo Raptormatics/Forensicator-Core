@@ -6,6 +6,7 @@
  */
 import { spawn } from "child_process";
 import path from "path";
+import { parseParserLine } from "./parser-line";
 
 export type LnkRole = "lnk" | "jumplist_custom";
 
@@ -83,7 +84,7 @@ export async function runLnkParse(
         const trimmed = line.trim();
         if (!trimmed) continue;
         let obj: Record<string, unknown>;
-        try { obj = JSON.parse(trimmed); } catch { continue; }
+        try { obj = parseParserLine(trimmed); } catch { continue; }
 
         switch (obj.type) {
           case "not_installed":

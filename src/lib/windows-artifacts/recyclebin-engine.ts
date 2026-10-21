@@ -7,6 +7,7 @@
  */
 import { spawn } from "child_process";
 import path from "path";
+import { parseParserLine } from "./parser-line";
 
 export interface RecycleBinRow {
   formatVersion: number;
@@ -71,7 +72,7 @@ export async function runRecycleBinParse(
         const trimmed = line.trim();
         if (!trimmed) continue;
         let obj: Record<string, unknown>;
-        try { obj = JSON.parse(trimmed); } catch { continue; }
+        try { obj = parseParserLine(trimmed); } catch { continue; }
 
         switch (obj.type) {
           case "not_installed":
