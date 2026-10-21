@@ -40,6 +40,14 @@ const GLOBAL_IOC_TYPE: Record<string, string | undefined> = {
 
 // ── Decoder → ParsedEvent bridge ─────────────────────────────────────────────
 
+
+// Decoders capture fields by regex, so numeric ECS fields (ports, HTTP
+// status) often arrive as strings ("22"); the LogEvent columns are Int.
+function toIntField(v: unknown): number | null {
+  const n = typeof v === "number" ? v : typeof v === "string" && /^\s*\d+\s*$/.test(v) ? Number(v) : NaN;
+  return Number.isInteger(n) && n >= 0 && n <= 2147483647 ? n : null;
+}
+
 function decoderOutputToParsedEvent(
   entry: NormalizedLogEntry,
   raw: string,
@@ -60,8 +68,8 @@ function decoderOutputToParsedEvent(
     eventType: (entry["event.kind"] as string | undefined) ?? (entry["event.type"] as string[] | undefined)?.[0] ?? null,
     srcIp:       (entry["source.ip"]      as string  | undefined) ?? null,
     dstIp:       (entry["destination.ip"] as string  | undefined) ?? null,
-    srcPort:     (entry["source.port"]      as number | undefined) ?? null,
-    dstPort:     (entry["destination.port"] as number | undefined) ?? null,
+    srcPort:     toIntField(entry["source.port"]),
+    dstPort:     toIntField(entry["destination.port"]),
     username:    (entry["user.name"]      as string  | undefined) ?? null,
     domain:      (entry["source.domain"]  as string  | undefined) ?? (entry["destination.domain"] as string | undefined) ?? null,
     process:     (entry["process.name"]   as string  | undefined) ?? null,
@@ -73,7 +81,7 @@ function decoderOutputToParsedEvent(
     hashSha256:  (entry["hash.sha256"]    as string  | undefined) ?? null,
     url:         (entry["url.original"]   as string  | undefined) ?? (entry["url.full"] as string | undefined) ?? null,
     httpMethod:  (entry["http.request.method"]         as string  | undefined) ?? null,
-    statusCode:  (entry["http.response.status_code"]   as number  | undefined) ?? null,
+    statusCode:  toIntField(entry["http.response.status_code"]),
     userAgent:   null,
     message:     (entry.message           as string  | undefined) ?? raw,
     raw,
