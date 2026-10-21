@@ -375,7 +375,12 @@ export function runRules(
         : condResults.some((r) => r.matched !== null);
 
       if (passed) {
-        const firstHit = condResults.find((r) => r.matched !== null);
+        // Report the condition that says WHAT matched (a path, a summary
+        // field) rather than a type/category filter — otherwise a finding's
+        // sample value reads "prefetch_reference" or "samparse".
+        const firstHit =
+          condResults.find((r) => r.matched !== null && r.condition.field !== "artifact_type" && r.condition.field !== "category") ??
+          condResults.find((r) => r.matched !== null);
         results.push({
           ruleId: rule.id,
           subject,
