@@ -325,6 +325,9 @@ model SystemSettings {
   winArtifactsChunkSizeBytes Int? @map("win_artifacts_chunk_size_bytes")
 
   // Critical-finding email alerts — one channel, one recipient address.
+  // Used only by the Enterprise overlay (alerting is an Enterprise feature);
+  // the columns stay in Core's schema so existing installs keep their
+  // settings and the overlay's migration has nothing to re-add.
   // Off by default (no SMTP server is assumed to exist). Read fresh per
   // processing run, same no-restart-needed convention as the settings
   // above. criticalFindingAlertsEnabled gates sending; the SMTP fields

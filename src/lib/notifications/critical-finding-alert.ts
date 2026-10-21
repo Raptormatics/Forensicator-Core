@@ -9,18 +9,17 @@
  *
  * Called once per processing run with everything that run created (not
  * once per finding) — RAM analysis alone can create 10+ findings in a
- * single run, and a batched email is far more useful than a flood of
- * one-per-finding messages.
+ * single run, and one batched alert is far more useful than a flood.
+ *
+ * Critical-finding alerting (SMTP email, webhook) is a Forensicator
+ * Enterprise feature: Core only decides WHICH findings are alert-worthy and
+ * hands them to the overlay's dispatcher, loaded via dynamic import behind
+ * a non-literal specifier (same extension-point pattern as upload/route.ts's
+ * SIEM dispatch) so this module resolves and no-ops cleanly when the
+ * overlay isn't applied, rather than failing the build.
  */
-import { getSystemSettings } from "@/lib/settings/system";
-import { sendMail } from "./mailer";
 
-// Enterprise-only Slack/Teams/webhook alerting + escalation lives in the
-// overlay at this path, not in Core — loaded via dynamic import behind a
-// non-literal specifier (same pattern as upload/route.ts's SIEM dispatch)
-// so this module resolves and no-ops cleanly when the overlay isn't
-// applied, rather than failing the build.
-const WEBHOOK_DISPATCH_MODULE = "@/lib/notifications/webhook-dispatch";
+const ALERT_DISPATCH_MODULE = "@/lib/notifications/critical-alert-dispatch";
 
 export interface AlertableFinding {
   title: string;
@@ -39,20 +38,16 @@ export async function notifyCriticalFindings(findings: AlertableFinding[]): Prom
   const critical = findings.filter((f) => isCriticalSeverity(f.severity));
   if (critical.length === 0) return;
 
-  const settings = await getSystemSettings();
-
-  if (settings?.criticalFindingAlertsEnabled && settings.notificationEmail) {
-    const lines = critical.map((f) => `- [${f.sourceLabel}] ${f.title}${f.detailPath ? ` — ${f.detailPath}` : ""}`);
-    const subject = `Forensicator: ${critical.length} critical finding${critical.length !== 1 ? "s" : ""} detected`;
-    const text = `The following critical findings were just detected:\n\n${lines.join("\n")}`;
-
-    const result = await sendMail({ to: settings.notificationEmail, subject, text });
-    if (!result.ok) {
-      console.warn("[notifications] Failed to send critical finding alert:", result.error);
-    }
+  let dispatch: ((findings: AlertableFinding[]) => Promise<void>) | undefined;
+  try {
+    ({ dispatchCriticalAlerts: dispatch } = await import(ALERT_DISPATCH_MODULE));
+  } catch {
+    return; // Overlay not applied — Core has no alert channels.
   }
-
-  import(WEBHOOK_DISPATCH_MODULE)
-    .then(({ dispatchWebhookAlert }) => dispatchWebhookAlert(critical))
-    .catch((e) => console.warn("[notifications] Webhook dispatch skipped:", e instanceof Error ? e.message : e));
+  if (!dispatch) return;
+  try {
+    await dispatch(critical);
+  } catch (err) {
+    console.warn("[notifications] Critical finding alert dispatch failed:", err instanceof Error ? err.message : err);
+  }
 }

@@ -409,8 +409,10 @@ export default function SettingsPage() {
         <div className="flex items-center gap-2">
           <Bell className="h-4 w-4 text-teal-400" />
           <div>
-            <h2 className="text-sm font-semibold text-zinc-200">Critical Finding Alerts</h2>
-            <p className="text-xs text-zinc-500">Configure SMTP and get emailed when a critical-severity finding is detected.</p>
+            <h2 className="text-sm font-semibold text-zinc-200">
+              Critical Finding Alerts <span className="ml-1 rounded border border-teal-800 px-1.5 py-0.5 text-[10px] font-medium text-teal-400">Enterprise</span>
+            </h2>
+            <p className="text-xs text-zinc-500">Email (SMTP) and webhook alerts when a critical-severity finding is detected.</p>
           </div>
         </div>
         <ArrowRight className="h-4 w-4 shrink-0 text-zinc-600" />
