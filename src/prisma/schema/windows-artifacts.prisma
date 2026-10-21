@@ -35,6 +35,15 @@ model WindowsArtifactUpload {
   // leaves this null until the other one sets it.
   srumExtensionsMap Json? @db.JsonB @map("srum_extensions_map")
 
+  // The collector's own CollectionManifest (artifact-collection-manifest.json),
+  // when it was included in a collector-folder upload — see
+  // src/lib/windows-artifacts/collection-manifest.ts. Holds the summary
+  // counts plus every non-"Collected" record (Skipped/Failed/
+  // IntegrityMismatch/Deduplicated/CollectedHashFailed), so gaps in the
+  // acquisition itself are visible next to the parsed results. Per-file
+  // hash verification against it lives on WindowsArtifactFile.
+  collectionManifest Json? @db.JsonB @map("collection_manifest")
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -54,10 +63,13 @@ model WindowsArtifactFile {
   uploadId String @map("upload_id") @db.Uuid
   upload   WindowsArtifactUpload @relation(fields: [uploadId], references: [id], onDelete: Cascade)
 
-  // system_hive | software_hive | security_hive | ntuser_hive | amcache_hive | usrclass_hive
-  // | prefetch | lnk | jumplist_automatic | jumplist_custom | mft | usnjrnl | srum_db
-  // | wer_report | wer_dump | recycle_bin | notification_db | search_edb | quarantine_entry
-  // | quarantine_resource | bits_queue | timeline_db
+  // system_hive | software_hive | security_hive | sam_hive | default_hive | ntuser_hive
+  // | amcache_hive | usrclass_hive | prefetch | lnk | jumplist_automatic | jumplist_custom
+  // | mft | usnjrnl | srum_db | wer_report | wer_dump | recycle_bin | notification_db
+  // | search_edb | quarantine_entry | quarantine_resource | bits_queue | timeline_db
+  // | search_sqlite | bits_ese | wmi_subscriptions | wbem_repository
+  // | defender_detection_history | defender_support_log | app_artifact | logfile
+  // | recycle_payload | memory_file | collector_extra
   role     String
   filename String
   // BigInt, not Int — a busy workstation's $MFT alone can exceed Int's
@@ -87,7 +99,7 @@ model WindowsArtifactFile {
   // it lives here rather than on UsnJrnlEntry.
   journalMetadataText String? @map("journal_metadata_text") @db.Text
 
-  // For registry-hive roles only: this hive's own <HIVE>.LOG1/.LOG2
+  // For registry-hive roles: this hive's own <HIVE>.LOG1/.LOG2
   // transaction log companions, when the collector gathered them —
   // regipy's apply_transaction_logs() replays their "dirty page"
   // transactions into a recovered hive before parsing, for a more
@@ -96,8 +108,26 @@ model WindowsArtifactFile {
   // files that must round-trip through disk to reach the Python
   // subprocess), so they get their own storagePath-style columns here
   // rather than an inline text field.
+  // search_sqlite reuses the same two slots for its SQLite -wal/-shm
+  // sidecars (same "companion file next to the main one" shape).
   log1StoragePath String? @map("log1_storage_path")
   log2StoragePath String? @map("log2_storage_path")
+
+  // Where this copy of the artifact came from, so several files of the
+  // same role in one collection stay distinguishable: "live" (the current
+  // system), "historical:<RegBack|Windows.old>" (Registry\Historical),
+  // "restore_point:<shadow id>" (Registry\RestorePoints), or
+  // "volume:<tag>" (NTFS\Volumes\<tag> — a non-system drive's $MFT/$J).
+  // Derived from the collector folder layout at upload time; null for
+  // files uploaded through the individual per-role pickers.
+  provenance String?
+
+  // Hash verification against the collector's CollectionManifest, when
+  // the upload included one: "verified" (manifest SHA-256 == the hash
+  // Core computed on receipt), "mismatch", or "not_in_manifest". Null
+  // when no manifest was uploaded.
+  manifestSha256  String? @map("manifest_sha256")
+  integrityStatus String? @map("integrity_status")
 
   shimcacheEntries  ShimcacheEntry[]
   amcacheEntries    AmcacheEntry[]
@@ -120,6 +150,8 @@ model WindowsArtifactFile {
   quarantinePayloads  DefenderQuarantinePayload[]
   bitsJobEntries      BitsJobEntry[]
   timelineEntries     TimelineActivityEntry[]
+  registryPluginEntries RegistryPluginEntry[]
+  artifactRecords       ArtifactRecordEntry[]
   findings          WindowsArtifactFinding[]
 
   createdAt DateTime  @default(now()) @map("created_at")
@@ -806,4 +838,71 @@ model TimelineActivityEntry {
 
   @@index([fileId])
   @@map("timeline_activity_entries")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Every regipy plugin result (and Forensicator's own hand-rolled SAM/
+// SECURITY extractions) that doesn't already have a dedicated table —
+// SAM accounts (samparse) and local group membership, LSA secret names,
+// cached domain logons, installed programs, IFEO, network profiles,
+// WDigest/LSA configuration, Defender config, execution policy, USB
+// devices, etc. — see registry-parse.py / registry-engine.ts. Plugin
+// output shapes differ completely per plugin, so `details` holds the row
+// verbatim and `summary` is a flattened "key=value; ..." string of its
+// scalar fields — what the results table shows and what Windows Artifact
+// rules match against (registry_plugin subjects, see rule-engine.ts).
+// ─────────────────────────────────────────────────────────────────────────
+model RegistryPluginEntry {
+  id     String              @id @default(uuid()) @db.Uuid
+  fileId String              @map("file_id") @db.Uuid
+  file   WindowsArtifactFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  plugin    String
+  keyPath   String?   @map("key_path") @db.Text
+  timestamp DateTime?
+  summary   String    @db.Text
+  details   Json      @db.JsonB
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([fileId])
+  @@index([plugin])
+  @@map("registry_plugin_entries")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Generic parsed rows for artifact types whose shapes don't warrant a table
+// each — WMI subscriptions/repository hits, Defender DetectionHistory and
+// Support-log events, application artifacts (remote-access connections,
+// Notepad/Notepad++ unsaved text, cloud-sync logs, EDR logs), $LogFile
+// FILE_NAME records, Recycle Bin $R payloads, memory-file indicators and
+// other collector extras. `kind` names the row type (see
+// forensicator_records.py); the indicator columns are what the rule engine
+// (artifact_record subjects) and IOC enrichment read; `details` keeps the
+// full parsed row.
+// ─────────────────────────────────────────────────────────────────────────
+model ArtifactRecordEntry {
+  id     String              @id @default(uuid()) @db.Uuid
+  fileId String              @map("file_id") @db.Uuid
+  file   WindowsArtifactFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  kind      String
+  title     String    @db.Text
+  timestamp DateTime?
+  path      String?   @db.Text
+  userName  String?   @map("user_name")
+  process   String?   @db.Text
+  url       String?   @db.Text
+  ip        String?
+  sha256    String?
+  sha1      String?
+  md5       String?
+  details   Json      @db.JsonB
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([fileId])
+  @@index([kind])
+  @@index([sha256])
+  @@map("artifact_record_entries")
 }

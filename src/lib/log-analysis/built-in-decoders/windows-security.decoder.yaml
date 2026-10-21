@@ -28,7 +28,8 @@ normalize:
       - observer.type: host
       - host.name: regex_extract($event.original, '<Computer>([^<]+)</Computer>')
       - event.code: regex_extract($event.original, '<EventID>(\d+)</EventID>')
-      - event.start: regex_extract($event.original, 'SystemTime=''([^'']+)''')
+      - event.start: regex_extract($event.original, 'SystemTime=.(\d{4}-\d\d-\d\dT[\d:.]+Z?)')
+      - '@timestamp': regex_extract($event.original, 'SystemTime=.(\d{4}-\d\d-\d\dT[\d:.]+Z?)')
       - process.pid: regex_extract($event.original, '<Data Name=.ProcessId.>\S*?(\d+)\S*?</Data>')
 
   # User fields

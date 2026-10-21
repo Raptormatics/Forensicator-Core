@@ -39,6 +39,10 @@ export interface DecoderDef {
   parents?: string[];
   /** Check expression evaluated before any parsing */
   check?: string;
+  /** YAML `priority:` — among decoders whose check matches the same line,
+   * the higher priority wins (e.g. the Sysmon decoder at 55 over the
+   * generic Windows XML decoder at 40). Defaults to 0. */
+  priority: number;
   /** Compiled parse patterns (from parse|event.original) */
   patterns: CompiledPattern[];
   /** Normalize blocks */
@@ -131,6 +135,7 @@ export interface DecoderYaml {
   };
   parents?: string[];
   check?: string;
+  priority?: number;
   [parseKey: string]: unknown; // parse|event.original: string[]
   normalize?: Array<{
     check?: string;

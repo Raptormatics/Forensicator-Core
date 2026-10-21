@@ -1,0 +1,71 @@
+name: decoder/windows-taskscheduler/0
+enabled: true
+
+metadata:
+  title: 'Windows Task Scheduler Operational Log Decoder'
+  author: 'Forensicator'
+  date: '2026-10-20'
+  description: >-
+    Decoder for Microsoft-Windows-TaskScheduler/Operational — task registered
+    (106), updated (140), deleted (141), launched (129), and action
+    started/completed (200/201). Task registration/deletion is a common
+    persistence and anti-forensics signal.
+  references:
+    - 'https://attack.mitre.org/techniques/T1053/005/'
+
+source_type: windows-event
+priority: 55
+
+check: >-
+  contains($event.original, '<Event xmlns=')
+  AND contains($event.original, '<Channel>Microsoft-Windows-TaskScheduler/Operational</Channel>')
+
+normalize:
+  - map:
+      - event.kind: event
+      - event.dataset: windows.taskscheduler
+      - event.category: array_append(process)
+      - observer.vendor: Microsoft
+      - observer.type: host
+      - host.name: regex_extract($event.original, '<Computer>([^<]+)</Computer>')
+      - event.code: regex_extract($event.original, '<EventID[^>]*>(\d+)</EventID>')
+      - event.start: regex_extract($event.original, 'SystemTime=.(\d{4}-\d\d-\d\dT[\d:.]+Z?)')
+      - '@timestamp': regex_extract($event.original, 'SystemTime=.(\d{4}-\d\d-\d\dT[\d:.]+Z?)')
+      - scheduled_task.name: regex_extract($event.original, '<Data Name=.TaskName.>([^<]+)</Data>')
+      - message: regex_extract($event.original, '<Data Name=.TaskName.>([^<]+)</Data>')
+
+  - check: string_equal($event.code, '106')
+    map:
+      - event.type: array_append(creation)
+      - event.action: scheduled-task-registered
+      - user.name: regex_extract($event.original, '<Data Name=.UserContext.>([^<]+)</Data>')
+
+  - check: string_equal($event.code, '140')
+    map:
+      - event.type: array_append(change)
+      - event.action: scheduled-task-updated
+      - user.name: regex_extract($event.original, '<Data Name=.UserName.>([^<]+)</Data>')
+
+  - check: string_equal($event.code, '141')
+    map:
+      - event.type: array_append(deletion)
+      - event.action: scheduled-task-deleted
+      - user.name: regex_extract($event.original, '<Data Name=.UserName.>([^<]+)</Data>')
+
+  - check: string_equal($event.code, '129')
+    map:
+      - event.type: array_append(start)
+      - event.action: scheduled-task-process-created
+      - process.executable: regex_extract($event.original, '<Data Name=.Path.>([^<]+)</Data>')
+      - process.name: regex_extract($event.original, '<Data Name=.Path.>([^<]+)</Data>')
+      - process.pid: parse_long(regex_extract($event.original, '<Data Name=.ProcessID.>(\d+)</Data>'))
+
+  - check: string_equal($event.code, '200') OR string_equal($event.code, '201')
+    map:
+      - event.action: scheduled-task-action
+      - file.path: regex_extract($event.original, '<Data Name=.ActionName.>([^<]+)</Data>')
+      - event.outcome: regex_extract($event.original, '<Data Name=.ResultCode.>([^<]+)</Data>')
+
+  - check: exists($user.name)
+    map:
+      - related.user: array_append_unique($user.name)

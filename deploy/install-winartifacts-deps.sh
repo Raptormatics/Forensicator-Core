@@ -222,10 +222,15 @@ fi
 # breaks the other's import. They're invoked as separate subprocesses
 # anyway (registry-engine.ts / bits-engine.ts each spawn their own
 # python3), so there's no need for them to share an interpreter.
-echo "==> Installing regipy, LnkParse3, olefile, minidump (Windows Artifact Analysis pure-Python dependencies)"
+# python-evtx (pure Python, Apache-2.0) converts raw .evtx uploads to Event
+# XML for Log Analysis (src/lib/log-analysis/evtx-to-xml.py) — same venv,
+# no C dependency. Every other Stage-2 Windows Artifact parser
+# (wmi/defender/app-artifact/logfile/payload/search-sqlite) is stdlib-only;
+# bits-ese-parse.py reuses the system python3 + pyesedb built above.
+echo "==> Installing regipy, LnkParse3, olefile, minidump, python-evtx (Windows Artifact Analysis pure-Python dependencies)"
 runuser -u "$SERVICE_USER" -- bash -lc "
   '${APP_DIR}/.venvs/winartifacts/bin/pip' install --upgrade pip &&
-  '${APP_DIR}/.venvs/winartifacts/bin/pip' install 'regipy[full]' LnkParse3 olefile minidump
+  '${APP_DIR}/.venvs/winartifacts/bin/pip' install 'regipy[full]' LnkParse3 olefile minidump python-evtx
 " || echo "WARNING: one or more pure-Python Windows Artifact Analysis dependencies failed to install — affected artifact types will be unavailable until installed manually"
 
 if [[ ! -x "${APP_DIR}/.venvs/winartifacts-bits/bin/python3" ]]; then

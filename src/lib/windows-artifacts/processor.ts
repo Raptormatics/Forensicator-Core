@@ -21,10 +21,10 @@ import fs from "fs";
 import path from "path";
 import { randomUUID } from "crypto";
 import { prisma } from "@/lib/db/prisma";
-import { getWinArtifactsPythonPath, getPrefetchPythonPath, getWinArtifactsSystemPythonPath, getWinArtifactsBitsPythonPath, getWinArtifactsDir } from "@/lib/settings/system";
+import { getWinArtifactsPythonPath, getPrefetchPythonPath, getWinArtifactsSystemPythonPath, getWinArtifactsBitsPythonPath, getWinArtifactsDir, getVolatilityPath } from "@/lib/settings/system";
 import {
   runRegistryParse, mapShimcacheEntries, mapAmcacheEntries, mapBamEntries, mapShellbagEntries,
-  type RegistryRole,
+  mapUnmappedPluginEntries, type RegistryRole, type RegistryPluginRow,
 } from "./registry-engine";
 import { runPrefetchParse, type PrefetchEntryRow } from "./prefetch-engine";
 import { runLnkParse, type LnkEntryRow, type LnkRole } from "./lnk-engine";
@@ -40,13 +40,51 @@ import { runSearchIndexParse, type SearchIndexRow } from "./search-engine";
 import { runBitsParse, type BitsJobRow } from "./bits-engine";
 import { runTimelineParse, type TimelineEntryRow } from "./timeline-engine";
 import { runQuarantineEntryParse, runQuarantinePayloadParse, type QuarantineEntryRow, type QuarantinePayloadRow } from "./defender-quarantine-engine";
+import { runRecordParse, type ArtifactRecordRow } from "./record-engine";
+import { runYaraScan } from "@/lib/yara/engine";
 import { buildSubjects, runRules, type StoredWinArtifactRule } from "./rule-engine";
 import { isEnriched, type IocLookupMap } from "@/lib/rule-engine/ioc-lookup";
 import { autoEnrichNewIocs, type NewIocRecord } from "@/lib/intelligence/auto-enrich";
 import { notifyCriticalFindings } from "@/lib/notifications/critical-finding-alert";
 
-const REGISTRY_ROLES: RegistryRole[] = ["system_hive", "software_hive", "security_hive", "ntuser_hive", "amcache_hive", "usrclass_hive"];
+const REGISTRY_ROLES: RegistryRole[] = ["system_hive", "software_hive", "security_hive", "sam_hive", "default_hive", "ntuser_hive", "amcache_hive", "usrclass_hive"];
 const LNK_ROLES: LnkRole[] = ["lnk", "jumplist_custom"];
+
+// Stage-2 roles, all run through record-engine.ts's shared runner. `python`
+// picks the interpreter tier: "system" for scripts that need a libyal
+// binding (pyesedb), "venv" for stdlib-only scripts. Timeouts scale with
+// how large the input realistically gets (a pagefile is GBs; a $I file isn't).
+type RecordRoleSpec = {
+  script: string;
+  python: "venv" | "system";
+  timeoutSeconds: number;
+  label: string;
+  args: (file: { filename: string; log1StoragePath: string | null; log2StoragePath: string | null }, filePath: string) => string[];
+};
+
+function appTarget(filename: string): { target: string; rel: string } {
+  // filename keeps the collector-relative path, e.g.
+  // "ApplicationArtifacts/AnyDesk_logs_and_connection_traces/FAVOUR/ad.trace".
+  const parts = filename.replace(/\\/g, "/").split("/");
+  const i = parts.findIndex((p) => p.toLowerCase() === "applicationartifacts");
+  return i >= 0 && parts.length > i + 2
+    ? { target: parts[i + 1], rel: parts.slice(i + 2).join("/") }
+    : { target: "custom", rel: filename };
+}
+
+const RECORD_ROLES: Record<string, RecordRoleSpec> = {
+  search_sqlite:              { script: "search-sqlite-parse.py", python: "venv", timeoutSeconds: 60 * 60, label: "Windows Search SQLite database", args: (f, p) => [p, f.log1StoragePath ?? "", f.log2StoragePath ?? ""] },
+  bits_ese:                   { script: "bits-ese-parse.py", python: "system", timeoutSeconds: 15 * 60, label: "BITS qmgr.db", args: (_f, p) => [p] },
+  wmi_subscriptions:          { script: "wmi-parse.py", python: "venv", timeoutSeconds: 5 * 60, label: "WMI subscriptions", args: (_f, p) => [p, "subscriptions"] },
+  wbem_repository:            { script: "wmi-parse.py", python: "venv", timeoutSeconds: 20 * 60, label: "WBEM repository", args: (_f, p) => [p, "repository"] },
+  defender_detection_history: { script: "defender-history-parse.py", python: "venv", timeoutSeconds: 5 * 60, label: "Defender DetectionHistory", args: (_f, p) => [p, "detection_history"] },
+  defender_support_log:       { script: "defender-history-parse.py", python: "venv", timeoutSeconds: 15 * 60, label: "Defender Support log", args: (_f, p) => [p, "support_log"] },
+  app_artifact:               { script: "app-artifact-parse.py", python: "venv", timeoutSeconds: 15 * 60, label: "Application artifact", args: (f, p) => { const t = appTarget(f.filename); return [p, t.target, t.rel]; } },
+  logfile:                    { script: "logfile-parse.py", python: "venv", timeoutSeconds: 60 * 60, label: "NTFS $LogFile", args: (_f, p) => [p] },
+  recycle_payload:            { script: "payload-parse.py", python: "venv", timeoutSeconds: 15 * 60, label: "Recycle Bin payload", args: (f, p) => [p, "recycle_payload", f.filename] },
+  memory_file:                { script: "payload-parse.py", python: "venv", timeoutSeconds: 3 * 60 * 60, label: "memory-backed file", args: (f, p) => [p, "memory_file", f.filename] },
+  collector_extra:            { script: "extras-parse.py", python: "venv", timeoutSeconds: 15 * 60, label: "collector extra", args: (f, p) => [p, f.filename] },
+};
 
 // Prisma/Postgres have a practical parameter-count limit per query that
 // the existing small-row-count artifact types never had to think about —
@@ -95,6 +133,8 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
       prisma.defenderQuarantinePayload.deleteMany({ where: { fileId } }),
       prisma.bitsJobEntry.deleteMany({ where: { fileId } }),
       prisma.timelineActivityEntry.deleteMany({ where: { fileId } }),
+      prisma.registryPluginEntry.deleteMany({ where: { fileId } }),
+      prisma.artifactRecordEntry.deleteMany({ where: { fileId } }),
       prisma.windowsArtifactFinding.deleteMany({ where: { fileId } }),
     ]);
 
@@ -105,6 +145,10 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
     let userAssistRows: import("./registry-engine").UserAssistRow[] = [];
     let autorunRows: import("./registry-engine").AutorunRow[] = [];
     let shellbagRows: ReturnType<typeof mapShellbagEntries> = [];
+    let registryPluginRows: RegistryPluginRow[] = [];
+    let artifactRecordRows: ArtifactRecordRow[] = [];
+    // Pre-computed findings that don't come from the rule engine (YARA hits).
+    const directFindings: { title: string; description: string; severity: string; matchedField: string; matchedValue: string }[] = [];
     let prefetchRows: PrefetchEntryRow[] = [];
     let lnkRows: LnkEntryRow[] = [];
     let jumpListRows: JumpListEntryRow[] = [];
@@ -147,6 +191,9 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
       amcacheRows = file.role === "amcache_hive" ? mapAmcacheEntries(result.pluginEntries) : [];
       bamRows = file.role === "system_hive" ? mapBamEntries(result.pluginEntries) : [];
       shellbagRows = (file.role === "usrclass_hive" || file.role === "ntuser_hive") ? mapShellbagEntries(result.pluginEntries) : [];
+      // Every other plugin (samparse, LSA secrets, cached logons, installed
+      // programs, IFEO, WDigest, ...) — kept generically rather than dropped.
+      registryPluginRows = mapUnmappedPluginEntries(result.pluginEntries);
       userAssistRows = result.userAssist;
       autorunRows = result.autoruns;
 
@@ -216,6 +263,16 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
           })),
         });
       }
+      await chunkedCreateMany(
+        (data) => prisma.registryPluginEntry.createMany({ data }),
+        registryPluginRows.map((r) => ({
+          fileId, plugin: r.plugin,
+          keyPath: r.keyPath ?? undefined,
+          timestamp: r.timestamp ? new Date(r.timestamp) : undefined,
+          summary: r.summary,
+          details: r.details as object,
+        }))
+      );
       if (shellbagRows.length > 0) {
         await prisma.shellbagEntry.createMany({
           data: shellbagRows.map((r) => ({
@@ -637,7 +694,10 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
         await prisma.recycleBinEntry.createMany({
           data: recycleBinRows.map((r) => ({
             fileId,
-            sid: file.profileName ?? "unknown",
+            // profileName carries the $Recycle.Bin\<SID> folder name for
+            // collector-folder uploads; the folder-picker path's relative
+            // filename carries it too for the per-role picker.
+            sid: file.profileName ?? file.filename.match(/S-1-[0-9-]+/)?.[0] ?? "unknown",
             sourceFileName: file.filename,
             formatVersion: r.formatVersion,
             originalPath: r.originalPath,
@@ -925,6 +985,117 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
         });
       }
       // No IOC upsert step — Windows Timeline carries no hash to look up.
+    } else if (RECORD_ROLES[file.role]) {
+      // 3. Stage-2 artifact types — one shared runner (record-engine.ts).
+      const spec = RECORD_ROLES[file.role];
+      const pythonPath = spec.python === "system" ? await getWinArtifactsSystemPythonPath() : await getWinArtifactsPythonPath();
+      const result = await runRecordParse(pythonPath, spec.script, spec.args(file, filePath), spec.timeoutSeconds);
+
+      if (result.status === "not_installed") {
+        throw new Error(`${spec.script} reported a missing dependency — see deploy/install-winartifacts-deps.sh.`);
+      }
+      if (result.status === "timeout") {
+        throw new Error(`${spec.label} parsing timed out.`);
+      }
+      if (result.status === "error") {
+        throw new Error(result.message);
+      }
+      for (const err of result.scriptErrors) {
+        console.warn(`[windows-artifacts] ${spec.script} reported: ${err}`);
+      }
+
+      // 4. Generic records, plus rows destined for the existing Search/BITS tables.
+      artifactRecordRows = result.records;
+      await chunkedCreateMany(
+        (data) => prisma.artifactRecordEntry.createMany({ data }),
+        artifactRecordRows.map((r) => {
+          const ts = r.timestamp ? new Date(r.timestamp) : null;
+          return {
+            fileId, kind: r.kind, title: r.title,
+            timestamp: ts && !Number.isNaN(ts.getTime()) ? ts : undefined,
+            path: r.path ?? undefined, userName: r.user ?? undefined, process: r.process ?? undefined,
+            url: r.url ?? undefined, ip: r.ip ?? undefined,
+            sha256: r.sha256 ?? undefined, sha1: r.sha1 ?? undefined, md5: r.md5 ?? undefined,
+            details: r.details as object,
+          };
+        })
+      );
+      if (result.searchEntries.length > 0) {
+        await chunkedCreateMany(
+          (data) => prisma.searchIndexEntry.createMany({ data }),
+          result.searchEntries.map((r) => ({ fileId, tableName: r.tableName, recordIndex: r.recordIndex, details: r.details as object }))
+        );
+      }
+      if (result.bitsJobs.length > 0) {
+        bitsRows = result.bitsJobs;
+        await prisma.bitsJobEntry.createMany({
+          data: bitsRows.map((r) => ({
+            fileId,
+            jobId: r.jobId ?? undefined, name: r.name ?? undefined, desc: r.desc ?? undefined, cmd: r.cmd ?? undefined,
+            sid: r.sid ?? undefined, jobType: r.jobType ?? undefined, priority: r.priority ?? undefined, state: r.state ?? undefined,
+            ctime: r.ctime ? new Date(r.ctime) : undefined, mtime: r.mtime ? new Date(r.mtime) : undefined,
+            destFn: r.destFn ?? undefined, srcFn: r.srcFn ?? undefined, tmpFn: r.tmpFn ?? undefined,
+            downloadSizeBytes: r.downloadSizeBytes != null ? BigInt(r.downloadSizeBytes) : undefined,
+            transferSizeBytes: r.transferSizeBytes != null ? BigInt(r.transferSizeBytes) : undefined,
+            isCarved: r.isCarved,
+          })),
+        });
+      }
+
+      // 5. File hashes (Recycle Bin payloads, Defender detections/cloud
+      // lookups) -> global IocRecord, same pattern as Amcache SHA1 above.
+      const now = new Date();
+      const newIocRecords: NewIocRecord[] = [];
+      const distinctHashes = new Set(artifactRecordRows.flatMap((r) => [r.sha256, r.sha1]).filter((h): h is string => !!h));
+      for (const hash of distinctHashes) {
+        try {
+          const existing = await prisma.iocRecord.findUnique({ where: { value: hash } });
+          if (existing) {
+            iocLookupMap.set(hash, { reputation: existing.reputation, threatType: existing.threatType, malwareFamily: existing.malwareFamily });
+          }
+          const rec = await prisma.iocRecord.upsert({
+            where: { value: hash },
+            create: { value: hash, type: "hash", firstSeen: now, lastSeen: now },
+            update: { lastSeen: now },
+          });
+          if (!existing) newIocRecords.push({ id: rec.id, value: rec.value, type: "hash" });
+        } catch (iocErr) {
+          console.warn("[windows-artifacts] IocRecord row skipped:", hash, iocErr instanceof Error ? iocErr.message : iocErr);
+        }
+      }
+      if (newIocRecords.length > 0) {
+        await autoEnrichNewIocs(newIocRecords, file.upload.organizationId ?? undefined).catch((err) =>
+          console.warn("[windows-artifacts] Auto-enrichment skipped:", err instanceof Error ? err.message : err)
+        );
+      }
+
+      // 5b. Recycle Bin payloads are actual file content — scan them with
+      // the RAM Analysis YARA ruleset (file-oriented malware signatures),
+      // same shared engine and same "missing yara-python just skips" posture.
+      if (file.role === "recycle_payload") {
+        const yaraRules = await prisma.ramYaraRule.findMany({
+          where: { enabled: true, OR: [...(file.upload.organizationId ? [{ organizationId: file.upload.organizationId }] : []), { organizationId: null }] },
+        });
+        if (yaraRules.length > 0) {
+          const yaraResult = await runYaraScan(await getVolatilityPath(), filePath, yaraRules.map((r) => ({ id: r.id, yaraSource: r.yaraSource })), 10 * 60);
+          if (yaraResult.status === "ok") {
+            const ruleIds = new Set(yaraResult.matches.map((m) => m.ruleId));
+            for (const ruleId of ruleIds) {
+              const rule = yaraRules.find((r) => r.id === ruleId);
+              if (!rule) continue;
+              directFindings.push({
+                title: `YARA: ${rule.name}`,
+                description: rule.description ?? `YARA rule ${rule.name} matched a Recycle Bin payload`,
+                severity: rule.severity,
+                matchedField: "recycle_payload",
+                matchedValue: file.filename,
+              });
+            }
+          } else {
+            console.warn(`[windows-artifacts] YARA scan of ${file.filename} skipped: ${yaraResult.status}`);
+          }
+        }
+      }
     } else {
       throw new Error(`Unsupported artifact role (not yet implemented): ${file.role}`);
     }
@@ -950,6 +1121,8 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
         mft: mftRows, usnjrnl: usnJrnlRows, srum: srumRows,
         wer: werReportRows, werDump: werDumpRows, recyclebin: recycleBinRows, bits: bitsRows,
         quarantinePayload: quarantinePayloadRows, timeline: timelineRows,
+        registryPlugin: registryPluginRows,
+        artifactRecord: artifactRecordRows,
       });
       const matches = runRules(rules as unknown as StoredWinArtifactRule[], subjects, iocLookupMap);
 
@@ -978,6 +1151,14 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
 
         await prisma.windowsArtifactRule.update({ where: { id: ruleId }, data: { hitCount: { increment: hits.length } } });
       }
+    }
+
+    for (const f of directFindings) {
+      await prisma.windowsArtifactFinding.create({
+        data: { fileId, title: f.title, description: f.description, severity: f.severity, matchCount: 1, matchedField: f.matchedField, matchedValue: f.matchedValue },
+      });
+      findingTotal++;
+      criticalCandidates.push({ title: f.title, severity: f.severity, sourceLabel: "Windows Artifacts", detailPath });
     }
 
     await notifyCriticalFindings(criticalCandidates).catch((err) =>

@@ -1,0 +1,102 @@
+name: decoder/windows-defender/0
+enabled: true
+
+metadata:
+  title: 'Windows Defender Operational Log Decoder'
+  author: 'Forensicator'
+  date: '2026-10-20'
+  description: >-
+    Decoder for Microsoft-Windows-Windows Defender/Operational. Extracts the
+    threat name, detected path, process, and user from detections (1116/1117,
+    1006/1007), and labels protection-tampering events: real-time protection
+    or scanning disabled (5001/5010/5012), configuration changes (5007 — e.g.
+    an exclusion being added), tamper-protection blocks (5013), ASR rule
+    blocks/audits (1121/1122) and detection-history deletion (1013).
+  references:
+    - 'https://learn.microsoft.com/en-us/defender-endpoint/troubleshoot-microsoft-defender-antivirus'
+
+source_type: windows-event
+priority: 55
+
+check: >-
+  contains($event.original, '<Event xmlns=')
+  AND contains($event.original, '<Channel>Microsoft-Windows-Windows Defender/Operational</Channel>')
+
+normalize:
+  - map:
+      - event.kind: alert
+      - event.dataset: windows.defender
+      - observer.vendor: Microsoft
+      - observer.product: Microsoft Defender Antivirus
+      - observer.type: host
+      - host.name: regex_extract($event.original, '<Computer>([^<]+)</Computer>')
+      - event.code: regex_extract($event.original, '<EventID[^>]*>(\d+)</EventID>')
+      - event.start: regex_extract($event.original, 'SystemTime=.(\d{4}-\d\d-\d\dT[\d:.]+Z?)')
+      - '@timestamp': regex_extract($event.original, 'SystemTime=.(\d{4}-\d\d-\d\dT[\d:.]+Z?)')
+      - threat.name: regex_extract($event.original, '<Data Name=.Threat Name.>([^<]+)</Data>')
+      - threat.severity: regex_extract($event.original, '<Data Name=.Severity Name.>([^<]+)</Data>')
+      - threat.category: regex_extract($event.original, '<Data Name=.Category Name.>([^<]+)</Data>')
+      - threat.detection_source: regex_extract($event.original, '<Data Name=.Source Name.>([^<]+)</Data>')
+      - threat.action: regex_extract($event.original, '<Data Name=.Action Name.>([^<]+)</Data>')
+      # Path is "<scheme>:_<path>[; <scheme>:_<path>...]" — file:_, amsi:_,
+      # process:_, containerfile:_ ... — keep the first path, without scheme.
+      - file.path: regex_extract($event.original, '<Data Name=.Path.>(?:[a-z]+:_)?([^<;]+)')
+      - process.executable: regex_extract($event.original, '<Data Name=.Process Name.>([^<]+)</Data>')
+      - process.name: regex_extract($event.original, '<Data Name=.Process Name.>([^<]+)</Data>')
+      - user.name: regex_extract($event.original, '<Data Name=.Detection User.>([^<]+)</Data>')
+      - message: regex_extract($event.original, '<Data Name=.Threat Name.>([^<]+)</Data>')
+
+  - check: string_equal($event.code, '1116') OR string_equal($event.code, '1006')
+    map:
+      - event.category: array_append(malware)
+      - event.type: array_append(info)
+      - event.action: malware-detected
+
+  - check: string_equal($event.code, '1117') OR string_equal($event.code, '1007')
+    map:
+      - event.category: array_append(malware)
+      - event.type: array_append(deletion)
+      - event.action: malware-action-taken
+
+  - check: string_equal($event.code, '1118') OR string_equal($event.code, '1119')
+    map:
+      - event.category: array_append(malware)
+      - event.action: malware-action-failed
+
+  - check: string_equal($event.code, '5001') OR string_equal($event.code, '5010') OR string_equal($event.code, '5012')
+    map:
+      - event.category: array_append(configuration)
+      - event.type: array_append(change)
+      - event.action: protection-disabled
+
+  - check: string_equal($event.code, '5007')
+    map:
+      - event.category: array_append(configuration)
+      - event.type: array_append(change)
+      - event.action: configuration-changed
+      - registry.old_value: regex_extract($event.original, '<Data Name=.Old Value.>([^<]*)</Data>')
+      - registry.new_value: regex_extract($event.original, '<Data Name=.New Value.>([^<]*)</Data>')
+      - message: regex_extract($event.original, '<Data Name=.New Value.>([^<]*)</Data>')
+
+  - check: string_equal($event.code, '5013')
+    map:
+      - event.category: array_append(configuration)
+      - event.action: tamper-protection-blocked
+
+  - check: string_equal($event.code, '1121') OR string_equal($event.code, '1122')
+    map:
+      - event.category: array_append(intrusion_detection)
+      - event.action: asr-rule-triggered
+      - file.path: regex_extract($event.original, '<Data Name=.Path.>([^<]+)</Data>')
+      - rule.id: regex_extract($event.original, '<Data Name=.ID.>([^<]+)</Data>')
+
+  - check: string_equal($event.code, '1013')
+    map:
+      - event.category: array_append(configuration)
+      - event.type: array_append(deletion)
+      - event.action: detection-history-deleted
+      - user.name: regex_extract($event.original, '<Data Name=.User.>([^<]+)</Data>')
+
+  - check: exists($user.name)
+    map:
+      - related.user: array_append_unique($user.name)

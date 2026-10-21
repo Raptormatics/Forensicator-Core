@@ -18,7 +18,7 @@ priority: 55
 
 check: >-
   starts_with($event.original, '<Event xmlns=')
-  AND contains($event.original, 'Windows PowerShell')
+  AND regex_match($event.original, '<Channel>(?:Microsoft-Windows-PowerShell/Operational|Windows PowerShell)</Channel>')
 
 normalize:
   - map:
@@ -29,7 +29,8 @@ normalize:
       - observer.type: host
       - host.name: regex_extract($event.original, '<Computer>([^<]+)</Computer>')
       - event.code: regex_extract($event.original, '<EventID[^>]*>(\d+)</EventID>')
-      - event.start: regex_extract($event.original, 'SystemTime="([^"]+)"')
+      - event.start: regex_extract($event.original, 'SystemTime=.(\d{4}-\d\d-\d\dT[\d:.]+Z?)')
+      - '@timestamp': regex_extract($event.original, 'SystemTime=.(\d{4}-\d\d-\d\dT[\d:.]+Z?)')
       - process.pid: parse_long(regex_extract($event.original, 'ProcessID="(\d+)"'))
       - process.thread.id: regex_extract($event.original, 'ThreadID="(\d+)"')
       - user.id: regex_extract($event.original, '<UserID>([^<]+)</UserID>')

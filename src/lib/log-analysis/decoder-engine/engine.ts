@@ -135,20 +135,27 @@ export function compileDecoder(yamlContent: string, isBuiltin = false): DecoderD
     description:raw.metadata?.description,
     parents:    raw.parents ?? [],
     check:      raw.check != null ? String(raw.check) : undefined,
+    priority:   Number.isFinite(Number(raw.priority)) ? Number(raw.priority) : 0,
     patterns,
     normalize,
     yaml:       yamlContent,
   };
 }
 
-/** Sort: check-present decoders before check-less (more specific first) */
+/** Sort: check-present decoders before check-less (more specific first),
+ * then by YAML `priority:` descending. Without the priority step, order
+ * fell back to DB insertion order — and since seeding inserts the bundled
+ * YAML files alphabetically, the generic windows-event decoder (whose check
+ * matches every Windows XML event) was evaluated before windows-powershell/
+ * windows-security/windows-sysmon and shadowed all three. Array.sort is
+ * stable, so equal-priority decoders keep their existing relative order. */
 function sortDecoders(defs: DecoderDef[]): DecoderDef[] {
   return [...defs].sort((a, b) => {
     const aHasCheck = !!a.check;
     const bHasCheck = !!b.check;
     if (aHasCheck && !bHasCheck) return -1;
     if (!aHasCheck && bHasCheck) return  1;
-    return 0;
+    return (b.priority ?? 0) - (a.priority ?? 0);
   });
 }
 
@@ -203,6 +210,12 @@ export function registerDecoder(def: DecoderDef): void {
   } else {
     _decoders.unshift(def);
   }
+  // Keep the same custom-before-builtin, then check/priority ordering
+  // loadDecoders() produces, and rebuild the index matchDecoder() reads —
+  // previously a registered decoder was never matched at all.
+  _decoders = [...sortDecoders(_decoders.filter((d) => !d.isBuiltin)), ...sortDecoders(_decoders.filter((d) => d.isBuiltin))];
+  _index = buildIndex(_decoders);
+  _loaded = true;
 }
 
 /** Clear all loaded decoders (for testing) */

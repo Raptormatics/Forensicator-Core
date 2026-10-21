@@ -1,0 +1,51 @@
+name: decoder/windows-dfs-replication/0
+enabled: true
+
+metadata:
+  title: 'Windows DFS Replication Log Decoder'
+  author: 'Forensicator'
+  date: '2026-10-20'
+  description: >-
+    Decoder for the "DFS Replication" channel on domain controllers (SYSVOL
+    replication). Labels the events that explain a DC serving stale or
+    divergent Group Policy: replication stopped by content-freshness
+    protection (4012), dirty shutdown (2213), connection/partner errors
+    (5002/5008/5014), and initial sync milestones (4602/4614/4604).
+  references:
+    - 'https://learn.microsoft.com/en-us/troubleshoot/windows-server/group-policy/dfsr-sysvol-fails-migrate-replicate'
+
+source_type: windows-event
+priority: 55
+
+check: >-
+  contains($event.original, '<Event xmlns=')
+  AND contains($event.original, '<Channel>DFS Replication</Channel>')
+
+normalize:
+  - map:
+      - event.kind: event
+      - event.dataset: windows.dfsr
+      - event.category: array_append(file)
+      - observer.vendor: Microsoft
+      - observer.type: host
+      - host.name: regex_extract($event.original, '<Computer>([^<]+)</Computer>')
+      - event.code: regex_extract($event.original, '<EventID[^>]*>(\d+)</EventID>')
+      - event.start: regex_extract($event.original, 'SystemTime=.(\d{4}-\d\d-\d\dT[\d:.]+Z?)')
+      - '@timestamp': regex_extract($event.original, 'SystemTime=.(\d{4}-\d\d-\d\dT[\d:.]+Z?)')
+      - file.path: regex_extract($event.original, '([A-Za-z]:\\[^<]*SYSVOL[^<]*)')
+
+  - check: string_equal($event.code, '4012')
+    map:
+      - event.outcome: failure
+      - event.action: replication-stopped-content-freshness
+  - check: string_equal($event.code, '2213')
+    map:
+      - event.outcome: failure
+      - event.action: replication-stopped-dirty-shutdown
+  - check: string_equal($event.code, '5002') OR string_equal($event.code, '5008') OR string_equal($event.code, '5014')
+    map:
+      - event.outcome: failure
+      - event.action: replication-partner-error
+  - check: string_equal($event.code, '4602') OR string_equal($event.code, '4614') OR string_equal($event.code, '4604')
+    map:
+      - event.action: replication-initial-sync

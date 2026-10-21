@@ -7,6 +7,8 @@ import { requireAuth, orgWhere } from "@/lib/auth/api-guard";
 import { getWinArtifactsDir, getWinArtifactsMaxUploadBytes } from "@/lib/settings/system";
 import { getWinArtifactsQueue } from "@/lib/jobs/queues";
 import type { WinArtifactFileRole } from "@/lib/windows-artifacts/types";
+import { classifyForUpload } from "@/lib/windows-artifacts/collector-layout";
+import { parseCollectionManifest, verifyAgainstManifest, type ParsedCollectionManifest } from "@/lib/windows-artifacts/collection-manifest";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,6 +22,8 @@ const SINGLE_FILE_FIELDS: { field: string; role: WinArtifactFileRole }[] = [
   { field: "system", role: "system_hive" },
   { field: "software", role: "software_hive" },
   { field: "security", role: "security_hive" },
+  { field: "sam", role: "sam_hive" },
+  { field: "default", role: "default_hive" },
   { field: "amcache", role: "amcache_hive" },
   { field: "mft", role: "mft" },
   { field: "srudb", role: "srum_db" },
@@ -31,7 +35,7 @@ const SINGLE_FILE_FIELDS: { field: string; role: WinArtifactFileRole }[] = [
 // Which SINGLE_FILE_FIELDS/per-profile fields can carry an optional
 // <field>Log1/<field>Log2 pair (the hive's own .LOG1/.LOG2 transaction
 // logs) — only registry hives have these, not $MFT/SRUDB.dat/etc.
-const HIVE_FIELDS_WITH_LOGS = new Set(["system", "software", "security", "amcache"]);
+const HIVE_FIELDS_WITH_LOGS = new Set(["system", "software", "security", "sam", "default", "amcache"]);
 
 function isUploadedFile(v: FormDataEntryValue | null): v is File {
   return !!v && typeof v !== "string" && "arrayBuffer" in v;
@@ -118,8 +122,11 @@ export async function POST(req: NextRequest) {
     type PendingFile = {
       role: WinArtifactFileRole; profileName: string | null; relativePath?: string | null;
       journalMetadataText?: string | null; log1File?: File | null; log2File?: File | null;
+      // Collector-folder mode only (see below): where this copy came from,
+      // and its path relative to WindowsArtifacts for manifest verification.
+      provenance?: string | null; manifestPath?: string | null;
       // Exactly one of these is set. A plain multipart File for every field
-      // except the 9 SINGLE_FILE_FIELDS, which may instead reference an
+      // except the SINGLE_FILE_FIELDS and collector-folder entries, which may instead reference an
       // already chunk-uploaded file (see src/app/api/windows-artifacts/
       // uploads/staged/** — large single files like $MFT can't safely go
       // through formData() at all, see that route's own doc comment).
@@ -127,6 +134,70 @@ export async function POST(req: NextRequest) {
       stagedFile?: { id: string; storagePath: string; totalBytes: bigint; filename: string };
     };
     const pending: PendingFile[] = [];
+    let manifest: ParsedCollectionManifest | null = null;
+
+    // ── Collector-folder mode ────────────────────────────────────────────
+    // The upload page's "Collector folder" picker sends every file under
+    // the collector's artifacts folder as `cf` + `cfPath` (its path
+    // relative to the host's `artifacts` folder, e.g.
+    // "WindowsArtifacts/Registry/SYSTEM"), or — for files large enough to
+    // need chunked staging — `cfStagedId` + `cfStagedPath`. Roles are
+    // re-derived here from the path via the same classifier the page used
+    // (collector-layout.ts), never trusted from the client; hives pick up
+    // their .LOG1/.LOG2 and $J its fsutil metadata by groupKey; the
+    // collector's CollectionManifest is parsed for hash verification.
+    // Coexists with the per-role fields below — both may be sent at once.
+    type CollectorEntry = { relPath: string; file?: File; staged?: PendingFile["stagedFile"] };
+    const collectorEntries: CollectorEntry[] = [];
+    const cfFiles = formData.getAll("cf");
+    const cfPaths = formData.getAll("cfPath").map((v) => String(v));
+    cfFiles.forEach((f, i) => { if (isUploadedFile(f) && cfPaths[i]) collectorEntries.push({ relPath: cfPaths[i], file: f }); });
+    const cfStagedIds = formData.getAll("cfStagedId").map((v) => String(v).trim());
+    const cfStagedPaths = formData.getAll("cfStagedPath").map((v) => String(v));
+    for (let i = 0; i < cfStagedIds.length; i++) {
+      const staged = await prisma.windowsArtifactStagedFile.findUnique({ where: { id: cfStagedIds[i] } });
+      if (!staged || staged.uploadedById !== actor.id || staged.status !== "staged") {
+        return NextResponse.json(
+          { error: "invalid_staged_file", message: `The staged upload for "${cfStagedPaths[i] ?? cfStagedIds[i]}" was not found or has already been used/expired. Re-select the folder and try again.` },
+          { status: 400 }
+        );
+      }
+      collectorEntries.push({ relPath: cfStagedPaths[i] ?? staged.filename, staged: { id: staged.id, storagePath: staged.storagePath, totalBytes: staged.totalBytes, filename: staged.filename } });
+    }
+
+    if (collectorEntries.length > 0) {
+      const byGroup = new Map<string, PendingFile>();
+      const sidecars: { entry: CollectorEntry; sidecar: "log1" | "log2" | "usn_metadata"; attachTo: string }[] = [];
+      for (const entry of collectorEntries) {
+        const c = classifyForUpload(entry.relPath);
+        if (c.kind === "manifest" && entry.file) {
+          try {
+            manifest = parseCollectionManifest(Buffer.from(await entry.file.arrayBuffer()));
+          } catch (err) {
+            return NextResponse.json({ error: "invalid_manifest", message: `CollectionManifest could not be parsed: ${err instanceof Error ? err.message : String(err)}` }, { status: 400 });
+          }
+        } else if (c.kind === "artifact") {
+          byGroup.set(c.groupKey, {
+            role: c.role, profileName: c.profileName, provenance: c.provenance,
+            relativePath: entry.relPath,
+            // The manifest only covers WindowsArtifacts, keyed relative to it.
+            manifestPath: /^windowsartifacts\//i.test(entry.relPath) ? entry.relPath.slice("WindowsArtifacts/".length) : null,
+            file: entry.file, stagedFile: entry.staged,
+          });
+        } else if (c.kind === "sidecar") {
+          sidecars.push({ entry, sidecar: c.sidecar, attachTo: c.attachTo });
+        }
+        // "unsupported"/"ignored" are listed client-side and simply not uploaded.
+      }
+      for (const { entry, sidecar, attachTo } of sidecars) {
+        const owner = byGroup.get(attachTo);
+        if (!owner || !entry.file) continue; // sidecars are always small — never staged
+        if (sidecar === "log1") owner.log1File = entry.file;
+        else if (sidecar === "log2") owner.log2File = entry.file;
+        else owner.journalMetadataText = await entry.file.text();
+      }
+      pending.push(...byGroup.values());
+    }
 
     for (const { field, role } of SINGLE_FILE_FIELDS) {
       const stagedId = String(formData.get(`${field}StagedId`) ?? "").trim();
@@ -256,7 +327,7 @@ export async function POST(req: NextRequest) {
     timelineFiles.forEach((file, i) => pending.push({ role: "timeline_db", file, profileName: timelineNames[i]?.trim() || null }));
 
     if (pending.length === 0) {
-      return NextResponse.json({ error: "no_files", message: "Upload at least one artifact file (SYSTEM, SOFTWARE, NTUSER.DAT, or Amcache.hve)." }, { status: 400 });
+      return NextResponse.json({ error: "no_files", message: "Upload at least one artifact file (SYSTEM, SOFTWARE, NTUSER.DAT, or Amcache.hve), or a collector WindowsArtifacts folder." }, { status: 400 });
     }
 
     const totalBytes = pending.reduce((sum, p) => sum + (p.file ? p.file.size : Number(p.stagedFile!.totalBytes)), 0);
@@ -269,6 +340,7 @@ export async function POST(req: NextRequest) {
     const upload = await prisma.windowsArtifactUpload.create({
       data: {
         hostname, notes,
+        collectionManifest: manifest ? (manifest.stored as unknown as object) : undefined,
         uploadedById: actor.id,
         organizationId: orgId ?? (actor.organizationIds[0] ?? null),
         caseId,
@@ -289,6 +361,7 @@ export async function POST(req: NextRequest) {
       const fileSize = p.file ? p.file.size : Number(p.stagedFile!.totalBytes);
       const buffer = p.file ? Buffer.from(await p.file.arrayBuffer()) : null;
       const sha256 = buffer ? crypto.createHash("sha256").update(buffer).digest("hex") : await sha256OfFile(p.stagedFile!.storagePath);
+      const integrity = verifyAgainstManifest(manifest, p.manifestPath ?? null, sha256);
 
       const fileRow = await prisma.windowsArtifactFile.create({
         data: {
@@ -300,6 +373,9 @@ export async function POST(req: NextRequest) {
           status: "queued",
           profileName: p.profileName,
           journalMetadataText: p.journalMetadataText ?? null,
+          provenance: p.provenance ?? null,
+          manifestSha256: integrity.manifestSha256,
+          integrityStatus: integrity.integrityStatus,
         },
       });
 

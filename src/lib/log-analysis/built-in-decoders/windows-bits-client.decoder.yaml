@@ -1,0 +1,72 @@
+name: decoder/windows-bits-client/0
+enabled: true
+
+metadata:
+  title: 'Windows BITS-Client Operational Log Decoder'
+  author: 'Forensicator'
+  date: '2026-10-20'
+  description: >-
+    Decoder for Microsoft-Windows-Bits-Client/Operational — job created (3,
+    with the creating process), transfer started/stopped/failed (59/60/61,
+    with the remote URL), and job completed (16403, remote and local file
+    names). BITS is routinely abused to download and persist payloads.
+  references:
+    - 'https://attack.mitre.org/techniques/T1197/'
+
+source_type: windows-event
+priority: 55
+
+check: >-
+  contains($event.original, '<Event xmlns=')
+  AND contains($event.original, '<Channel>Microsoft-Windows-Bits-Client/Operational</Channel>')
+
+normalize:
+  - map:
+      - event.kind: event
+      - event.dataset: windows.bits
+      - event.category: array_append(network)
+      - observer.vendor: Microsoft
+      - observer.type: host
+      - host.name: regex_extract($event.original, '<Computer>([^<]+)</Computer>')
+      - event.code: regex_extract($event.original, '<EventID[^>]*>(\d+)</EventID>')
+      - event.start: regex_extract($event.original, 'SystemTime=.(\d{4}-\d\d-\d\dT[\d:.]+Z?)')
+      - '@timestamp': regex_extract($event.original, 'SystemTime=.(\d{4}-\d\d-\d\dT[\d:.]+Z?)')
+      - bits.job_title: regex_extract($event.original, '<Data Name=.(?:jobTitle|name).>([^<]+)</Data>')
+      - user.name: regex_extract($event.original, '<Data Name=.jobOwner.>([^<]+)</Data>')
+      - url.original: regex_extract($event.original, '<Data Name=.(?:url|RemoteName).>([^<]+)</Data>')
+      - destination.domain: regex_extract($event.original, '<Data Name=.(?:url|RemoteName).>[a-zA-Z]+://([^/:<]+)')
+      - message: regex_extract($event.original, '<Data Name=.(?:jobTitle|name).>([^<]+)</Data>')
+
+  - check: string_equal($event.code, '3')
+    map:
+      - event.type: array_append(creation)
+      - event.action: bits-job-created
+      - process.executable: regex_extract($event.original, '<Data Name=.processPath.>([^<]+)</Data>')
+      - process.name: regex_extract($event.original, '<Data Name=.processPath.>([^<]+)</Data>')
+      - process.pid: parse_long(regex_extract($event.original, '<Data Name=.processId.>(\d+)</Data>'))
+
+  - check: string_equal($event.code, '59')
+    map:
+      - event.type: array_append(start)
+      - event.action: bits-transfer-started
+
+  - check: string_equal($event.code, '60')
+    map:
+      - event.type: array_append(end)
+      - event.action: bits-transfer-stopped
+      - event.outcome: regex_extract($event.original, '<Data Name=.hr.>([^<]+)</Data>')
+
+  - check: string_equal($event.code, '61')
+    map:
+      - event.outcome: failure
+      - event.action: bits-transfer-failed
+
+  - check: string_equal($event.code, '16403')
+    map:
+      - event.type: array_append(end)
+      - event.action: bits-job-completed
+      - file.path: regex_extract($event.original, '<Data Name=.LocalName.>([^<]+)</Data>')
+
+  - check: exists($user.name)
+    map:
+      - related.user: array_append_unique($user.name)

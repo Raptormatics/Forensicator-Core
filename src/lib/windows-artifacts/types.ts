@@ -30,7 +30,20 @@ export type WinArtifactFileRole =
   | "quarantine_entry"
   | "quarantine_resource"
   | "bits_queue"
-  | "timeline_db";
+  | "timeline_db"
+  | "sam_hive"
+  | "default_hive"
+  | "search_sqlite"
+  | "bits_ese"
+  | "wmi_subscriptions"
+  | "wbem_repository"
+  | "defender_detection_history"
+  | "defender_support_log"
+  | "app_artifact"
+  | "logfile"
+  | "recycle_payload"
+  | "memory_file"
+  | "collector_extra";
 
 /** All normalized field names Windows Artifact rules can operate against —
  * mirrors RamField/PcapField's role, rooted in the heterogeneous
@@ -38,11 +51,11 @@ export type WinArtifactFileRole =
  * row shape, since one WindowsArtifactFile can yield several different
  * kinds of subject. */
 export type WinArtifactField =
-  | "artifact_type" // shimcache | amcache | userassist | bam | autorun | prefetch | prefetch_reference | lnk | jumplist | shellbag | mft | usnjrnl | srum | wer | wer_dump | recyclebin | bits | quarantine_payload | timeline
+  | "artifact_type" // shimcache | amcache | userassist | bam | autorun | prefetch | prefetch_reference | lnk | jumplist | shellbag | mft | usnjrnl | srum | wer | wer_dump | recyclebin | bits | quarantine_payload | timeline | registry_plugin | artifact_record
   | "path"
   | "sha1"
   | "run_count"
-  | "category"
+  | "category"          // autorun category, shellbag item type, or (registry_plugin) the regipy plugin name
   | "value_name"
   | "key_path"
   | "sid"
@@ -53,6 +66,7 @@ export type WinArtifactField =
   | "exception_code"    // wer | wer_dump only
   | "is_carved"         // bits only — "true" when the job was recovered via carving, not clean parsing
   | "sha256"            // quarantine_payload only
+  | "summary"           // registry_plugin only — flattened "key=value; ..." plugin row
   | IocRuleField;
 
 export interface WinArtifactRuleCondition {
@@ -78,6 +92,7 @@ export const FIELD_LABELS: Record<WinArtifactField, string> = {
   exception_code: "Exception Code",
   is_carved:      "Recovered via Carving",
   sha256:         "SHA256",
+  summary:        "Registry Plugin Summary",
   ...IOC_FIELD_LABELS,
 };
 

@@ -5,6 +5,7 @@ import { investigationMetadataSchema, uploadMetadataSchema } from "@/lib/schemas
 import type { InvestigationMetadata } from "@/lib/schemas/upload";
 import type { JsonObject } from "@/types/json";
 import type { ParsedUploadFinding, UploadIssue } from "@/types/findings";
+import { convertAdSideFile, isAdSideFile } from "./ad-side-files";
 
 export class UploadValidationError extends Error {
   constructor(
@@ -47,6 +48,9 @@ export function parseInvestigationZip(buffer: Buffer): ParsedInvestigationZip {
 
   const metadata = readMetadata(entries);
   const findingEntries = entries.filter((entry) => isFindingJsonPath(entry.entryName));
+  // Domain-controller CSV/JSON/text side files (investigation\ad\*), turned
+  // into findings after the real finding files so they can borrow a host.
+  const adSideEntries = entries.filter((entry) => isAdSideFile(normalizeZipPath(entry.entryName)));
 
   if (findingEntries.length === 0) {
     throw new UploadValidationError("No finding JSON files were found in the uploaded archive.", [
@@ -81,6 +85,17 @@ export function parseInvestigationZip(buffer: Buffer): ParsedInvestigationZip {
         issues: error instanceof ZodError ? error.flatten() : undefined
       });
       console.warn("[zip] Skipping finding file:", path, error instanceof Error ? error.message : error);
+    }
+  }
+
+  const host = findings.find((f) => f.data.host)?.data.host as JsonObject | undefined;
+  for (const entry of adSideEntries) {
+    const path = normalizeZipPath(entry.entryName);
+    try {
+      findings.push(convertAdSideFile(path, entry.getData().toString("utf8"), host));
+    } catch (error) {
+      skippedFiles.push({ path, message: `Could not convert AD side file ${path}: ${error instanceof Error ? error.message : String(error)}` });
+      console.warn("[zip] Skipping AD side file:", path, error instanceof Error ? error.message : error);
     }
   }
 
@@ -161,6 +176,12 @@ function isFindingJsonPath(path: string) {
   // Always skip metadata files regardless of nesting.
   const filename = normalized.split("/").pop() ?? "";
   if (filename === "metadata.json") {
+    return false;
+  }
+  // case-summary.json is the collector's own roll-up of the findings
+  // themselves (Core computes its own); AD side files are converted
+  // separately (ad-side-files.ts) — neither is a finding-schema object.
+  if (filename === "case-summary.json" || isAdSideFile(normalized)) {
     return false;
   }
 

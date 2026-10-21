@@ -8,6 +8,7 @@ import {
   FileSearch, Plus, Search, Upload, X, File as FileIcon,
 } from "lucide-react";
 import { formatCaseNumber } from "@/lib/cases/case-number";
+import { classifyForUpload, collectorRelativePath, hostnameFromCollectorPath } from "@/lib/windows-artifacts/collector-layout";
 
 type CaseOption = { id: string; caseSeq: number; title: string; status: string; severity: string };
 type Phase = "case" | "select" | "uploading" | "done" | "error";
@@ -32,6 +33,58 @@ const DEFAULT_MAX_TOTAL_BYTES = 5 * 1024 * 1024 * 1024;
 const STAGE_THRESHOLD_BYTES = 100 * 1024 * 1024;
 
 type ProfileFile = { id: string; profileName: string; file: File | null };
+
+// One file from a picked collector folder, with its path relative to the
+// host's `artifacts` folder — the server re-classifies from
+// relPath (src/lib/windows-artifacts/collector-layout.ts), this copy of the
+// classification is only for showing the analyst what will be sent.
+type CollectorFile = { file: File; relPath: string };
+type CollectorSelection = {
+  rootLabel: string;
+  upload: CollectorFile[];           // artifacts + sidecars + manifest
+  roleCounts: Record<string, { count: number; bytes: number }>;
+  unsupported: Record<string, number>;
+  ignoredCount: number;
+  hasManifest: boolean;
+};
+
+const ROLE_LABELS: Record<string, string> = {
+  system_hive: "SYSTEM hive", software_hive: "SOFTWARE hive", security_hive: "SECURITY hive", sam_hive: "SAM hive",
+  default_hive: "DEFAULT hive", amcache_hive: "Amcache.hve", ntuser_hive: "NTUSER.DAT", usrclass_hive: "UsrClass.dat",
+  prefetch: "Prefetch", lnk: "LNK", jumplist_automatic: "Jump Lists (automatic)", jumplist_custom: "Jump Lists (custom)",
+  mft: "$MFT", usnjrnl: "$UsnJrnl:$J", srum_db: "SRUDB.dat", wer_report: "WER reports", wer_dump: "WER dumps",
+  recycle_bin: "Recycle Bin $I", notification_db: "Notification DB", search_edb: "Windows.edb", quarantine_entry: "Quarantine entries",
+  quarantine_resource: "Quarantine payloads", bits_queue: "BITS qmgr", timeline_db: "ActivitiesCache.db",
+  search_sqlite: "Windows Search (SQLite)", bits_ese: "BITS qmgr.db", wmi_subscriptions: "WMI subscriptions",
+  wbem_repository: "WBEM repository", defender_detection_history: "Defender DetectionHistory", defender_support_log: "Defender Support logs",
+  app_artifact: "Application artifacts", logfile: "$LogFile", recycle_payload: "Recycle Bin $R payloads",
+  memory_file: "pagefile/swapfile/hiberfil", collector_extra: "LOG4J / GPResult / RAM extras",
+};
+
+function buildCollectorSelection(files: File[]): CollectorSelection | null {
+  const sel: CollectorSelection = { rootLabel: "", upload: [], roleCounts: {}, unsupported: {}, ignoredCount: 0, hasManifest: false };
+  for (const file of files) {
+    const relPath = collectorRelativePath(file.webkitRelativePath || file.name);
+    if (!relPath) { sel.ignoredCount++; continue; }
+    if (!sel.rootLabel) sel.rootLabel = (file.webkitRelativePath || "").split("/")[0] ?? "";
+    const c = classifyForUpload(relPath);
+    if (c.kind === "artifact") {
+      sel.upload.push({ file, relPath });
+      const rc = (sel.roleCounts[c.role] ??= { count: 0, bytes: 0 });
+      rc.count++; rc.bytes += file.size;
+    } else if (c.kind === "sidecar") {
+      sel.upload.push({ file, relPath });
+    } else if (c.kind === "manifest") {
+      sel.upload.push({ file, relPath });
+      sel.hasManifest = true;
+    } else if (c.kind === "unsupported") {
+      sel.unsupported[c.label] = (sel.unsupported[c.label] ?? 0) + 1;
+    } else {
+      sel.ignoredCount++;
+    }
+  }
+  return Object.keys(sel.roleCounts).length > 0 || sel.hasManifest ? sel : null;
+}
 
 function makeProfileFile(): ProfileFile {
   return { id: Math.random().toString(36).slice(2), profileName: "", file: null };
@@ -79,6 +132,10 @@ export default function UploadWindowsArtifactsPage() {
   const [systemFile, setSystemFile] = useState<HiveFile>(makeHiveFile());
   const [softwareFile, setSoftwareFile] = useState<HiveFile>(makeHiveFile());
   const [securityFile, setSecurityFile] = useState<HiveFile>(makeHiveFile());
+  const [samFile, setSamFile] = useState<HiveFile>(makeHiveFile());
+  const [defaultFile, setDefaultFile] = useState<HiveFile>(makeHiveFile());
+  const [collector, setCollector] = useState<CollectorSelection | null>(null);
+  const [collectorError, setCollectorError] = useState("");
   const [amcacheFile, setAmcacheFile] = useState<HiveFile>(makeHiveFile());
   const [ntuserFiles, setNtuserFiles] = useState<HiveProfileFile[]>([makeHiveProfileFile()]);
   const [usrclassFiles, setUsrclassFiles] = useState<HiveProfileFile[]>([]);
@@ -159,6 +216,7 @@ export default function UploadWindowsArtifactsPage() {
 
   function reset() {
     setSystemFile(makeHiveFile()); setSoftwareFile(makeHiveFile()); setSecurityFile(makeHiveFile()); setAmcacheFile(makeHiveFile());
+    setSamFile(makeHiveFile()); setDefaultFile(makeHiveFile()); setCollector(null); setCollectorError("");
     setNtuserFiles([makeHiveProfileFile()]); setUsrclassFiles([]); setTimelineFiles([]);
     setPrefetchFiles([]); setLnkFiles([]); setJumplistAutomaticFiles([]); setJumplistCustomFiles([]);
     setMftFile(null); setUsnjrnlFile(null); setUsnJournalMetadataFile(null); setSrudbFile(null);
@@ -175,6 +233,8 @@ export default function UploadWindowsArtifactsPage() {
 
   const totalBytes =
     hiveFileBytes(systemFile) + hiveFileBytes(softwareFile) + hiveFileBytes(securityFile) + hiveFileBytes(amcacheFile) +
+    hiveFileBytes(samFile) + hiveFileBytes(defaultFile) +
+    (collector?.upload.reduce((s, f) => s + f.file.size, 0) ?? 0) +
     ntuserFiles.reduce((s, f) => s + hiveProfileFileBytes(f), 0) +
     usrclassFiles.reduce((s, f) => s + hiveProfileFileBytes(f), 0) +
     timelineFiles.reduce((s, f) => s + (f.file?.size ?? 0), 0) +
@@ -191,7 +251,8 @@ export default function UploadWindowsArtifactsPage() {
     (qmgr0File?.size ?? 0) + (qmgr1File?.size ?? 0);
 
   const hasAnyFile = !!(
-    systemFile.file || softwareFile.file || securityFile.file || amcacheFile.file ||
+    systemFile.file || softwareFile.file || securityFile.file || amcacheFile.file || samFile.file || defaultFile.file ||
+    (collector && collector.upload.length > 0) ||
     ntuserFiles.some(f => f.file) || usrclassFiles.some(f => f.file) || timelineFiles.some(f => f.file) ||
     prefetchFiles.length > 0 || lnkFiles.length > 0 || jumplistAutomaticFiles.length > 0 || jumplistCustomFiles.length > 0 ||
     mftFile || usnjrnlFile || srudbFile ||
@@ -315,6 +376,8 @@ export default function UploadWindowsArtifactsPage() {
       { field: "system", file: systemFile.file },
       { field: "software", file: softwareFile.file },
       { field: "security", file: securityFile.file },
+      { field: "sam", file: samFile.file },
+      { field: "default", file: defaultFile.file },
       { field: "amcache", file: amcacheFile.file },
       { field: "mft", file: mftFile },
       { field: "srudb", file: srudbFile },
@@ -322,7 +385,15 @@ export default function UploadWindowsArtifactsPage() {
       { field: "qmgr0", file: qmgr0File },
       { field: "qmgr1", file: qmgr1File },
     ];
-    const toStage = singleSlotCandidates.filter((c) => c.file && c.file.size >= STAGE_THRESHOLD_BYTES) as { field: string; file: File }[];
+    // Collector-folder files over the threshold ($MFT, Windows.db, a large
+    // SOFTWARE hive, ...) are staged the same way, keyed by their relPath.
+    // Sidecars (.LOG1/.LOG2, -wal/-shm) always travel inline — the server
+    // attaches them to their artifact from the same multipart request.
+    const collectorToStage = (collector?.upload ?? []).filter((c) => c.file.size >= STAGE_THRESHOLD_BYTES && classifyForUpload(c.relPath).kind === "artifact");
+    const toStage = [
+      ...(singleSlotCandidates.filter((c) => c.file && c.file.size >= STAGE_THRESHOLD_BYTES) as { field: string; file: File }[]),
+      ...collectorToStage.map((c) => ({ field: `cf:${c.relPath}`, file: c.file })),
+    ];
     const stagedIds: Record<string, string> = {};
 
     try {
@@ -364,6 +435,13 @@ export default function UploadWindowsArtifactsPage() {
     appendHive("system", systemFile);
     appendHive("software", softwareFile);
     appendHive("security", securityFile);
+    appendHive("sam", samFile);
+    appendHive("default", defaultFile);
+    for (const c of collector?.upload ?? []) {
+      const stagedId = stagedIds[`cf:${c.relPath}`];
+      if (stagedId) { form.append("cfStagedId", stagedId); form.append("cfStagedPath", c.relPath); }
+      else { form.append("cf", c.file); form.append("cfPath", c.relPath); }
+    }
     appendHive("amcache", amcacheFile);
     // ntuserLog1/ntuserLog2 are OPTIONAL per profile row, but the server
     // zips them to ntuserFiles positionally via formData.getAll() — so a
@@ -641,6 +719,26 @@ export default function UploadWindowsArtifactsPage() {
           <div className="space-y-6">
             <CaseBanner selectedCase={selectedCase} onChangeCase={() => setPhase("case")} />
 
+            <CollectorFolderPicker
+              selection={collector}
+              error={collectorError}
+              onPick={(files) => {
+                const sel = buildCollectorSelection(files);
+                if (!sel) {
+                  setCollector(null);
+                  setCollectorError("No collector artifacts found — pick the host folder (e.g. DESKTOP-01), its artifacts folder, or artifacts\\WindowsArtifacts.");
+                  return;
+                }
+                setCollectorError("");
+                setCollector(sel);
+                if (!hostname) {
+                  const host = files.map((f) => hostnameFromCollectorPath(f.webkitRelativePath)).find(Boolean);
+                  if (host) setHostname(host);
+                }
+              }}
+              onClear={() => { setCollector(null); setCollectorError(""); }}
+            />
+
             <div>
               <h2 className="text-sm font-semibold text-zinc-300 mb-3">
                 Registry Hives <span className="text-zinc-600 font-normal">(hold Ctrl and click each file — or Shift-click to select the range — to select a hive together with its .LOG1/.LOG2 files, if you have them)</span>
@@ -649,6 +747,8 @@ export default function UploadWindowsArtifactsPage() {
                 <HiveFileSlot label="SYSTEM" value={systemFile} onChange={setSystemFile} />
                 <HiveFileSlot label="SOFTWARE" value={softwareFile} onChange={setSoftwareFile} />
                 <HiveFileSlot label="SECURITY" value={securityFile} onChange={setSecurityFile} optionalNote="optional" />
+                <HiveFileSlot label="SAM" value={samFile} onChange={setSamFile} optionalNote="local accounts" />
+                <HiveFileSlot label="DEFAULT" value={defaultFile} onChange={setDefaultFile} optionalNote="optional" />
                 <HiveFileSlot label="Amcache.hve" value={amcacheFile} onChange={setAmcacheFile} />
               </div>
             </div>
@@ -833,6 +933,71 @@ export default function UploadWindowsArtifactsPage() {
         )}
 
       </section>
+    </div>
+  );
+}
+
+function CollectorFolderPicker({
+  selection, error, onPick, onClear,
+}: {
+  selection: CollectorSelection | null;
+  error: string;
+  onPick: (files: File[]) => void;
+  onClear: () => void;
+}) {
+  const roles = selection ? Object.entries(selection.roleCounts).sort((a, b) => (ROLE_LABELS[a[0]] ?? a[0]).localeCompare(ROLE_LABELS[b[0]] ?? b[0])) : [];
+  const unsupported = selection ? Object.entries(selection.unsupported) : [];
+  return (
+    <div className="rounded-xl border border-teal-500/30 bg-teal-500/5 p-4">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-sm font-semibold text-zinc-200 flex items-center gap-2"><Folder className="h-4 w-4 text-teal-400" /> Collector folder</h2>
+          <p className="mt-1 text-xs text-zinc-400 max-w-xl">
+            Pick the Live Forensicator host folder (or its <span className="font-mono">artifacts</span> / <span className="font-mono">artifacts\WindowsArtifacts</span> folder). Every artifact is routed by its path —
+            historical hives, extra volumes and per-profile files included — and hashes are checked against the collector&apos;s CollectionManifest.
+          </p>
+        </div>
+        <div className="flex shrink-0 gap-2">
+          {selection && (
+            <button type="button" onClick={onClear} className="rounded-lg border border-zinc-700 px-3 py-2 text-xs text-zinc-400 hover:text-red-400">Clear</button>
+          )}
+          <label className="flex items-center gap-2 rounded-lg bg-teal-600 px-3 py-2 text-xs font-medium text-white hover:bg-teal-500 cursor-pointer">
+            <Folder className="h-3.5 w-3.5" /> Choose folder…
+            <input
+              type="file"
+              multiple
+              className="hidden"
+              ref={(el) => { if (el) { el.setAttribute("webkitdirectory", ""); el.setAttribute("directory", ""); } }}
+              onChange={(e) => onPick(Array.from(e.target.files ?? []))}
+            />
+          </label>
+        </div>
+      </div>
+      {error && <p className="mt-3 text-xs text-red-400">{error}</p>}
+      {selection && (
+        <div className="mt-4 space-y-3">
+          <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-400">
+            <span><span className="text-zinc-200">{selection.rootLabel}</span> — {selection.upload.length} files to upload</span>
+            <span className={selection.hasManifest ? "text-teal-400" : "text-amber-500"}>
+              {selection.hasManifest ? "CollectionManifest found — hashes will be verified" : "No CollectionManifest — hashes can't be verified"}
+            </span>
+            {selection.ignoredCount > 0 && <span className="text-zinc-600">{selection.ignoredCount} other files skipped</span>}
+          </div>
+          <div className="grid grid-cols-1 gap-1 sm:grid-cols-2">
+            {roles.map(([role, rc]) => (
+              <div key={role} className="flex items-center justify-between rounded-md bg-zinc-900 px-2.5 py-1.5 text-xs">
+                <span className="text-zinc-300">{ROLE_LABELS[role] ?? role}</span>
+                <span className="text-zinc-500">{rc.count} · {(rc.bytes / 1024 / 1024).toFixed(1)} MB</span>
+              </div>
+            ))}
+          </div>
+          {unsupported.length > 0 && (
+            <p className="text-xs text-zinc-500">
+              Not uploaded here: {unsupported.map(([label, n]) => `${label} (${n})`).join(", ")}
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 }

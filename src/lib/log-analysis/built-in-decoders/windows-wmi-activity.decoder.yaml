@@ -1,0 +1,78 @@
+name: decoder/windows-wmi-activity/0
+enabled: true
+
+metadata:
+  title: 'Windows WMI-Activity Operational Log Decoder'
+  author: 'Forensicator'
+  date: '2026-10-20'
+  description: >-
+    Decoder for Microsoft-Windows-WMI-Activity/Operational (UserData-format
+    events). 5861 — a permanent event consumer was bound to a filter — is
+    the key WMI persistence signal; 5859/5860 record event subscriptions,
+    5857 provider loads, and 5858 failed client operations (including the
+    WQL query that ran).
+  references:
+    - 'https://attack.mitre.org/techniques/T1546/003/'
+
+source_type: windows-event
+priority: 55
+
+check: >-
+  contains($event.original, '<Event xmlns=')
+  AND contains($event.original, '<Channel>Microsoft-Windows-WMI-Activity/Operational</Channel>')
+
+normalize:
+  - map:
+      - event.kind: event
+      - event.dataset: windows.wmi
+      - observer.vendor: Microsoft
+      - observer.type: host
+      - host.name: regex_extract($event.original, '<Computer>([^<]+)</Computer>')
+      - event.code: regex_extract($event.original, '<EventID[^>]*>(\d+)</EventID>')
+      - event.start: regex_extract($event.original, 'SystemTime=.(\d{4}-\d\d-\d\dT[\d:.]+Z?)')
+      - '@timestamp': regex_extract($event.original, 'SystemTime=.(\d{4}-\d\d-\d\dT[\d:.]+Z?)')
+      - user.name: regex_extract($event.original, '<User>([^<]+)</User>')
+
+  - check: string_equal($event.code, '5857')
+    map:
+      - event.category: array_append(process)
+      - event.action: wmi-provider-loaded
+      - wmi.provider: regex_extract($event.original, '<ProviderName>([^<]+)</ProviderName>')
+      - process.name: regex_extract($event.original, '<HostProcess>([^<]+)</HostProcess>')
+      - process.pid: parse_long(regex_extract($event.original, '<ProcessID>(\d+)</ProcessID>'))
+      - file.path: regex_extract($event.original, '<ProviderPath>([^<]+)</ProviderPath>')
+      - message: regex_extract($event.original, '<ProviderName>([^<]+)</ProviderName>')
+
+  - check: string_equal($event.code, '5858')
+    map:
+      - event.category: array_append(process)
+      - event.outcome: failure
+      - event.action: wmi-operation-failed
+      - process.pid: parse_long(regex_extract($event.original, '<ClientProcessId>(\d+)</ClientProcessId>'))
+      - wmi.operation: regex_extract($event.original, '<Operation>([^<]+)</Operation>')
+      - wmi.result_code: regex_extract($event.original, '<ResultCode>([^<]+)</ResultCode>')
+      - message: regex_extract($event.original, '<Operation>([^<]+)</Operation>')
+
+  - check: string_equal($event.code, '5859') OR string_equal($event.code, '5860')
+    map:
+      - event.category: array_append(configuration)
+      - event.action: wmi-event-subscription
+      - wmi.namespace: regex_extract($event.original, '<NamespaceName>([^<]+)</NamespaceName>')
+      - wmi.query: regex_extract($event.original, '<Query>([^<]+)</Query>')
+      - process.pid: parse_long(regex_extract($event.original, '<Processid>(\d+)</Processid>'))
+      - message: regex_extract($event.original, '<Query>([^<]+)</Query>')
+
+  - check: string_equal($event.code, '5861')
+    map:
+      - event.kind: alert
+      - event.category: array_append(configuration)
+      - event.type: array_append(creation)
+      - event.action: wmi-permanent-subscription-bound
+      - wmi.namespace: regex_extract($event.original, '<Namespace>([^<]+)</Namespace>')
+      - wmi.filter: regex_extract($event.original, '<ESS>([^<]+)</ESS>')
+      - wmi.consumer: regex_extract($event.original, '<CONSUMER>([^<]+)</CONSUMER>')
+      - message: regex_extract($event.original, '<CONSUMER>([^<]+)</CONSUMER>')
+
+  - check: exists($user.name)
+    map:
+      - related.user: array_append_unique($user.name)

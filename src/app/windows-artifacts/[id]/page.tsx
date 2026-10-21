@@ -9,9 +9,18 @@ import {
 import { formatCaseNumber } from "@/lib/cases/case-number";
 import { formatDateTime } from "@/lib/utils";
 
-type FileRow = { id: string; role: string; filename: string; status: string; errorMessage: string | null; findingCount: number; profileName: string | null };
+type FileRow = {
+  id: string; role: string; filename: string; status: string; errorMessage: string | null; findingCount: number; profileName: string | null;
+  provenance: string | null; integrityStatus: string | null; manifestSha256: string | null; sha256: string;
+};
+type ManifestIssue = { status: string; label: string; sourcePath: string; destinationPath: string; sizeBytes: number | null; duplicateOf: string | null; note: string | null; timestampUtc: string | null };
+type CollectionManifest = {
+  totalRecords: number; statusCounts: Record<string, number>; collectionStartUtc: string | null; collectionEndUtc: string | null;
+  issues: ManifestIssue[]; issuesTruncated: boolean;
+};
 type Upload = {
   id: string; hostname: string | null; notes: string | null; findingCount: number; createdAt: string;
+  collectionManifest: CollectionManifest | null;
   uploadedBy: { email: string; name: string | null } | null;
   case: { id: string; title: string; caseSeq: number } | null;
   files: FileRow[];
@@ -37,6 +46,12 @@ type QuarantineEntryRow = { id: string; fileId: string; sourceFileName: string; 
 type QuarantinePayloadRow = { id: string; fileId: string; sourceFileName: string; magicValid: boolean; sha256: string | null; decryptedSizeBytes: string | null; fileTypeSniff: string | null };
 type BitsJobRow = { id: string; fileId: string; name: string | null; destFn: string | null; srcFn: string | null; state: string | null; ctime: string | null; isCarved: boolean };
 type TimelineRow = { id: string; fileId: string; profileName: string | null; startTime: string | null; activityKind: string; appDisplayName: string | null; description: string | null; packageIdentifier: string | null; activeDurationSeconds: number | null; reportingApp: string | null };
+type ArtifactRecord = {
+  id: string; fileId: string; kind: string; title: string; timestamp: string | null; path: string | null;
+  userName: string | null; process: string | null; url: string | null; ip: string | null;
+  sha256: string | null; sha1: string | null; md5: string | null; details: Record<string, unknown>;
+};
+type RegistryPluginRow = { id: string; fileId: string; plugin: string; keyPath: string | null; timestamp: string | null; summary: string; details: Record<string, unknown> };
 type Finding = { id: string; title: string; description: string | null; severity: string; matchCount: number; matchedField: string | null; matchedValue: string | null; rule: { id: string; name: string } | null };
 
 type Detail = {
@@ -62,11 +77,36 @@ type Detail = {
   quarantinePayloads: QuarantinePayloadRow[];
   bitsJobs: BitsJobRow[];
   timeline: TimelineRow[];
+  registryPlugins: RegistryPluginRow[];
+  artifactRecords: ArtifactRecord[];
   findings: Finding[];
 };
 
 type Tab = "overview" | "shimcache" | "amcache" | "userassist" | "bam" | "autoruns" | "prefetch" | "lnk" | "jumplist" | "shellbags" | "mft" | "usnjrnl" | "srum"
-  | "wer" | "werdump" | "recyclebin" | "notifications" | "search" | "quarantine" | "quarantinepayloads" | "bits" | "timeline" | "findings";
+  | "wer" | "werdump" | "recyclebin" | "notifications" | "search" | "quarantine" | "quarantinepayloads" | "bits" | "timeline"
+  | "accounts" | "registryplugins" | "rec_wmi" | "rec_defender" | "rec_apps" | "rec_other" | "integrity" | "findings";
+
+// Stage-2 record kinds grouped into tabs (see forensicator_records.py).
+const RECORD_TABS: { key: Tab; label: string; match: (kind: string) => boolean; empty: string }[] = [
+  { key: "rec_wmi", label: "WMI Persistence", match: (k) => k.startsWith("wmi_"), empty: "No WMI subscription data — upload WMI\\PermanentSubscriptions.json (and optionally WMI\\Repository\\OBJECTS.DATA)." },
+  { key: "rec_defender", label: "Defender History", match: (k) => k.startsWith("defender_"), empty: "No Defender history — upload Defender\\DetectionHistory and Defender\\Support logs." },
+  { key: "rec_apps", label: "Application Artifacts", match: (k) => /^(remote_access|notepad|cloud_sync|security_product|custom)_/.test(k), empty: "No application artifacts — upload the collector's ApplicationArtifacts folder." },
+  { key: "rec_other", label: "NTFS, Payloads & Extras", match: (k) => /^(logfile_|recycle_payload|memory_|log4j_|gpo_report|ram_|clipboard_)/.test(k), empty: "No $LogFile, Recycle Bin payload, memory-file, LOG4J, GPResult or RAM-extra records in this collection." },
+];
+
+// Plugin rows shown on the Accounts tab rather than the generic Registry
+// Plugins tab — see registry-parse.py's run_sam()/run_security().
+const ACCOUNT_PLUGINS = new Set(["samparse", "forensicator_sam_group_membership", "forensicator_lsa_secret", "forensicator_cached_logon", "local_sid", "domain_sid"]);
+
+const INTEGRITY_BADGE: Record<string, { label: string; className: string }> = {
+  verified:        { label: "hash verified", className: "border-teal-800 bg-teal-900/30 text-teal-400" },
+  mismatch:        { label: "HASH MISMATCH", className: "border-red-900 bg-red-900/40 text-red-400" },
+  not_in_manifest: { label: "not in manifest", className: "border-zinc-700 bg-zinc-800 text-zinc-400" },
+};
+
+function fmt(ts: string | null | undefined): string {
+  return ts ? formatDateTime(new Date(ts)) : "";
+}
 
 const STATUS_ICON: Record<string, React.ReactNode> = {
   ready:      <CheckCircle2 className="h-3.5 w-3.5 text-teal-400" />,
@@ -125,7 +165,7 @@ export default function WindowsArtifactDetailPage() {
   const {
     upload, shimcache, amcache, userAssist, bam, autoruns, prefetch, lnk, jumpList, shellbags, mft, usnJrnl, srum,
     werReports, werDumps, recycleBin, notifications, searchIndex, quarantineEntries, quarantinePayloads, bitsJobs,
-    timeline, findings,
+    timeline, registryPlugins, artifactRecords, findings,
   } = data;
 
   // filename carries the source subfolder when the upload form's folder
@@ -133,6 +173,29 @@ export default function WindowsArtifactDetailPage() {
   // column below so LNK/Jump List entries stay traceable to which
   // Desktop/Links/OneDrive/profile folder they actually came from.
   const fileNameById = new Map(upload.files.map((f) => [f.id, f.filename]));
+  // "Source" column for hive/NTFS-derived tabs: a collection can hold the
+  // live SYSTEM hive next to RegBack/Windows.old/restore-point copies, or
+  // several volumes' $MFT — provenance says which one a row came from.
+  const sourceById = new Map(upload.files.map((f) => [f.id, f.provenance && f.provenance !== "live" ? `${f.provenance} · ${f.filename}` : f.filename]));
+  const sourceColumn = <T extends { fileId: string }>() => ({
+    header: "Source", wrap: true,
+    csv: (r: T) => sourceById.get(r.fileId) ?? "",
+    render: (r: T) => <span className="font-mono text-xs text-zinc-500">{sourceById.get(r.fileId) ?? "—"}</span>,
+  });
+
+  const accountRows = registryPlugins.filter((r) => ACCOUNT_PLUGINS.has(r.plugin));
+  const otherPluginRows = registryPlugins.filter((r) => !ACCOUNT_PLUGINS.has(r.plugin));
+  const samAccounts = accountRows.filter((r) => r.plugin === "samparse");
+  const groupMembers = accountRows.filter((r) => r.plugin === "forensicator_sam_group_membership");
+  const lsaSecrets = accountRows.filter((r) => r.plugin === "forensicator_lsa_secret");
+  const cachedLogons = accountRows.filter((r) => r.plugin === "forensicator_cached_logon" && r.details.populated === true);
+  const adminSids = new Set(groupMembers.filter((g) => g.details.group_rid === 544).map((g) => String(g.details.member_sid ?? "")));
+  const isAdmin = (rid: unknown) => [...adminSids].some((sid) => sid.endsWith(`-${String(rid)}`));
+  const integrityCounts = upload.files.reduce<Record<string, number>>((acc, f) => {
+    if (f.integrityStatus) acc[f.integrityStatus] = (acc[f.integrityStatus] ?? 0) + 1;
+    return acc;
+  }, {});
+  const mismatchCount = integrityCounts.mismatch ?? 0;
 
   const TABS: { key: Tab; label: string; count: number }[] = [
     { key: "overview", label: "Overview", count: upload.files.length },
@@ -157,6 +220,10 @@ export default function WindowsArtifactDetailPage() {
     { key: "quarantinepayloads", label: "Quarantine Payloads", count: quarantinePayloads.length },
     { key: "bits", label: "BITS", count: bitsJobs.length },
     { key: "timeline", label: "Timeline", count: timeline.length },
+    { key: "accounts", label: "Accounts & Secrets", count: samAccounts.length + lsaSecrets.length + cachedLogons.length },
+    { key: "registryplugins", label: "Registry Plugins", count: otherPluginRows.length },
+    ...RECORD_TABS.map((t) => ({ key: t.key, label: t.label, count: artifactRecords.filter((r) => t.match(r.kind)).length })),
+    { key: "integrity", label: mismatchCount > 0 ? "Collection Integrity ⚠" : "Collection Integrity", count: upload.collectionManifest?.issues.length ?? 0 },
     { key: "findings", label: "Findings", count: findings.length },
   ];
 
@@ -210,6 +277,12 @@ export default function WindowsArtifactDetailPage() {
                     {STATUS_ICON[f.status]}
                     <span className="text-sm font-medium text-zinc-200">{f.filename}</span>
                     {f.profileName && <span className="text-xs text-zinc-500">({f.profileName})</span>}
+                    {f.provenance && f.provenance !== "live" && (
+                      <span className="rounded border border-amber-900 bg-amber-900/20 px-1.5 py-0.5 text-[10px] text-amber-400">{f.provenance}</span>
+                    )}
+                    {f.integrityStatus && INTEGRITY_BADGE[f.integrityStatus] && (
+                      <span className={`rounded border px-1.5 py-0.5 text-[10px] ${INTEGRITY_BADGE[f.integrityStatus].className}`}>{INTEGRITY_BADGE[f.integrityStatus].label}</span>
+                    )}
                   </div>
                   <span className="text-xs text-zinc-500 capitalize">{f.status}</span>
                 </div>
@@ -228,6 +301,7 @@ export default function WindowsArtifactDetailPage() {
               { header: "Path", wrap: true, csv: (r) => r.path, render: (r) => <span className="font-mono text-xs">{r.path}</span> },
               { header: "Last Modified", csv: (r) => r.lastModified ? formatDateTime(new Date(r.lastModified)) : "", render: (r) => r.lastModified ? formatDateTime(new Date(r.lastModified)) : "—" },
               { header: "Executed", csv: (r) => r.executionFlag === null ? "" : r.executionFlag ? "Yes" : "No", render: (r) => r.executionFlag === null ? "—" : r.executionFlag ? "Yes" : "No" },
+              sourceColumn(),
             ]}
           />
         )}
@@ -241,6 +315,7 @@ export default function WindowsArtifactDetailPage() {
               { header: "Path", wrap: true, csv: (r) => r.path, render: (r) => <span className="font-mono text-xs">{r.path}</span> },
               { header: "SHA1", wrap: true, csv: (r) => r.sha1 ?? "", render: (r) => r.sha1 ? <Link href={`/intelligence/ioc/${encodeURIComponent(r.sha1)}`} className="font-mono text-xs text-amber-300 hover:underline">{r.sha1}</Link> : "—" },
               { header: "First Seen", csv: (r) => r.firstSeen ? formatDateTime(new Date(r.firstSeen)) : "", render: (r) => r.firstSeen ? formatDateTime(new Date(r.firstSeen)) : "—" },
+              sourceColumn(),
             ]}
           />
         )}
@@ -267,6 +342,7 @@ export default function WindowsArtifactDetailPage() {
               { header: "Path", wrap: true, csv: (r) => r.path, render: (r) => <span className="font-mono text-xs">{r.path}</span> },
               { header: "SID", wrap: true, csv: (r) => r.sid, render: (r) => <span className="font-mono text-xs text-zinc-500">{r.sid}</span> },
               { header: "Last Executed", csv: (r) => r.lastExecuted ? formatDateTime(new Date(r.lastExecuted)) : "", render: (r) => r.lastExecuted ? formatDateTime(new Date(r.lastExecuted)) : "—" },
+              sourceColumn(),
             ]}
           />
         )}
@@ -281,6 +357,7 @@ export default function WindowsArtifactDetailPage() {
               { header: "Category", csv: (r) => r.category, render: (r) => <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-xs text-zinc-400">{r.category}</span> },
               { header: "Key", wrap: true, csv: (r) => r.keyPath + (r.valueName ? `\\${r.valueName}` : ""), render: (r) => <span className="font-mono text-xs">{r.keyPath}{r.valueName ? `\\${r.valueName}` : ""}</span> },
               { header: "Value", wrap: true, csv: (r) => r.valueData, render: (r) => <span className="font-mono text-xs">{r.valueData}</span> },
+              sourceColumn(),
             ]}
           />
         )}
@@ -363,6 +440,7 @@ export default function WindowsArtifactDetailPage() {
               { header: "Entry Modified", csv: (r) => r.entryModificationTime ? formatDateTime(new Date(r.entryModificationTime)) : "", render: (r) => r.entryModificationTime ? formatDateTime(new Date(r.entryModificationTime)) : "—" },
               { header: "Size", csv: (r) => r.fileSize ?? "", render: (r) => r.fileSize ?? "—" },
               { header: "ADS", csv: (r) => r.hasAlternateDataStreams ? "Yes" : "No", render: (r) => r.hasAlternateDataStreams ? "Yes" : "No" },
+              sourceColumn(),
             ]}
           />
         )}
@@ -377,6 +455,7 @@ export default function WindowsArtifactDetailPage() {
               { header: "File Name", wrap: true, csv: (r) => r.fileName ?? "", render: (r) => <span className="font-mono text-xs">{r.fileName ?? "—"}</span> },
               { header: "Reason", wrap: true, csv: (r) => r.reason.join(" "), render: (r) => <span className="font-mono text-xs text-zinc-500">{r.reason.join(" ")}</span> },
               { header: "USN", csv: (r) => r.usn, render: (r) => <span className="font-mono text-xs text-zinc-500">{r.usn}</span> },
+              sourceColumn(),
             ]}
           />
         )}
@@ -556,6 +635,180 @@ export default function WindowsArtifactDetailPage() {
               { header: "Profile", wrap: true, csv: (r) => r.profileName ?? "", render: (r) => r.profileName ?? "—" },
             ]}
           />
+        )}
+
+        {tab === "accounts" && (
+          <div className="space-y-8">
+            <section>
+              <h3 className="mb-2 text-sm font-semibold text-zinc-300">Local accounts (SAM)</h3>
+              <SimpleTable
+                rows={samAccounts}
+                exportName={`windows-artifacts-${id}-sam-accounts`}
+                empty="No SAM accounts — upload the SAM hive to populate this table."
+                columns={[
+                  { header: "Account", csv: (r) => String(r.details.username ?? ""), render: (r) => <span className="font-mono text-xs">{String(r.details.username ?? "—")}</span> },
+                  { header: "RID", csv: (r) => String(r.details.rid ?? ""), render: (r) => String(r.details.rid ?? "—") },
+                  { header: "Admin", csv: (r) => isAdmin(r.details.rid) ? "Yes" : "No", render: (r) => isAdmin(r.details.rid) ? <span className="text-amber-400">Yes</span> : "No" },
+                  { header: "Logons", csv: (r) => String(r.details.login_count ?? ""), render: (r) => String(r.details.login_count ?? "—") },
+                  { header: "Last Logon", csv: (r) => fmt(r.details.last_login as string | null), render: (r) => fmt(r.details.last_login as string | null) || "—" },
+                  { header: "Password Set", csv: (r) => fmt(r.details.password_last_set as string | null), render: (r) => fmt(r.details.password_last_set as string | null) || "—" },
+                  { header: "Failed Logons", csv: (r) => String(r.details.failed_login_count ?? ""), render: (r) => String(r.details.failed_login_count ?? "—") },
+                  { header: "Flags", wrap: true, csv: (r) => ((r.details.account_flags_parsed as string[] | undefined) ?? []).join(", "), render: (r) => <span className="text-xs text-zinc-500">{((r.details.account_flags_parsed as string[] | undefined) ?? []).join(", ") || "—"}</span> },
+                  sourceColumn<RegistryPluginRow>(),
+                ]}
+              />
+            </section>
+            <section>
+              <h3 className="mb-2 text-sm font-semibold text-zinc-300">Local group membership</h3>
+              <SimpleTable
+                rows={groupMembers}
+                exportName={`windows-artifacts-${id}-sam-groups`}
+                empty="No group membership — upload the SAM hive to populate this table."
+                filter={{ label: "Groups", getValue: (r) => String(r.details.group_name ?? "") }}
+                columns={[
+                  { header: "Group", csv: (r) => String(r.details.group_name ?? ""), render: (r) => <span className={r.details.group_rid === 544 ? "text-amber-400" : ""}>{String(r.details.group_name ?? "—")}</span> },
+                  { header: "Member", wrap: true, csv: (r) => String(r.details.member_name ?? ""), render: (r) => <span className="font-mono text-xs">{String(r.details.member_name ?? "—")}</span> },
+                  { header: "Member SID", wrap: true, csv: (r) => String(r.details.member_sid ?? ""), render: (r) => <span className="font-mono text-xs text-zinc-500">{String(r.details.member_sid ?? "—")}</span> },
+                  sourceColumn<RegistryPluginRow>(),
+                ]}
+              />
+            </section>
+            <section>
+              <h3 className="mb-2 text-sm font-semibold text-zinc-300">LSA secrets <span className="font-normal text-zinc-600">(names only — values are not decrypted)</span></h3>
+              <SimpleTable
+                rows={lsaSecrets}
+                exportName={`windows-artifacts-${id}-lsa-secrets`}
+                empty="No LSA secrets — upload the SECURITY hive to populate this table."
+                columns={[
+                  { header: "Secret", wrap: true, csv: (r) => String(r.details.secret_name ?? ""), render: (r) => <span className="font-mono text-xs">{String(r.details.secret_name ?? "—")}</span> },
+                  { header: "Meaning", wrap: true, csv: (r) => String(r.details.meaning ?? ""), render: (r) => <span className="text-xs text-zinc-400">{String(r.details.meaning ?? "—")}</span> },
+                  { header: "Last Updated", csv: (r) => fmt(r.details.last_updated as string | null), render: (r) => fmt(r.details.last_updated as string | null) || "—" },
+                  sourceColumn<RegistryPluginRow>(),
+                ]}
+              />
+            </section>
+            <section>
+              <h3 className="mb-2 text-sm font-semibold text-zinc-300">Cached domain logons <span className="font-normal text-zinc-600">(populated NL$ slots)</span></h3>
+              <SimpleTable
+                rows={cachedLogons}
+                exportName={`windows-artifacts-${id}-cached-logons`}
+                empty="No populated cached-logon slots in the uploaded SECURITY hive(s)."
+                columns={[
+                  { header: "Slot", csv: (r) => String(r.details.slot ?? ""), render: (r) => <span className="font-mono text-xs">{String(r.details.slot ?? "—")}</span> },
+                  { header: "User RID", csv: (r) => String(r.details.user_rid ?? ""), render: (r) => String(r.details.user_rid ?? "—") },
+                  { header: "Last Cached Logon", csv: (r) => fmt(r.details.last_cached_logon as string | null), render: (r) => fmt(r.details.last_cached_logon as string | null) || "—" },
+                  sourceColumn<RegistryPluginRow>(),
+                ]}
+              />
+            </section>
+          </div>
+        )}
+
+        {tab === "registryplugins" && (
+          <SimpleTable
+            rows={otherPluginRows}
+            exportName={`windows-artifacts-${id}-registry-plugins`}
+            empty="No registry plugin results — upload SYSTEM/SOFTWARE/NTUSER.DAT/DEFAULT hives to populate this tab."
+            filter={{ label: "Plugins", getValue: (r) => r.plugin }}
+            columns={[
+              { header: "Plugin", csv: (r) => r.plugin, render: (r) => <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-xs text-zinc-400">{r.plugin}</span> },
+              { header: "Key", wrap: true, csv: (r) => r.keyPath ?? "", render: (r) => <span className="font-mono text-xs text-zinc-500">{r.keyPath ?? "—"}</span> },
+              { header: "Data", wrap: true, csv: (r) => r.summary, render: (r) => <span className="font-mono text-xs">{r.summary || JSON.stringify(r.details).slice(0, 400)}</span> },
+              { header: "Timestamp", csv: (r) => fmt(r.timestamp), render: (r) => fmt(r.timestamp) || "—" },
+              sourceColumn<RegistryPluginRow>(),
+            ]}
+          />
+        )}
+
+        {RECORD_TABS.filter((t) => t.key === tab).map((t) => (
+          <SimpleTable
+            key={t.key}
+            rows={artifactRecords.filter((r) => t.match(r.kind))}
+            exportName={`windows-artifacts-${id}-${t.key.replace("rec_", "")}`}
+            empty={t.empty}
+            filter={{ label: "Types", getValue: (r) => r.kind }}
+            columns={[
+              { header: "Type", csv: (r) => r.kind, render: (r) => <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-xs text-zinc-400">{r.kind}</span> },
+              { header: "Time", csv: (r) => fmt(r.timestamp), render: (r) => fmt(r.timestamp) || "—" },
+              {
+                header: "Event", wrap: true, csv: (r) => r.title,
+                render: (r) => (
+                  <details>
+                    <summary className="cursor-pointer text-xs">{r.title}</summary>
+                    <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded bg-zinc-950 p-2 text-[11px] text-zinc-400">{JSON.stringify(r.details, null, 2)}</pre>
+                  </details>
+                ),
+              },
+              { header: "Path / URL", wrap: true, csv: (r) => r.path ?? r.url ?? "", render: (r) => <span className="font-mono text-xs text-zinc-500">{r.path ?? r.url ?? "—"}</span> },
+              { header: "User / Process", wrap: true, csv: (r) => [r.userName, r.process].filter(Boolean).join(" / "), render: (r) => <span className="text-xs text-zinc-500">{[r.userName, r.process].filter(Boolean).join(" / ") || "—"}</span> },
+              { header: "IP", csv: (r) => r.ip ?? "", render: (r) => <span className="font-mono text-xs text-zinc-500">{r.ip ?? "—"}</span> },
+              { header: "Hash", wrap: true, csv: (r) => r.sha256 ?? r.sha1 ?? r.md5 ?? "", render: (r) => (r.sha256 ?? r.sha1) ? <Link href={`/intelligence/ioc/${encodeURIComponent((r.sha256 ?? r.sha1)!)}`} className="font-mono text-xs text-amber-300 hover:underline">{r.sha256 ?? r.sha1}</Link> : <span className="font-mono text-xs text-zinc-600">{r.md5 ?? "—"}</span> },
+              sourceColumn<ArtifactRecord>(),
+            ]}
+          />
+        ))}
+
+        {tab === "integrity" && (
+          <div className="space-y-6">
+            {!upload.collectionManifest && upload.files.every((f) => !f.integrityStatus) ? (
+              <p className="text-sm text-zinc-600 py-12 text-center rounded-xl border border-dashed border-zinc-800">
+                No CollectionManifest was uploaded with this collection — upload the collector folder (which includes it) to verify hashes and see acquisition gaps.
+              </p>
+            ) : (
+              <>
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                  {[
+                    { label: "Hash verified", value: integrityCounts.verified ?? 0, className: "text-teal-400" },
+                    { label: "Hash mismatch", value: mismatchCount, className: mismatchCount > 0 ? "text-red-400" : "text-zinc-300" },
+                    { label: "Not in manifest", value: integrityCounts.not_in_manifest ?? 0, className: "text-zinc-300" },
+                    { label: "Manifest records", value: upload.collectionManifest?.totalRecords ?? 0, className: "text-zinc-300" },
+                  ].map((c) => (
+                    <div key={c.label} className="rounded-xl border border-zinc-800 bg-zinc-900 p-3">
+                      <div className={`text-xl font-semibold ${c.className}`}>{c.value}</div>
+                      <div className="text-xs text-zinc-500">{c.label}</div>
+                    </div>
+                  ))}
+                </div>
+                {upload.collectionManifest && (
+                  <p className="text-xs text-zinc-500">
+                    Collector status counts: {Object.entries(upload.collectionManifest.statusCounts).map(([k, v]) => `${k} ${v}`).join(" · ")}
+                    {upload.collectionManifest.collectionStartUtc && ` — acquired ${fmt(upload.collectionManifest.collectionStartUtc)} to ${fmt(upload.collectionManifest.collectionEndUtc)}`}
+                  </p>
+                )}
+                {mismatchCount > 0 && (
+                  <div className="space-y-2">
+                    <h3 className="text-sm font-semibold text-red-400">Files whose hash differs from the collector&apos;s manifest</h3>
+                    {upload.files.filter((f) => f.integrityStatus === "mismatch").map((f) => (
+                      <div key={f.id} className="rounded-lg border border-red-900/50 bg-red-950/20 p-3 font-mono text-xs">
+                        <div className="text-zinc-200">{f.filename}</div>
+                        <div className="text-zinc-500">manifest {f.manifestSha256}</div>
+                        <div className="text-zinc-500">received {f.sha256.toUpperCase()}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {upload.collectionManifest && (
+                  <section>
+                    <h3 className="mb-2 text-sm font-semibold text-zinc-300">
+                      Acquisition gaps and notes <span className="font-normal text-zinc-600">(every manifest record other than Collected{upload.collectionManifest.issuesTruncated ? " — truncated" : ""})</span>
+                    </h3>
+                    <SimpleTable
+                      rows={upload.collectionManifest.issues.map((r, i) => ({ ...r, id: String(i) }))}
+                      exportName={`windows-artifacts-${id}-collection-gaps`}
+                      empty="The collector recorded no skipped, failed, or deduplicated artifacts."
+                      filter={{ label: "Statuses", getValue: (r) => r.status }}
+                      columns={[
+                        { header: "Status", csv: (r) => r.status, render: (r) => <span className={`rounded px-1.5 py-0.5 text-xs ${r.status === "Failed" || r.status === "IntegrityMismatch" ? "bg-red-900/40 text-red-400" : "bg-zinc-800 text-zinc-400"}`}>{r.status}</span> },
+                        { header: "Artifact", wrap: true, csv: (r) => r.label, render: (r) => <span className="text-xs">{r.label}</span> },
+                        { header: "Path", wrap: true, csv: (r) => r.destinationPath, render: (r) => <span className="font-mono text-xs text-zinc-500">{r.destinationPath}</span> },
+                        { header: "Note", wrap: true, csv: (r) => r.note ?? (r.duplicateOf ? `duplicate of ${r.duplicateOf}` : ""), render: (r) => <span className="text-xs text-zinc-400">{r.note ?? (r.duplicateOf ? `duplicate of ${r.duplicateOf}` : "—")}</span> },
+                      ]}
+                    />
+                  </section>
+                )}
+              </>
+            )}
+          </div>
         )}
 
         {tab === "findings" && (

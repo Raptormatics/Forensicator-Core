@@ -1,0 +1,81 @@
+name: decoder/windows-rdp/0
+enabled: true
+
+metadata:
+  title: 'Windows Remote Desktop (RCM / LSM) Log Decoder'
+  author: 'Forensicator'
+  date: '2026-10-20'
+  description: >-
+    Decoder for TerminalServices-RemoteConnectionManager/Operational (1149
+    network authentication succeeded — user, domain and source address; 261
+    listener received a connection) and TerminalServices-LocalSessionManager/
+    Operational (21 logon, 22 shell start, 23 logoff, 24 disconnect, 25
+    reconnect — user, session ID and source address). Core RDP lateral-
+    movement evidence.
+  references:
+    - 'https://attack.mitre.org/techniques/T1021/001/'
+
+source_type: windows-event
+priority: 55
+
+check: >-
+  contains($event.original, '<Event xmlns=')
+  AND regex_match($event.original, '<Channel>Microsoft-Windows-TerminalServices-(?:RemoteConnectionManager|LocalSessionManager)/Operational</Channel>')
+
+normalize:
+  - map:
+      - event.kind: event
+      - event.dataset: windows.rdp
+      - event.category: array_append(authentication)
+      - observer.vendor: Microsoft
+      - observer.type: host
+      - host.name: regex_extract($event.original, '<Computer>([^<]+)</Computer>')
+      - event.code: regex_extract($event.original, '<EventID[^>]*>(\d+)</EventID>')
+      - event.start: regex_extract($event.original, 'SystemTime=.(\d{4}-\d\d-\d\dT[\d:.]+Z?)')
+      - '@timestamp': regex_extract($event.original, 'SystemTime=.(\d{4}-\d\d-\d\dT[\d:.]+Z?)')
+
+  # RCM 1149: <UserData><EventXML><Param1>user</Param1><Param2>domain</Param2><Param3>source</Param3>
+  - check: string_equal($event.code, '1149')
+    map:
+      - event.type: array_append(start)
+      - event.outcome: success
+      - event.action: rdp-network-authentication-succeeded
+      - user.name: regex_extract($event.original, '<Param1>([^<]+)</Param1>')
+      - user.domain: regex_extract($event.original, '<Param2>([^<]*)</Param2>')
+      - source.ip: regex_extract($event.original, '<Param3>([^<]+)</Param3>')
+      - message: regex_extract($event.original, '<Param1>([^<]+)</Param1>')
+
+  - check: string_equal($event.code, '261')
+    map:
+      - event.action: rdp-listener-connection-received
+
+  # LSM: <UserData><EventXML><User>DOMAIN\user</User><SessionID>n</SessionID><Address>source</Address>
+  - check: contains($event.original, 'LocalSessionManager')
+    map:
+      - user.name: regex_extract($event.original, '<User>([^<]+)</User>')
+      - rdp.session_id: regex_extract($event.original, '<SessionID>(\d+)</SessionID>')
+      - source.ip: regex_extract($event.original, '<Address>([^<]+)</Address>')
+      - message: regex_extract($event.original, '<User>([^<]+)</User>')
+
+  - check: string_equal($event.code, '21')
+    map:
+      - event.action: rdp-session-logon
+  - check: string_equal($event.code, '22')
+    map:
+      - event.action: rdp-shell-start
+  - check: string_equal($event.code, '23')
+    map:
+      - event.action: rdp-session-logoff
+  - check: string_equal($event.code, '24')
+    map:
+      - event.action: rdp-session-disconnected
+  - check: string_equal($event.code, '25')
+    map:
+      - event.action: rdp-session-reconnected
+
+  - check: exists($user.name)
+    map:
+      - related.user: array_append_unique($user.name)
+  - check: exists($source.ip)
+    map:
+      - related.ip: array_append_unique($source.ip)

@@ -1,0 +1,62 @@
+name: decoder/tomcat-catalina/0
+enabled: true
+
+metadata:
+  title: 'Apache Tomcat Catalina Log Decoder'
+  author: 'Forensicator'
+  date: '2026-10-20'
+  description: >-
+    Decoder for Apache Tomcat's own JULI log lines (catalina.out,
+    catalina.<date>.log, localhost.<date>.log, manager.<date>.log):
+    "20-Oct-2026 10:00:00.123 SEVERE [thread] logger message". Labels web
+    application (WAR) deployments — the classic way a webshell is planted
+    through the Manager app — undeployments, Manager-app activity and
+    startup/shutdown. Tomcat access logs use Common Log Format and are
+    handled by the apache-access decoder.
+  references:
+    - 'https://tomcat.apache.org/tomcat-10.1-doc/logging.html'
+
+source_type: syslog
+priority: 45
+
+check: >-
+  regex_match($event.original, '^\d{2}-[A-Z][a-z]{2}-\d{4} \d{2}:\d{2}:\d{2}\.\d{3} (?:SEVERE|WARNING|INFO|CONFIG|FINE|FINER|FINEST) \[')
+
+normalize:
+  - map:
+      - event.kind: event
+      - event.dataset: tomcat.catalina
+      - service.type: tomcat
+      - observer.product: Apache Tomcat
+      - log.level: regex_extract($event.original, '^\S+ \S+ ([A-Z]+) \[')
+      - process.thread.name: regex_extract($event.original, '^\S+ \S+ [A-Z]+ \[([^\]]+)\]')
+      - log.logger: regex_extract($event.original, '^\S+ \S+ [A-Z]+ \[[^\]]+\] (\S+)')
+      - message: regex_extract($event.original, '^\S+ \S+ [A-Z]+ \[[^\]]+\] \S+ (.*)$')
+
+  - check: string_equal($log.level, 'SEVERE')
+    map:
+      - event.type: array_append(error)
+      - event.outcome: failure
+
+  - check: regex_match($event.original, 'Deploying (?:web application archive|deployment descriptor|web application directory)')
+    map:
+      - event.category: array_append(web)
+      - event.type: array_append(installation)
+      - event.action: webapp-deployed
+      - file.path: regex_extract($event.original, 'Deploying [a-z ]+\[([^\]]+)\]')
+
+  - check: contains($event.original, 'Undeploying')
+    map:
+      - event.category: array_append(web)
+      - event.type: array_append(deletion)
+      - event.action: webapp-undeployed
+
+  - check: regex_match($event.original, 'org\.apache\.catalina\.core\.ApplicationContext\.log .*Manager|HTMLManager|ManagerServlet')
+    map:
+      - event.category: array_append(web)
+      - event.action: manager-app-activity
+
+  - check: regex_match($event.original, 'Server startup in|Starting service|Stopping service|Server initialization')
+    map:
+      - event.category: array_append(process)
+      - event.action: tomcat-lifecycle

@@ -7,7 +7,8 @@ for Shellbags), routed by the `role` argument the caller already
 determined at upload time (the same role the file was uploaded under —
 see WindowsArtifactFile.role in schema.prisma). Invoked as:
 registry-parse.py <hive_path> <role> [log1_path] [log2_path]
-role is one of: system_hive | software_hive | ntuser_hive | amcache_hive | usrclass_hive
+role is one of: system_hive | software_hive | security_hive | sam_hive |
+default_hive | ntuser_hive | amcache_hive | usrclass_hive
 
 The optional log1_path/log2_path are the hive's own <HIVE>.LOG1/.LOG2
 transaction log files, when the collector gathered them alongside the
@@ -89,7 +90,38 @@ def filetime_to_iso(raw: bytes):
 
 # ── Shimcache / Amcache / BAM — regipy's plugin system, forwarded verbatim ──
 
-def run_plugins(reg):
+# Plugins whose output is either already extracted by the hand-rolled
+# walkers below (services -> run_autoruns_system) or is a large dump with
+# no triage value (every SafeBoot driver entry) — skipped so they don't
+# flood the generic registry_plugin table. Everything else regipy emits is
+# kept, see registry-engine.ts's mapUnmappedPluginEntries().
+SKIPPED_PLUGINS = {"services", "safeboot_configuration"}
+
+
+def _plugin_rows(entries):
+    """Normalizes one plugin's output into a list of dict rows. Most regipy
+    plugins return a list of dicts, but several (ntuser_persistence,
+    software_plugin, winver_plugin, timezone_data, ...) return a dict keyed
+    by registry path — iterating that directly would yield bare key strings,
+    so each top-level key becomes its own row with the key kept as `key`."""
+    if isinstance(entries, list):
+        return [e if isinstance(e, dict) else {"value": e} for e in entries]
+    if isinstance(entries, dict):
+        if all(not isinstance(v, (dict, list)) for v in entries.values()):
+            return [entries]
+        rows = []
+        for k, v in entries.items():
+            if isinstance(v, dict):
+                rows.append({"key": k, **v})
+            elif isinstance(v, list) and v and all(isinstance(x, dict) for x in v) and not all("value_type" in x for x in v):
+                rows.extend({"key": k, **x} for x in v)
+            else:
+                rows.append({"key": k, "value": v})
+        return rows
+    return [{"value": entries}]
+
+
+def run_plugins(reg, enrich=None):
     try:
         from regipy.plugins.utils import run_relevant_plugins
     except ImportError:
@@ -102,12 +134,204 @@ def run_plugins(reg):
         emit({"type": "error", "message": f"plugin run failed: {e}"})
         return True
 
-    for plugin_name, entries in (results or {}).items():
-        if not entries:
+    results = results or {}
+    if enrich:
+        try:
+            enrich(results)
+        except Exception as e:
+            emit({"type": "error", "message": f"plugin enrichment failed: {e}"})
+
+    for plugin_name, entries in results.items():
+        if not entries or plugin_name in SKIPPED_PLUGINS:
             continue
-        for entry in entries:
+        for entry in _plugin_rows(entries):
             emit({"type": "plugin_entry", "plugin": str(plugin_name), "data": entry})
     return True
+
+
+# ── SAM — account names, local group membership ──────────────────────────
+#
+# regipy's samparse plugin decodes each Users\<RID> F/V record (logon
+# counts, flags, last logon/password set) but not the account NAME, which
+# lives separately under Users\Names\<name> — the RID is stored as that
+# subkey's default value's registry TYPE (regipy surfaces it as the
+# value_type string, e.g. '500'), confirmed against a real Windows 11 SAM.
+
+SAM_USERS_NAMES = r"\SAM\Domains\Account\Users\Names"
+SAM_BUILTIN_ALIASES = r"\SAM\Domains\Builtin\Aliases"
+SAM_ACCOUNT_ALIASES = r"\SAM\Domains\Account\Aliases"
+
+
+def sam_name_map(reg):
+    names = {}
+    try:
+        key = reg.get_key(SAM_USERS_NAMES)
+    except Exception:
+        return names
+    for sk in key.iter_subkeys() or []:
+        try:
+            for v in sk.get_values(as_json=False):
+                try:
+                    names[int(str(v.value_type), 0)] = sk.name
+                except ValueError:
+                    pass  # a recognized REG_* type name, not a RID
+        except Exception:
+            continue
+    return names
+
+
+def parse_sid(blob, offset=0):
+    """Binary SID -> (string, byte length), or (None, 0) on malformed input."""
+    if len(blob) < offset + 8:
+        return None, 0
+    revision = blob[offset]
+    count = blob[offset + 1]
+    length = 8 + 4 * count
+    if revision != 1 or count > 15 or len(blob) < offset + length:
+        return None, 0
+    authority = int.from_bytes(blob[offset + 2:offset + 8], "big")
+    subs = struct.unpack("<" + "I" * count, blob[offset + 8:offset + length]) if count else ()
+    return "S-1-%d%s" % (authority, "".join("-%d" % s for s in subs)), length
+
+
+def sam_alias_rows(reg, aliases_path, names):
+    """Each alias's C value: a 0x34-byte header of (offset, length) pairs
+    relative to 0x34 — name at 0x10/0x14, member SIDs at 0x28, member count
+    at 0x30 — then the variable data. Confirmed against the Administrators
+    alias (00000220) of a real Windows 11 SAM."""
+    try:
+        key = reg.get_key(aliases_path)
+    except Exception:
+        return
+    for sk in key.iter_subkeys() or []:
+        if sk.name.lower() in ("members", "names"):
+            continue
+        try:
+            c = next((v.value for v in sk.get_values(as_json=False) if v.name == "C"), None)
+            if not isinstance(c, (bytes, bytearray)) or len(c) < 0x34:
+                continue
+            name_off, name_len = struct.unpack("<II", c[0x10:0x18])
+            members_off = struct.unpack("<I", c[0x28:0x2C])[0]
+            member_count = struct.unpack("<I", c[0x30:0x34])[0]
+            group_name = c[0x34 + name_off:0x34 + name_off + name_len].decode("utf-16-le", errors="replace")
+            pos = 0x34 + members_off
+            for _ in range(min(member_count, 1000)):
+                sid, length = parse_sid(c, pos)
+                if not sid:
+                    break
+                pos += length
+                rid = int(sid.rsplit("-", 1)[1])
+                emit({"type": "plugin_entry", "plugin": "forensicator_sam_group_membership", "data": {
+                    "group_name": group_name,
+                    "group_rid": int(sk.name, 16) if all(ch in "0123456789abcdefABCDEF" for ch in sk.name) else sk.name,
+                    "member_sid": sid,
+                    "member_name": names.get(rid) if sid.startswith("S-1-5-21-") else None,
+                    "timestamp": sk.header and _key_last_write(sk),
+                }})
+        except Exception as e:
+            emit({"type": "error", "message": f"SAM alias {sk.name} parse failed: {e}"})
+
+
+def _key_last_write(key):
+    try:
+        raw = key.header.last_modified
+        return (datetime(1601, 1, 1) + timedelta(microseconds=raw / 10)).isoformat() + "Z" if raw else None
+    except Exception:
+        return None
+
+
+def run_sam(reg):
+    names = sam_name_map(reg)
+
+    def enrich(results):
+        for row in results.get("samparse") or []:
+            if isinstance(row, dict) and row.get("rid") is not None:
+                row["username"] = names.get(int(row["rid"]))
+
+    if not run_plugins(reg, enrich):
+        sys.exit(0)
+    sam_alias_rows(reg, SAM_BUILTIN_ALIASES, names)
+    sam_alias_rows(reg, SAM_ACCOUNT_ALIASES, names)
+
+
+# ── SECURITY — LSA secret names and cached domain logons ──────────────────
+#
+# Secret VALUES and cached-credential hashes are encrypted (LSA key derived
+# from the SYSTEM bootkey) and are deliberately NOT decrypted here — but
+# which secrets exist is itself evidence (DefaultPassword = a stored
+# autologon password, _SC_<svc> = a service running under a stored
+# account password), and each NL$<n> cache record's header is cleartext:
+# the cached user's RID and the time of that user's last cached logon.
+
+LSA_SECRET_MEANINGS = {
+    "DefaultPassword": "Winlogon autologon password stored in LSA",
+    "DPAPI_SYSTEM": "DPAPI machine/user master-key protection secret",
+    "NL$KM": "Key protecting cached domain logon (NL$) records",
+    "$MACHINE.ACC": "Domain machine-account password",
+}
+
+
+def secret_meaning(name):
+    if name in LSA_SECRET_MEANINGS:
+        return LSA_SECRET_MEANINGS[name]
+    if name.upper().startswith("_SC_"):
+        return f"Service '{name[4:]}' configured with a stored account password"
+    if name.startswith("RasDialParams") or name.startswith("L$_RasConnectionCredentials") or name.startswith("L$_RasDefaultCredentials"):
+        return "Stored dial-up/VPN (RAS) connection credentials"
+    if name.startswith("L$"):
+        return "Local LSA secret"
+    if name.startswith("G$"):
+        return "Global LSA secret"
+    return None
+
+
+def run_security(reg):
+    run_plugins(reg)
+
+    try:
+        secrets = reg.get_key(r"\Policy\Secrets")
+        for sk in secrets.iter_subkeys() or []:
+            updated = None
+            try:
+                cupd = reg.get_key(rf"\Policy\Secrets\{sk.name}\CupdTime")
+                raw = next((v.value for v in cupd.get_values(as_json=False)), None)
+                if isinstance(raw, (bytes, bytearray)):
+                    updated = filetime_to_iso(raw)
+            except Exception:
+                pass
+            emit({"type": "plugin_entry", "plugin": "forensicator_lsa_secret", "data": {
+                "secret_name": sk.name,
+                "meaning": secret_meaning(sk.name),
+                "last_updated": updated,
+                "timestamp": _key_last_write(sk),
+            }})
+    except Exception:
+        pass  # no Secrets key — not an error
+
+    try:
+        cache = reg.get_key(r"\Cache")
+        for v in cache.get_values(as_json=False):
+            if not v.name.startswith("NL$") or v.name == "NL$Control":
+                continue
+            blob = v.value if isinstance(v.value, (bytes, bytearray)) else b""
+            if len(blob) < 96:
+                continue
+            user_len, domain_len = struct.unpack("<HH", blob[0:4])
+            user_rid, primary_group = struct.unpack("<II", blob[16:24])
+            flags = struct.unpack("<I", blob[48:52])[0]
+            populated = user_len > 0
+            emit({"type": "plugin_entry", "plugin": "forensicator_cached_logon", "data": {
+                "slot": v.name,
+                "populated": populated,
+                "user_rid": user_rid if populated else None,
+                "primary_group_rid": primary_group if populated else None,
+                "last_cached_logon": filetime_to_iso(blob[32:40]) if populated else None,
+                "username_length": user_len // 2,
+                "domain_length": domain_len // 2,
+                "flags": flags,
+            }})
+    except Exception:
+        pass  # no Cache key — workgroup machines often have none
 
 
 # ── Autoruns — curated persistence-relevant paths, hand-walked ─────────────
@@ -402,7 +626,10 @@ def main():
     # detection succeeding. role strings map 1:1 to regipy's hive_type
     # constants by just dropping the "_hive" suffix (confirmed against
     # regipy/hive_types.py: system/software/security/ntuser/amcache/usrclass).
-    hive_type = role[:-5] if role.endswith("_hive") else None
+    # default_hive (the .DEFAULT user profile, HKU\.DEFAULT) is
+    # structurally an NTUSER-format hive — regipy has no separate "default"
+    # hive type, and its ntuser plugins apply as-is.
+    hive_type = "ntuser" if role == "default_hive" else (role[:-5] if role.endswith("_hive") else None)
     try:
         reg = RegistryHive(hive_path, hive_type=hive_type)
     except Exception as e:
@@ -428,15 +655,22 @@ def _dispatch_role(reg, role):
             sys.exit(0)
         run_autoruns_system(reg)
     elif role == "software_hive":
+        # Plugins (installed programs, IFEO, network list, Defender config,
+        # execution policy, ...) are the slow part on a real SOFTWARE hive
+        # — ~3 minutes on a 130MB Windows 11 hive — see registry-engine.ts's
+        # timeout.
+        run_plugins(reg)
         run_autoruns_software(reg)
         run_srum_extensions(reg)
     elif role == "security_hive":
-        # No hand-rolled extraction — SECURITY mainly holds LSA secrets,
-        # which regipy doesn't decrypt (needs the SYSTEM hive's bootkey,
-        # out of scope here). run_plugins() still runs whatever regipy
-        # plugins declare themselves compatible with this hive type; zero
-        # matches is a normal, non-error outcome, same as any other role.
+        run_security(reg)
+    elif role == "sam_hive":
+        run_sam(reg)
+    elif role == "default_hive":
         run_plugins(reg)
+        run_userassist(reg)
+        for key_path, category in AUTORUN_PATHS["ntuser_hive"]:
+            walk_value_list(reg, "default", key_path, category)
     elif role == "ntuser_hive":
         # run_plugins() picks up regipy's ntuser_shellbag_plugin (Shellbags
         # — requires the `regipy[full]` extra for pyfwsi/pyfwps; degrades

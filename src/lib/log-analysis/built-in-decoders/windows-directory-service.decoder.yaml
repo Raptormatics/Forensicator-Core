@@ -1,0 +1,56 @@
+name: decoder/windows-directory-service/0
+enabled: true
+
+metadata:
+  title: 'Windows Directory Service Log Decoder'
+  author: 'Forensicator'
+  date: '2026-10-20'
+  description: >-
+    Decoder for the domain controller "Directory Service" channel. Labels
+    insecure (unsigned/simple) LDAP binds (2889, client address and
+    identity), the daily unsigned-bind summary (2887), expensive/inefficient
+    LDAP searches (1644 — common in AD reconnaissance tooling), and pulls
+    the client IP out of any event whose data carries an IP:port.
+  references:
+    - 'https://learn.microsoft.com/en-us/troubleshoot/windows-server/active-directory/enable-ldap-signing-in-windows-server'
+
+source_type: windows-event
+priority: 55
+
+check: >-
+  contains($event.original, '<Event xmlns=')
+  AND contains($event.original, '<Channel>Directory Service</Channel>')
+
+normalize:
+  - map:
+      - event.kind: event
+      - event.dataset: windows.directory_service
+      - observer.vendor: Microsoft
+      - observer.type: host
+      - host.name: regex_extract($event.original, '<Computer>([^<]+)</Computer>')
+      - event.code: regex_extract($event.original, '<EventID[^>]*>(\d+)</EventID>')
+      - event.start: regex_extract($event.original, 'SystemTime=.(\d{4}-\d\d-\d\dT[\d:.]+Z?)')
+      - '@timestamp': regex_extract($event.original, 'SystemTime=.(\d{4}-\d\d-\d\dT[\d:.]+Z?)')
+      - source.ip: regex_extract($event.original, '<Data>(\d+\.\d+\.\d+\.\d+):\d+</Data>')
+
+  # 2889: Data[0] client IP:port, Data[1] identity, Data[2] binding type (0 unsigned SASL, 1 simple bind over cleartext)
+  - check: string_equal($event.code, '2889')
+    map:
+      - event.category: array_append(authentication)
+      - event.action: insecure-ldap-bind
+      - user.name: regex_extract($event.original, '<EventData><Data>[^<]*</Data><Data>([^<]+)</Data>')
+      - message: regex_extract($event.original, '<EventData><Data>[^<]*</Data><Data>([^<]+)</Data>')
+
+  - check: string_equal($event.code, '2887')
+    map:
+      - event.category: array_append(authentication)
+      - event.action: insecure-ldap-bind-summary
+
+  - check: string_equal($event.code, '1644')
+    map:
+      - event.category: array_append(network)
+      - event.action: expensive-ldap-search
+
+  - check: exists($source.ip)
+    map:
+      - related.ip: array_append_unique($source.ip)

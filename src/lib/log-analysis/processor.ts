@@ -15,6 +15,7 @@ import { getParser }      from "./parsers/index";
 import { extractIocs }    from "./ioc-extractor";
 import { runRules }       from "./rule-engine";
 import type { ParsedEvent } from "./types";
+import { joinMultilineEventXml } from "./content";
 import { loadDecoders, decodeLogLine } from "./decoder-engine/engine";
 import type { NormalizedLogEntry }     from "./decoder-engine/types";
 import type { IocLookupMap } from "@/lib/rule-engine/ioc-lookup";
@@ -88,7 +89,7 @@ async function parseContent(content: string, sourceType: string): Promise<Parsed
   // Always (re)load decoders so we pick up newly saved custom ones
   await loadDecoders();
 
-  const lines = content.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  const lines = joinMultilineEventXml(content).split(/\r?\n/).filter((l) => l.trim().length > 0);
 
   // Check if any decoder matches the first non-empty line
   if (lines.length > 0) {

@@ -8,7 +8,7 @@
 import { spawn } from "child_process";
 import path from "path";
 
-export type RegistryRole = "system_hive" | "software_hive" | "security_hive" | "ntuser_hive" | "amcache_hive" | "usrclass_hive";
+export type RegistryRole = "system_hive" | "software_hive" | "security_hive" | "sam_hive" | "default_hive" | "ntuser_hive" | "amcache_hive" | "usrclass_hive";
 
 export interface RegistryPluginEntry {
   plugin: string;
@@ -42,7 +42,11 @@ export type RegistryParseResult =
   | { status: "timeout" }
   | { status: "error"; message: string };
 
-const DEFAULT_TIMEOUT_SECONDS = 5 * 60; // registry hives are small; generous but not RAM-plugin-scale
+// Generous: with every regipy plugin now running against SOFTWARE as well
+// as SYSTEM, a real 130MB Windows 11 SOFTWARE hive takes ~3 minutes of
+// plugin time alone (measured on the appliance), before transaction-log
+// replay and the hand-rolled walkers.
+const DEFAULT_TIMEOUT_SECONDS = 15 * 60;
 
 export async function runRegistryParse(
   pythonPath: string,
@@ -292,4 +296,62 @@ export function mapShellbagEntries(entries: RegistryPluginEntry[]): ShellbagRow[
       };
     })
     .filter((r): r is ShellbagRow => r !== null);
+}
+
+// ── Every other plugin's output → generic RegistryPluginEntry rows ─────────
+// Shimcache/Amcache/BAM/Shellbags (mapped above) and user_assist (the
+// hand-rolled UserAssist walker already covers it, with focus data) have
+// dedicated tables; every other plugin's row is kept as-is.
+
+export interface RegistryPluginRow {
+  plugin: string;
+  keyPath: string | null;
+  timestamp: string | null;
+  summary: string;
+  details: Record<string, unknown>;
+}
+
+function isMappedPlugin(plugin: string): boolean {
+  const p = plugin.toLowerCase();
+  return p.includes("shimcache") || p.includes("appcompatcache") || p.includes("amcache")
+    || p.includes("activity_moderator") || p.includes("shellbag") || p === "user_assist";
+}
+
+const TIMESTAMP_KEYS = ["timestamp", "last_write", "last_login", "last_updated", "last_cached_logon", "last_modified", "update_date"];
+const KEY_PATH_KEYS = ["key_path", "registry_path", "subkey", "key"];
+const SUMMARY_MAX = 2000;
+
+/** Flattens a plugin row's scalar (and scalar-array) fields into a stable
+ * "key=value; key=value" string — what the results table shows and what
+ * registry_plugin rules match against (e.g. "use_logon_credential=1"). */
+export function summarizePluginRow(data: Record<string, unknown>): string {
+  const parts: string[] = [];
+  for (const [k, v] of Object.entries(data)) {
+    if (KEY_PATH_KEYS.includes(k) || TIMESTAMP_KEYS.includes(k)) continue;
+    if (v === null || v === undefined || v === "") continue;
+    if (typeof v === "object" && !Array.isArray(v)) continue;
+    if (Array.isArray(v)) {
+      if (v.length === 0 || v.some((x) => x !== null && typeof x === "object")) continue;
+      parts.push(`${k}=${v.join(",")}`);
+    } else {
+      parts.push(`${k}=${String(v)}`);
+    }
+  }
+  const summary = parts.join("; ");
+  return summary.length > SUMMARY_MAX ? summary.slice(0, SUMMARY_MAX) + "…" : summary;
+}
+
+export function mapUnmappedPluginEntries(entries: RegistryPluginEntry[]): RegistryPluginRow[] {
+  return entries
+    .filter((e) => !isMappedPlugin(e.plugin))
+    .map((e) => {
+      const ts = str(pick(e.data, TIMESTAMP_KEYS));
+      return {
+        plugin: e.plugin,
+        keyPath: str(pick(e.data, KEY_PATH_KEYS)),
+        timestamp: ts && !Number.isNaN(new Date(ts).getTime()) ? ts : null,
+        summary: summarizePluginRow(e.data),
+        details: e.data,
+      };
+    });
 }

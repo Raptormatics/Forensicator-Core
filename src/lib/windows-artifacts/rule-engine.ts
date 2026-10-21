@@ -22,8 +22,10 @@ import type { RecycleBinRow } from "./recyclebin-engine";
 import type { BitsJobRow } from "./bits-engine";
 import type { QuarantinePayloadRow } from "./defender-quarantine-engine";
 import type { TimelineEntryRow } from "./timeline-engine";
+import { summarizePluginRow, type RegistryPluginRow } from "./registry-engine";
+import type { ArtifactRecordRow } from "./record-engine";
 
-export type WinArtifactSubjectKind = "shimcache" | "amcache" | "userassist" | "bam" | "autorun" | "prefetch" | "prefetch_reference" | "lnk" | "jumplist" | "shellbag" | "mft" | "usnjrnl" | "srum" | "wer" | "wer_dump_module" | "recyclebin" | "bits" | "quarantine_payload" | "timeline";
+export type WinArtifactSubjectKind = "shimcache" | "amcache" | "userassist" | "bam" | "autorun" | "prefetch" | "prefetch_reference" | "lnk" | "jumplist" | "shellbag" | "mft" | "usnjrnl" | "srum" | "wer" | "wer_dump_module" | "recyclebin" | "bits" | "quarantine_payload" | "timeline" | "registry_plugin" | "artifact_record";
 
 export interface WinArtifactRuleSubject {
   kind: WinArtifactSubjectKind;
@@ -42,6 +44,7 @@ export interface WinArtifactRuleSubject {
   providerLabel: string | null;
   exceptionCode: string | null;
   isCarved: boolean | null;
+  summary: string | null;
 }
 
 // Every field a specific subject kind doesn't use stays at this default
@@ -50,7 +53,10 @@ export interface WinArtifactRuleSubject {
 const BLANK_SUBJECT_FIELDS: Omit<WinArtifactRuleSubject, "kind" | "refKey"> = {
   path: null, sha1: null, sha256: null, runCount: null, category: null, valueName: null, keyPath: null, sid: null,
   isAllocated: null, hasTimestomp: null, usnReason: null, providerLabel: null, exceptionCode: null, isCarved: null,
+  summary: null,
 };
+
+const MENTION_ONLY_KINDS = /^(notepad_|cloud_sync_|remote_access_log|security_product_|custom_|gpo_report_|clipboard_)/;
 
 export function buildSubjects(data: {
   shimcache: ShimcacheRow[];
@@ -71,6 +77,8 @@ export function buildSubjects(data: {
   bits?: BitsJobRow[];
   quarantinePayload?: QuarantinePayloadRow[];
   timeline?: TimelineEntryRow[];
+  registryPlugin?: RegistryPluginRow[];
+  artifactRecord?: ArtifactRecordRow[];
 }): WinArtifactRuleSubject[] {
   const subjects: WinArtifactRuleSubject[] = [];
 
@@ -236,6 +244,47 @@ export function buildSubjects(data: {
     subjects.push({ ...BLANK_SUBJECT_FIELDS, kind: "timeline", refKey: `${t.startTime ?? ""}:${identity}`, path: identity });
   }
 
+  // Generic regipy/hand-rolled registry plugin rows — `category` is the
+  // plugin name and `summary` the flattened "key=value; ..." string, so a
+  // rule pins one plugin with category=equals and matches one field with
+  // summary=contains/regex (e.g. "use_logon_credential=1"). Deliberately
+  // NOT exposed as `path`: the existing OR-logic path built-ins (LOLBin
+  // names, \Temp\, removable-drive regex) would otherwise fire on
+  // arbitrary plugin text. See the registry_plugin built-ins in
+  // rule-engine/seed.ts.
+  for (const r of data.registryPlugin ?? []) {
+    subjects.push({
+      ...BLANK_SUBJECT_FIELDS,
+      kind: "registry_plugin",
+      refKey: `${r.plugin}:${r.keyPath ?? ""}:${r.summary.slice(0, 200)}`,
+      summary: r.summary,
+      category: r.plugin,
+      keyPath: r.keyPath,
+    });
+  }
+
+  // Stage-2 generic records (WMI, Defender history, application artifacts,
+  // $LogFile, payloads, memory indicators) — `category` is the record kind,
+  // `summary` its title plus flattened detail fields (e.g.
+  // "suspicious_type=true"), and `path`/hashes are only set by the parsers
+  // where they're genuine file/command evidence, so the existing path and
+  // ioc_known built-ins apply without misfiring on free text.
+  for (const r of data.artifactRecord ?? []) {
+    subjects.push({
+      ...BLANK_SUBJECT_FIELDS,
+      kind: "artifact_record",
+      refKey: `${r.kind}:${r.path ?? r.title.slice(0, 200)}`,
+      // A file an editor had open or a path a log line mentions isn't
+      // execution/persistence evidence — keep those out of the path rules
+      // (LOLBin, Temp/Downloads, removable media); they stay in the UI.
+      path: MENTION_ONLY_KINDS.test(r.kind) ? null : r.path,
+      sha1: r.sha1,
+      sha256: r.sha256,
+      category: r.kind,
+      summary: `${r.title}; ${summarizePluginRow(r.details)}`,
+    });
+  }
+
   return subjects;
 }
 
@@ -267,6 +316,7 @@ function getFieldValue(subject: WinArtifactRuleSubject, field: WinArtifactField,
     provider_label: subject.providerLabel,
     exception_code: subject.exceptionCode,
     is_carved:      subject.isCarved,
+    summary:        subject.summary,
   };
   const val = fieldMap[field as Exclude<WinArtifactField, IocRuleField>];
   if (val === null || val === undefined) return "";

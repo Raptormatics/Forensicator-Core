@@ -29,7 +29,7 @@ type CaseOption = {
 
 type Phase = "case" | "upload" | "uploading" | "done" | "error";
 
-const ACCEPTED_EXTS = [".log", ".txt", ".csv", ".json", ".ndjson", ".gz"];
+const ACCEPTED_EXTS = [".log", ".txt", ".csv", ".json", ".ndjson", ".gz", ".evtx"];
 const CASE_SEVERITIES = ["important", "notable", "interesting", "informational"];
 
 /** Extract vendor label from decoder name e.g. decoder/apache-access/0 → Apache */
@@ -55,6 +55,7 @@ export default function UploadLogPage() {
   // ── Upload form state ────────────────────────────────────────────────────
   const [phase, setPhase]           = useState<Phase>("case");
   const [file, setFile]             = useState<File | null>(null);
+  const fileIsEvtx = !!file && file.name.toLowerCase().endsWith(".evtx");
   const [sourceType, setSourceType] = useState<string>("");
   const [hostname, setHostname]     = useState("");
   const [assetName, setAssetName]   = useState("");
@@ -140,19 +141,22 @@ export default function UploadLogPage() {
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
-    accept: { "text/*": ACCEPTED_EXTS, "application/json": [".json", ".ndjson"], "application/gzip": [".gz"] },
+    accept: { "text/*": ACCEPTED_EXTS, "application/json": [".json", ".ndjson"], "application/gzip": [".gz"], "application/octet-stream": [".evtx"] },
     multiple: false,
-    maxSize: 50 * 1024 * 1024,
+    // 256 MB is the raw .evtx limit; the server enforces 50 MB for text logs.
+    maxSize: 256 * 1024 * 1024,
   });
 
   async function handleSubmit() {
-    if (!file || !sourceType || !selectedCase) return;
+    if (!file || (!sourceType && !fileIsEvtx) || !selectedCase) return;
     setPhase("uploading");
     setError("");
     try {
       const form = new FormData();
       form.append("file", file);
-      form.append("sourceType", sourceType);
+      // Raw .evtx is converted to Event XML server-side and always decoded
+      // as windows-event, whatever decoder is (or isn't) selected.
+      form.append("sourceType", sourceType || "windows-event");
       form.append("caseId", selectedCase.id);
       if (hostname) form.append("hostname", hostname);
       if (assetName) form.append("assetName", assetName);
@@ -187,7 +191,7 @@ export default function UploadLogPage() {
     return c.title.toLowerCase().includes(q) || formatCaseNumber(c.caseSeq).toLowerCase().includes(q);
   });
 
-  const canSubmit = !!file && !!sourceType && phase === "upload";
+  const canSubmit = !!file && (!!sourceType || fileIsEvtx) && phase === "upload";
 
   if (phase === "uploading") {
     return (
@@ -368,7 +372,7 @@ export default function UploadLogPage() {
                     <div className="text-center">
                       <p className="text-zinc-300 font-medium">{isDragActive ? "Drop your log file here" : "Drag & drop your log file"}</p>
                       <p className="text-sm text-zinc-600 mt-1">or click to browse</p>
-                      <p className="text-xs text-zinc-700 mt-2">{ACCEPTED_EXTS.join("  ")} · max 50 MB</p>
+                      <p className="text-xs text-zinc-700 mt-2">{ACCEPTED_EXTS.join("  ")} · max 50 MB (256 MB for raw .evtx)</p>
                     </div>
                   </>
                 )}

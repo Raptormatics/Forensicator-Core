@@ -44,7 +44,8 @@ normalize:
 
   # Extract event timestamp
   - map:
-      - event.start: regex_extract($event.original, 'SystemTime=''([^'']+)''')
+      - event.start: regex_extract($event.original, 'SystemTime=.(\d{4}-\d\d-\d\dT[\d:.]+Z?)')
+      - '@timestamp': regex_extract($event.original, 'SystemTime=.(\d{4}-\d\d-\d\dT[\d:.]+Z?)')
 
   # Extract channel into log.logger only (do NOT overwrite event.dataset)
   - map:

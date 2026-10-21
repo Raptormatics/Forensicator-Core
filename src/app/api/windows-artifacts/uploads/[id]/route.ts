@@ -33,7 +33,7 @@ export async function GET(req: NextRequest, props: Params) {
     const [
       shimcache, amcache, userAssist, bam, autoruns, prefetch, lnk, jumpList, shellbags, mft, usnJrnl, srum,
       werReports, werDumps, recycleBin, notifications, searchIndex, quarantineEntries, quarantinePayloads, bitsJobs,
-      timeline,
+      timeline, registryPlugins, artifactRecords,
       findings,
     ] = await Promise.all([
       prisma.shimcacheEntry.findMany({ where: { fileId: { in: fileIds } }, orderBy: { order: "asc" }, take: ROW_CAP }),
@@ -65,6 +65,15 @@ export async function GET(req: NextRequest, props: Params) {
       prisma.defenderQuarantinePayload.findMany({ where: { fileId: { in: fileIds } }, orderBy: { createdAt: "desc" }, take: ROW_CAP }),
       prisma.bitsJobEntry.findMany({ where: { fileId: { in: fileIds } }, orderBy: { ctime: "desc" }, take: ROW_CAP }),
       prisma.timelineActivityEntry.findMany({ where: { fileId: { in: fileIds } }, orderBy: { startTime: "desc" }, take: ROW_CAP }),
+      // Spans many plugins (installed programs, IFEO, network profiles,
+      // SAM accounts, ...) across every hive in the collection, including
+      // historical copies — a higher cap than the single-artifact tabs.
+      prisma.registryPluginEntry.findMany({ where: { fileId: { in: fileIds } }, orderBy: [{ plugin: "asc" }, { timestamp: "desc" }], take: ROW_CAP * 5 }),
+      // Stage-2 generic records (WMI, Defender history, application
+      // artifacts, $LogFile, payloads, memory indicators, collector extras)
+      // across every file — every row is in the DB and went through the
+      // rule engine; this is only the browsable slice.
+      prisma.artifactRecordEntry.findMany({ where: { fileId: { in: fileIds } }, orderBy: [{ kind: "asc" }, { timestamp: "desc" }], take: ROW_CAP * 10 }),
       prisma.windowsArtifactFinding.findMany({
         where: { fileId: { in: fileIds } },
         orderBy: { matchCount: "desc" },
@@ -100,6 +109,8 @@ export async function GET(req: NextRequest, props: Params) {
       quarantineEntries,
       quarantinePayloads: quarantinePayloads.map((r) => ({ ...r, decryptedSizeBytes: r.decryptedSizeBytes?.toString() ?? null })),
       timeline,
+      registryPlugins,
+      artifactRecords,
       bitsJobs: bitsJobs.map((r) => ({
         ...r,
         downloadSizeBytes: r.downloadSizeBytes?.toString() ?? null,

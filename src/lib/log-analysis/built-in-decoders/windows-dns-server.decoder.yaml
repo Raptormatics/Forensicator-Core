@@ -1,0 +1,50 @@
+name: decoder/windows-dns-server/0
+enabled: true
+
+metadata:
+  title: 'Windows DNS Server Log Decoder'
+  author: 'Forensicator'
+  date: '2026-10-20'
+  description: >-
+    Decoder for the "DNS Server" channel. Labels DNS server plugin DLL
+    loads/failures (770/150 — the ServerLevelPluginDll DNSAdmins
+    privilege-escalation technique) and server configuration changes (541),
+    extracting the DLL path; zone and AD-integration events keep their code.
+  references:
+    - 'https://attack.mitre.org/techniques/T1574/'
+
+source_type: windows-event
+priority: 55
+
+check: >-
+  contains($event.original, '<Event xmlns=')
+  AND contains($event.original, '<Channel>DNS Server</Channel>')
+
+normalize:
+  - map:
+      - event.kind: event
+      - event.dataset: windows.dns_server
+      - observer.vendor: Microsoft
+      - observer.type: host
+      - host.name: regex_extract($event.original, '<Computer>([^<]+)</Computer>')
+      - event.code: regex_extract($event.original, '<EventID[^>]*>(\d+)</EventID>')
+      - event.start: regex_extract($event.original, 'SystemTime=.(\d{4}-\d\d-\d\dT[\d:.]+Z?)')
+      - '@timestamp': regex_extract($event.original, 'SystemTime=.(\d{4}-\d\d-\d\dT[\d:.]+Z?)')
+      - file.path: regex_extract($event.original, '>([A-Za-z]:\\[^<]*\.dll)<')
+
+  - check: string_equal($event.code, '770')
+    map:
+      - event.kind: alert
+      - event.category: array_append(configuration)
+      - event.action: dns-plugin-dll-loaded
+  - check: string_equal($event.code, '150')
+    map:
+      - event.kind: alert
+      - event.category: array_append(configuration)
+      - event.outcome: failure
+      - event.action: dns-plugin-dll-load-failed
+  - check: string_equal($event.code, '541')
+    map:
+      - event.category: array_append(configuration)
+      - event.type: array_append(change)
+      - event.action: dns-server-setting-changed
