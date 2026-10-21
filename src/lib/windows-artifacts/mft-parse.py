@@ -54,6 +54,7 @@ Emits one JSON object per line to stdout:
    "file_size", "has_alternate_data_streams"}
   {"type": "error", "message": str}                             — unrecoverable failure for this file
 """
+import os
 import sys
 import json
 
@@ -112,14 +113,23 @@ def main():
         frag = mft_fragmentation(mft_path)
     except Exception:
         frag = None
-    if frag and frag[0] > 1:
+    if frag and frag[0] > 1 and frag[1] < frag[2] and first_run_only_copy(mft_path, frag[1]):
         runs, first_records, total_records = frag
         emit({"type": "error", "message": (
-            f"This $MFT is fragmented on disk ({runs} data runs) but the copy only holds its first run: "
+            f"This $MFT is fragmented on disk ({runs} data runs) but the copy only holds its first run (collected by a "
+            f"Forensicator collector older than the run-following $MFT copy): "
             f"records 0-{first_records - 1} of {total_records} are real, the rest of the file is unrelated disk data "
             f"and was not parsed. Re-collect the $MFT following its data runs to get the remaining "
             f"{total_records - first_records} records.")})
         parse_raw(mft_path, limit=first_records)
+        return
+
+    # Large $MFTs go straight to the raw parser: pyfsntfs' path below keeps
+    # every entry in memory for path resolution (1-2 GB of Python objects
+    # for a 1.4M-record $MFT), while parse_raw() streams and only remembers
+    # directories (~35 MB measured on a real 1.4 GB Windows 11 $MFT).
+    if os.path.getsize(mft_path) > RAW_PARSER_THRESHOLD:
+        parse_raw(mft_path)
         return
 
     try:
@@ -369,6 +379,32 @@ def _records(path, limit=None):
                     return
                 yield idx, chunk[o:o + RAW_RECORD]
                 idx += 1
+
+
+RAW_PARSER_THRESHOLD = 256 * 1024 * 1024
+
+
+def first_run_only_copy(path, first_records, window=4096):
+    """True when the bytes after the $MFT's first data run are NOT the rest of
+    the $MFT — i.e. the copy read one contiguous range off the volume
+    (pre-fix collector) instead of following the run list. Every FILE
+    record stores its own record number at offset 0x2C (Windows XP+); in a
+    correctly reassembled copy the records just past the first run carry
+    their own index there, in a first-run-only copy nothing does. Confirmed
+    on a real Windows 11 $MFT: all sampled first-run records matched, none
+    of the 4096 slots past the boundary was even a FILE record."""
+    with open(path, "rb") as fh:
+        fh.seek(first_records * RAW_RECORD)
+        data = fh.read(window * RAW_RECORD)
+    matched = foreign = 0
+    for k in range(0, len(data) - RAW_RECORD + 1, RAW_RECORD):
+        rec = data[k:k + RAW_RECORD]
+        if rec[:4] == b"FILE":
+            if _struct.unpack_from("<I", rec, 0x2C)[0] == first_records + k // RAW_RECORD:
+                matched += 1
+        elif rec.strip(b"\x00"):
+            foreign += 1
+    return matched == 0 and foreign > 0
 
 
 def mft_fragmentation(path):

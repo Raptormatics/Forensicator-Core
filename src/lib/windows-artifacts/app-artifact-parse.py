@@ -28,10 +28,14 @@ documented text formats):
   - AnyDesk connection_trace.txt / ad.trace / ad_svc.trace.
   - TeamViewer Connections*.txt / *_Logfile.log.
   - OneDrive *.odl (EBFGONED v3): 0xCCDDEEFF-framed records — ms epoch
-    timestamp, code file, function, parameter blob. Parameter strings may
-    be obfuscated by OneDrive (key in general.keystore, not collected), so
-    only records whose parameters contain readable indicators are kept
-    (general.keystore would be needed to decrypt the rest).
+    timestamp, code file, function, parameter blob. OneDrive obfuscates
+    user data in the parameters (paths, URLs, file names, e-mail): each
+    value is AES-CBC encrypted (zero IV, PKCS7, UTF-16LE plaintext) and
+    written as a base64url token, with the key in the general.keystore
+    beside the .odl. When that keystore was collected it is passed in and
+    every decryptable token is replaced by its plaintext (confirmed on a
+    real Windows 11 host: "6ewcE4J--grQqNSLjvufWw" -> "https"); records
+    are kept only if their (decrypted) parameters carry an indicator.
 
 Emits `record` rows (see forensicator_records.py).
 """
@@ -266,7 +270,57 @@ ODL_MAGIC = b"EBFGONED"
 ODL_RECORD = b"\xcc\xdd\xee\xff"
 
 
-def parse_odl(path, rel):
+ODL_TOKEN = re.compile(r"[A-Za-z0-9_-]{22,}")
+
+
+def load_odl_key(keystore_path):
+    """general.keystore: JSON [{"CreatedTime", "Key": "<base64>\\u0000\\u0000",
+    "Version"}] — returns an AES decryptor for the base64 key, or None."""
+    import base64
+    from aes_decrypt import AesCbcDecryptor
+    try:
+        text, _ = read_text(keystore_path, 64 * 1024)
+        entry = json.loads(text)[0]
+        return AesCbcDecryptor(base64.b64decode(entry["Key"].rstrip("\x00")))
+    except Exception as e:
+        emit_error(f"general.keystore could not be read ({e}) — ODL strings left obfuscated")
+        return None
+
+
+def deobfuscate(text, decryptor, cache):
+    import base64
+    from aes_decrypt import unpad_pkcs7
+
+    def one(m):
+        tok = m.group(0)
+        if tok in cache:
+            return cache[tok]
+        plain = tok
+        b = tok.replace("_", "/").replace("-", "+")
+        if len(b) % 4 != 1:
+            try:
+                raw = base64.b64decode(b + "=" * (-len(b) % 4))
+                pt = unpad_pkcs7(decryptor.decrypt(raw)) if raw and len(raw) % 16 == 0 else None
+                if pt:
+                    for enc in ("utf-16-le", "utf-32-le"):
+                        try:
+                            cand = pt.decode(enc)
+                        except UnicodeDecodeError:
+                            continue
+                        if cand and cand.isprintable():
+                            plain = cand
+                            break
+            except Exception:
+                pass
+        cache[tok] = plain
+        return plain
+
+    return ODL_TOKEN.sub(one, text)
+
+
+def parse_odl(path, rel, keystore_path=None):
+    decryptor = load_odl_key(keystore_path) if keystore_path else None
+    cache = {}
     with open(path, "rb") as fh:
         buf = fh.read()
     if not buf.startswith(ODL_MAGIC):
@@ -291,6 +345,8 @@ def parse_odl(path, rel):
             break
         next_pos = buf.find(ODL_RECORD, pos + 32 + max(data_len, 0))
         strings = [t for _, t in ascii_strings(params, 5)] + [t for _, t in utf16_strings(params, 5)]
+        if decryptor:
+            strings = [deobfuscate(t, decryptor, cache) for t in strings]
         joined = " | ".join(dict.fromkeys(strings))
         iocs = extract_iocs(joined)
         # Only rows whose READABLE parameters carry an indicator — on current
@@ -304,7 +360,8 @@ def parse_odl(path, rel):
                 timestamp=epoch_ms_to_iso(ts_ms), path=first(iocs, "paths"), url=first(iocs, "urls"),
                 details={"client": "OneDrive", "source_file": rel, "odl_version": version, "code_file": code_file,
                          "function": func, "params_strings": strings[:40], "iocs": iocs,
-                         "note": "Parameter strings may be obfuscated by OneDrive; only readable values are shown"},
+                         "deobfuscated": bool(decryptor),
+                         "note": None if decryptor else "No general.keystore was uploaded for this folder — OneDrive-obfuscated values are not shown"},
             )
             kept += 1
             if kept >= LINE_CAP:
@@ -440,9 +497,10 @@ def parse_binary_strings(path, rel, kind_prefix):
 
 def main():
     if len(sys.argv) < 4:
-        emit_error("usage: app-artifact-parse.py <file> <target> <relative path>")
+        emit_error("usage: app-artifact-parse.py <file> <target> <relative path> [general.keystore]")
         sys.exit(1)
     path, target, rel = sys.argv[1], sys.argv[2], sys.argv[3]
+    keystore = sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] else None
     name = os.path.basename(rel).lower()
     kind = target_kind(target)
     try:
@@ -458,7 +516,12 @@ def main():
         if kind == "remote_access":
             return parse_remote_access(path, rel, target)
         if name.endswith(".odl"):
-            return parse_odl(path, rel)
+            return parse_odl(path, rel, keystore)
+        if name == "general.keystore":
+            # The ODL de-obfuscation key itself — used when the sibling .odl
+            # files are parsed; deliberately not echoed into the results.
+            return emit_record("cloud_sync_setting", f"OneDrive log key present: {rel}",
+                               details={"source_file": rel, "note": "general.keystore — used to de-obfuscate the ODL logs in this folder"})
         with open(path, "rb") as fh:
             head = fh.read(16)
         if head.startswith(b"SQLite format 3"):

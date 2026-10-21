@@ -402,12 +402,20 @@ export async function POST(req: NextRequest) {
         fs.writeFileSync(log2StoragePath, Buffer.from(await p.log2File.arrayBuffer()));
       }
 
-      const job = await queue.add("process-winartifact-file", { winArtifactFileId: fileRow.id });
       const updated = await prisma.windowsArtifactFile.update({
         where: { id: fileRow.id },
-        data: { storagePath, jobId: job.id ?? null, log1StoragePath, log2StoragePath },
+        data: { storagePath, log1StoragePath, log2StoragePath },
       });
       createdFiles.push(updated);
+    }
+
+    // Queue only once every row and file exists: some jobs read a sibling
+    // file from the same collection (an .odl needs the general.keystore from
+    // its folder), and queuing as we go let a job start before its sibling
+    // had been written.
+    for (let i = 0; i < createdFiles.length; i++) {
+      const job = await queue.add("process-winartifact-file", { winArtifactFileId: createdFiles[i].id });
+      createdFiles[i] = await prisma.windowsArtifactFile.update({ where: { id: createdFiles[i].id }, data: { jobId: job.id ?? null } });
     }
 
     return NextResponse.json({

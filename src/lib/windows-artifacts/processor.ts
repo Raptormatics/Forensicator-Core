@@ -1029,8 +1029,21 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
       // 3. Stage-2 artifact types — one shared runner (record-engine.ts).
       const spec = RECORD_ROLES[file.role];
       const pythonPath = spec.python === "system" ? await getWinArtifactsSystemPythonPath() : await getWinArtifactsPythonPath();
+      const args = spec.args(file, filePath);
+      // OneDrive .odl values are encrypted with the general.keystore that
+      // sits in the same log folder — pass the sibling keystore uploaded in
+      // this collection, if any (the route creates every file row before
+      // queuing any job, so it exists by now).
+      if (file.role === "app_artifact" && /\.odl$/i.test(file.filename)) {
+        const dir = file.filename.replace(/\\/g, "/").replace(/\/[^/]*$/, "");
+        const keystore = await prisma.windowsArtifactFile.findFirst({
+          where: { uploadId: file.uploadId, filename: { equals: `${dir}/general.keystore`, mode: "insensitive" } },
+          select: { storagePath: true },
+        });
+        if (keystore?.storagePath) args.push(keystore.storagePath);
+      }
       // Search rows go straight to the DB in batches (they don't feed rules).
-      const result = await runRecordParse(pythonPath, spec.script, spec.args(file, filePath), spec.timeoutSeconds, {
+      const result = await runRecordParse(pythonPath, spec.script, args, spec.timeoutSeconds, {
         onSearchBatch: async (rows) => {
           await chunkedCreateMany(
             (data) => prisma.searchIndexEntry.createMany({ data }),

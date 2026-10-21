@@ -29,26 +29,38 @@ interface BuiltinRuleDef {
 const cond = (field: WinArtifactField, operator: RuleOperator, value: string, id: string): WinArtifactRuleCondition =>
   ({ id, field, operator, value });
 
+// Subject kinds that show a program actually ran (or was loaded), as
+// opposed to merely existing on disk — see rule-engine.ts's buildSubjects().
+const EXECUTION_KINDS = "shimcache,amcache,userassist,bam,prefetch,prefetch_reference,wer,wer_dump_module";
+
 export const BUILTIN_RULES: BuiltinRuleDef[] = [
+  // Both path rules below are limited to EXECUTION evidence: Shimcache,
+  // Amcache, UserAssist, BAM, Prefetch (the executable and the files it
+  // loaded) and WER crash modules. They used to match any artifact path —
+  // $MFT/$UsnJrnl/Search entries record that a file EXISTS, not that it ran,
+  // and on a real Windows 11 collection that produced ~18,000 "execution
+  // from Temp/Downloads" hits (PDFs, desktop.ini, browser caches) and
+  // LOLBin hits for System32\rundll32.exe merely being on disk.
   {
     name: "LOLBin in Execution Evidence",
-    description: "A living-off-the-land binary commonly abused for execution/defense evasion appears in Shimcache, Amcache, or UserAssist",
+    description: "A living-off-the-land binary commonly abused for execution/defense evasion appears in execution evidence (Shimcache, Amcache, UserAssist, BAM, Prefetch, WER)",
     severity: "high",
-    logic: "OR",
+    logic: "AND",
     tags: ["execution", "lolbin"],
-    conditions: ["certutil.exe", "mshta.exe", "rundll32.exe", "regsvr32.exe", "wmic.exe", "msiexec.exe", "bitsadmin.exe", "powershell.exe"]
-      .map((p, i) => cond("path", "contains", p, `c${i}`)),
+    conditions: [
+      cond("artifact_type", "in_list", EXECUTION_KINDS, "c1"),
+      cond("path", "regex", "(^|\\\\|/)(certutil|mshta|rundll32|regsvr32|wmic|msiexec|bitsadmin|powershell)\\.exe$", "c2"),
+    ],
   },
   {
     name: "Execution from Temp or Downloads",
-    description: "A binary ran from a Temp or Downloads directory — common for dropped/staged malware",
+    description: "An executable or script ran (or was loaded) from a Temp or Downloads directory — common for dropped/staged malware, though installers also unpack to Temp",
     severity: "medium",
-    logic: "OR",
+    logic: "AND",
     tags: ["execution", "staging"],
     conditions: [
-      cond("path", "contains", "\\Temp\\", "c1"),
-      cond("path", "contains", "\\Downloads\\", "c2"),
-      cond("path", "contains", "\\AppData\\Local\\Temp\\", "c3"),
+      cond("artifact_type", "in_list", EXECUTION_KINDS, "c1"),
+      cond("path", "regex", "\\\\(Temp|Downloads)\\\\(.*\\\\)?[^\\\\]+\\.(exe|dll|scr|com|pif|cpl|msi|ps1|bat|cmd|vbs|vbe|js|jse|wsf|hta)$", "c2"),
     ],
   },
   {
