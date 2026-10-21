@@ -286,7 +286,10 @@ export default function WindowsArtifactDetailPage() {
                   </div>
                   <span className="text-xs text-zinc-500 capitalize">{f.status}</span>
                 </div>
-                {f.errorMessage && <p className="mt-2 text-xs text-red-400">{f.errorMessage}</p>}
+                {f.errorMessage && (
+                  // On a ready file this is a parse caveat (warning), not a failure.
+                  <p className={`mt-2 text-xs ${f.status === "failed" ? "text-red-400" : "text-amber-400"}`}>{f.errorMessage}</p>
+                )}
               </div>
             ))}
           </div>

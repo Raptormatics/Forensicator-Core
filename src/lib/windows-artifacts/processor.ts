@@ -148,6 +148,10 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
     ]);
 
     let findingTotal = 0;
+    // A parse that succeeded but with a caveat the analyst must see (e.g. a
+    // fragmented $MFT copy missing most of its records) — stored on the
+    // file row and shown in the Overview tab, not just the worker log.
+    let fileWarning: string | null = null;
     let shimcacheRows: ReturnType<typeof mapShimcacheEntries> = [];
     let amcacheRows: ReturnType<typeof mapAmcacheEntries> = [];
     let bamRows: ReturnType<typeof mapBamEntries> = [];
@@ -541,6 +545,7 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
       if (result.suppressedErrors > 0) {
         console.warn(`[windows-artifacts] mft-parse.py reported ${result.suppressedErrors} more unreadable entries (not logged individually)`);
       }
+      fileWarning = result.scriptErrors.filter((e) => /fragmented|could not be parsed|could not open the \$MFT/.test(e)).join(" ") || null;
       // No IOC upsert step — $MFT carries no hash to look up.
     } else if (file.role === "usnjrnl") {
       // 3. Run the $UsnJrnl:$J parser — pure stdlib struct parsing, same
@@ -1204,7 +1209,7 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
     // 8. Final status + counts
     await prisma.windowsArtifactFile.update({
       where: { id: fileId },
-      data: { status: "ready", findingCount: findingTotal, errorMessage: null, parsedAt: new Date() },
+      data: { status: "ready", findingCount: findingTotal, errorMessage: fileWarning, parsedAt: new Date() },
     });
 
     const totalFindings = await prisma.windowsArtifactFinding.count({ where: { file: { uploadId: file.uploadId } } });
