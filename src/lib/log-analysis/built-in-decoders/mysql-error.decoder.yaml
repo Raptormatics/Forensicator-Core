@@ -22,6 +22,10 @@ check: >-
   regex_match($event.original, '^\d{4}-\d{2}-\d{2}\s+\d+:\d+:\d+\s+\d+\s+\[')
 
 normalize:
+  # One block replaces the two conflicting `normalize:` versions this file
+  # shipped with (a duplicate YAML key, so the decoder never loaded). Values
+  # are extracted in two steps (_tmp.* then parse/downcase) because the
+  # engine cannot nest a function call around a regex with a capture group.
   - map:
       - event.kind: event
       - event.category: array_append(host)
@@ -30,100 +34,51 @@ normalize:
       - service.type: mysql
       - observer.vendor: MySQL
       - observer.type: database
-
-  # ISO8601 format: 2024-01-15T10:23:45.123456Z 42 [ERROR] [MY-012345] message
-  - map:
-      - event.start: regex_extract($event.original, '^(\d{4}-\d{2}-\d{2}T[\d:.]+Z?)')
-      - process.thread.id: parse_long(regex_extract($event.original, 'Z?\s+(\d+)\s+\['))
-      - log.level: downcase(regex_extract($event.original, '\[(\w+)\]\s+\['))
+      # 2024-01-15T10:23:45.123456Z 42 [ERROR] [MY-012345] [Server] message
+      # 2016-12-09T12:08:33.335060Z 0 [Warning] message
+      # 240115 10:23:45 [ERROR] message (5.x)
+      - _tmp.ts: regex_extract($event.original, '^(\d{4}-\d{2}-\d{2}T[\d:.]+Z?)')
+      - event.start: $_tmp.ts
+      - '@timestamp': $_tmp.ts
+      - _tmp.thread: regex_extract($event.original, '^\S+\s+(\d+)\s+\[')
+      - process.thread.id: parse_long($_tmp.thread)
+      - _tmp.level: regex_extract($event.original, '\[([A-Za-z]+)\]')
+      - log.level: downcase($_tmp.level)
       - event.code: regex_extract($event.original, '\[MY-(\d+)\]')
-      - message: regex_extract($event.original, '\[MY-\d+\]\s+\[?\w+\]?\s+(.+)$')
+      - message: regex_extract($event.original, '^\S+(?:\s+\S+)?\s+\[[A-Za-z]+\]\s+(?:\[MY-\d+\]\s+\[[A-Za-z]+\]\s+)?(.+)$')
 
-  # ISO8601 without MY- code: 2016-12-09T12:08:33.335060Z 0 [Warning] message
-  - check: >-
-      regex_match($event.original, '^\d{4}-\d{2}-\d{2}T') AND
-      NOT regex_match($event.original, '\[MY-\d+\]')
-    map:
-      - log.level: downcase(regex_extract($event.original, '\[(\w+)\]'))
-      - message: regex_extract($event.original, '\[\w+\]\s+(.+)$')
-
-  # Legacy date format: 240115 10:23:45 [ERROR] message
-  - check: regex_match($event.original, '^\d{6}\s')
-    map:
-      - log.level: downcase(regex_extract($event.original, '\[(\w+)\]'))
-      - message: regex_extract($event.original, '\[\w+\]\s+(.+)$')
-
-  # Level -> outcome
   - check: string_equal($log.level, 'error')
     map:
       - event.type: array_append(error)
       - event.outcome: failure
 
-  - check: string_equal($log.level, 'warning')
+  - check: string_equal($log.level, 'warning') OR string_equal($log.level, 'note') OR string_equal($log.level, 'system')
     map:
       - event.type: array_append(info)
 
-  - check: string_equal($log.level, 'note') OR string_equal($log.level, 'system') OR string_equal($log.level, 'information')
-    map:
-      - event.type: array_append(info)
-      - event.outcome: unknown
-
-  # Detect specific high-value events
-  - check: contains($message, 'Access denied')
+  # Failed logins: Access denied for user 'root'@'10.0.0.9' (using password: YES)
+  - check: contains($event.original, 'Access denied for user')
     map:
       - event.category: array_append(authentication)
       - event.action: authentication-failure
       - event.outcome: failure
-      - user.name: regex_extract($message, "for user '([^']+)'")
-      - source.ip: regex_extract($message, "from '([^']+)'")
+      - user.name: regex_extract($event.original, 'for user .([^@]+?).@')
+      - source.ip: regex_extract($event.original, 'for user .[^@]+?.@.([0-9A-Fa-f:.]+).')
 
-  - check: contains($message, 'Connect') AND contains($message, 'Access denied')
+  # Brute force lock-out: Host '10.0.0.70' is blocked because of many connection errors
+  - check: contains($event.original, 'is blocked because of many connection errors')
     map:
-      - event.category: array_append(authentication)
+      - event.category: array_append(network)
+      - event.action: host-blocked
+      - source.ip: regex_extract($event.original, 'Host .([0-9A-Fa-f:.]+). is blocked')
 
   - check: exists($user.name)
     map:
       - related.user: array_append_unique($user.name)
 
-normalize:
-  - map:
-      - event.dataset: mysql.error
-      - event.kind: event
-      - event.category: array_append(database)
-      - service.type: mysql
-      - _tmp.level: regex_extract($event.original, '\[(Warning|Note|Error|System)\]')
-      - process.thread.id: regex_extract($event.original, 'T[\d:.Z]+\s+(\d+)\s+\[')
-      - message: regex_extract($event.original, '\[(?:Warning|Note|Error|System)\]\s+(.*)')
-      - _tmp.user_host: regex_extract($event.original, "Access denied for user '([^']+)'@'([^']+)'")
-      - user.name: regex_extract($event.original, "Access denied for user '([^']+)'@")
-      - source.address: regex_extract($event.original, "@'([^']+)' ")
-      - rule.description: regex_extract($event.original, 'Host\s+\'([^\']+)\'\s+is blocked')
-
-  - check: string_equal($_tmp.level, 'Error')
+  - check: exists($source.ip)
     map:
-      - log.level: error
-      - event.severity: 3
-      - event.outcome: failure
-
-  - check: string_equal($_tmp.level, 'Warning')
-    map:
-      - log.level: warning
-      - event.severity: 4
-
-  - check: string_equal($_tmp.level, 'Note') OR string_equal($_tmp.level, 'System')
-    map:
-      - log.level: informational
-      - event.severity: 6
-
-  - check: regex_match($message, 'Access denied')
-    map:
-      - event.category: array_append(authentication)
-      - event.type: array_append(start)
-      - event.outcome: failure
-
-  - check: exists($user.name)
-    map:
-      - related.user: array_append_unique($user.name)
+      - related.ip: array_append_unique($source.ip)
 
   - map:
       - _tmp: delete()

@@ -213,7 +213,11 @@ const FUNCTION_REGISTRY: Record<string, FnHandler> = {
     const pairSep = toStr(resolveArg(args[2] ?? " ", ctx));
 
     const result: Record<string, string> = {};
-    const pairs = pairSep === " " ? source.split(/\s+/) : source.split(pairSep);
+    // Whitespace-separated pairs must not split inside a quoted value —
+    // FortiGate/most firewalls write policyname="Implicit Deny".
+    const pairs = pairSep === " "
+      ? source.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? []
+      : source.split(pairSep);
     for (const pair of pairs) {
       const idx = pair.indexOf(kvSep);
       if (idx === -1) continue;
