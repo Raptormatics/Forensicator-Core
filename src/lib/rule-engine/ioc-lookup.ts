@@ -57,8 +57,22 @@ export function resolveIoc(candidates: (string | null)[], iocMap: IocLookupMap):
   return undefined;
 }
 
+/** Known-bad, per Core's reputation convention (>= 70 malicious, >= 40
+ * suspicious, else clean — see the intelligence stats route and IOC page)
+ * or an explicit threat type (abuse.ch feed hits carry both, at 95).
+ * ioc_known used to be isEnriched(): any looked-up indicator, so a hash a
+ * provider had rated clean (reputation 0) made the built-in "Known
+ * Threat-Intel IOC" rules fire as critical — 108 such false positives on a
+ * single real Windows 11 collection. ioc_reputation still exposes the raw
+ * score for rules that want a lower threshold. */
+const KNOWN_BAD_REPUTATION = 70;
+
+export function isKnownBad(info: IocLookupInfo | null | undefined): boolean {
+  return !!info && (info.threatType !== null || (info.reputation !== null && info.reputation >= KNOWN_BAD_REPUTATION));
+}
+
 export function getIocFieldValue(info: IocLookupInfo | undefined, field: IocRuleField): string {
-  if (field === "ioc_known") return isEnriched(info) ? "true" : "false";
+  if (field === "ioc_known") return isKnownBad(info) ? "true" : "false";
   if (!info) return "";
   switch (field) {
     case "ioc_reputation":     return info.reputation !== null ? String(info.reputation) : "";

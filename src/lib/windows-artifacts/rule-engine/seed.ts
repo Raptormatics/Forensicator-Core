@@ -53,11 +53,11 @@ export const BUILTIN_RULES: BuiltinRuleDef[] = [
   },
   {
     name: "Amcache SHA1 Matches Known Threat-Intel IOC",
-    description: "This binary's SHA1 hash already carries prior enrichment from your organization's threat-intel providers",
+    description: "This binary's SHA1 hash is known-bad to your organization's threat intel (a threat type, or reputation 70+)",
     severity: "critical",
     logic: "AND",
     tags: ["threat-intel"],
-    conditions: [cond("ioc_known", "equals", "true", "c1")],
+    conditions: [cond("artifact_type", "equals", "amcache", "c1"), cond("ioc_known", "equals", "true", "c2")],
   },
   {
     name: "Service ImagePath Outside Standard Directories",
@@ -95,8 +95,8 @@ export const BUILTIN_RULES: BuiltinRuleDef[] = [
   },
   {
     name: "Possible MFT Timestomping",
-    description: "A file's NTFS creation timestamp is later than its own MFT record's last-change time — the record was altered (e.g. via SetMACE/timestomping tools) after the fact, which shouldn't be possible under normal filesystem behavior",
-    severity: "high",
+    description: "A file's NTFS creation timestamp is later than its own MFT record's last-change time. Timestomping tools (SetMACE etc.) produce this, but so does routine software: archive extractors, installers and copy tools set every timestamp — including the MFT change time — to the source file's date (tens of thousands of hits on a normal Windows 11 workstation). Treat as a lead to combine with location and other evidence, not an alert on its own",
+    severity: "low",
     logic: "AND",
     tags: ["anti-forensics", "timestomping"],
     conditions: [cond("has_timestomp", "equals", "true", "c1")],
@@ -111,11 +111,19 @@ export const BUILTIN_RULES: BuiltinRuleDef[] = [
   },
   {
     name: "Defender Quarantine Payload Matches Known Threat-Intel IOC",
-    description: "A decrypted Windows Defender quarantine payload's SHA256 already carries prior enrichment from your organization's threat-intel providers",
+    description: "A decrypted Windows Defender quarantine payload's SHA256 is known-bad to your organization's threat intel (a threat type, or reputation 70+)",
     severity: "critical",
     logic: "AND",
     tags: ["threat-intel", "defender"],
-    conditions: [cond("ioc_known", "equals", "true", "c1")],
+    conditions: [cond("artifact_type", "equals", "quarantine_payload", "c1"), cond("ioc_known", "equals", "true", "c2")],
+  },
+  {
+    name: "Collected File Hash Matches Known Threat-Intel IOC",
+    description: "A hash from a Recycle Bin payload, Defender detection history or Defender cloud lookup is known-bad to your organization's threat intel (a threat type, or reputation 70+)",
+    severity: "critical",
+    logic: "AND",
+    tags: ["threat-intel"],
+    conditions: [cond("artifact_type", "equals", "artifact_record", "c1"), cond("ioc_known", "equals", "true", "c2")],
   },
   {
     name: "AppInit_DLLs Configured",
