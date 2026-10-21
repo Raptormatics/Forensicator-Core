@@ -220,6 +220,7 @@ Every update is preceded by a database backup; a failed post-update health check
 | First-boot setup logs (secrets/DB/migrations) | `journalctl -u forensicator-firstboot` |
 | Is the app healthy? | `curl http://localhost:3000/api/health` — `{"status":"ok"}` means the app can reach Postgres |
 | Restart after a config change | `sudo systemctl restart forensicator` |
+| Check Live Update Log | `sudo tail -150 ./backups/update.log` |
 
 Common first issues:
 
