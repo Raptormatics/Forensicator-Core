@@ -19,6 +19,8 @@ type Props = {
   initialConfidence: number | null;
   initialModel: string | null;
   initialAnalysis: AiAnalysis | null;
+  /** The finding's case is closed — no new or repeat analysis. */
+  readOnly?: boolean;
 };
 
 const POLL_INTERVAL_MS = 4000;
@@ -31,6 +33,7 @@ export function AiAnalysisPanel({
   initialConfidence,
   initialModel,
   initialAnalysis,
+  readOnly = false,
 }: Props) {
   const [status, setStatus] = useState<Status>(initialStatus);
   const [summary, setSummary] = useState(initialSummary);
@@ -111,6 +114,9 @@ export function AiAnalysisPanel({
                 what to check next, and how confident to be.
               </p>
             )}
+            {readOnly ? (
+              <p className="text-xs text-zinc-500">This finding&apos;s case is closed — reopen the case to run AI analysis.</p>
+            ) : (
             <button
               onClick={() => trigger(status === "failed")}
               disabled={triggering}
@@ -119,6 +125,7 @@ export function AiAnalysisPanel({
               {triggering ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
               {status === "failed" ? "Retry analysis" : "Analyze with AI"}
             </button>
+            )}
           </div>
         ) : null}
 
@@ -160,6 +167,7 @@ export function AiAnalysisPanel({
 
             <div className="flex items-center justify-between border-t border-zinc-800 pt-2 text-xs text-zinc-500">
               <span>{model ? `Model: ${model}` : null}{confidence !== null ? ` · Confidence: ${confidence}%` : null}</span>
+              {!readOnly && (
               <button
                 onClick={() => trigger(true)}
                 disabled={triggering}
@@ -168,6 +176,7 @@ export function AiAnalysisPanel({
               >
                 <RotateCw className="h-3 w-3" /> Re-analyze
               </button>
+              )}
             </div>
           </div>
         ) : null}

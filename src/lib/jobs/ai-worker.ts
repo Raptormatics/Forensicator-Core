@@ -12,15 +12,25 @@ import { generateAiCompletion, AiProviderError } from "@/lib/ai/provider";
 import { buildFindingPrompt, parseAiResponse } from "@/lib/ai/prompt";
 import type { AiEnrichmentJobData } from "./queues";
 import type { JsonObject } from "@/types/json";
+import { CLOSED_STATUS } from "@/lib/cases/case-lock";
 
 const AI_QUEUE = "forensicator-ai";
 
 async function processAiAnalysis(job: Job<AiEnrichmentJobData>) {
   const { findingId } = job.data;
 
-  const finding = await prisma.finding.findUnique({ where: { id: findingId } });
+  const finding = await prisma.finding.findUnique({
+    where: { id: findingId },
+    include: { investigation: { select: { case: { select: { status: true } } } } },
+  });
   if (!finding) {
     console.warn(`[ai-worker] finding ${findingId} not found, skipping`);
+    return;
+  }
+  // Queued before its case was closed — a closed case's findings are frozen.
+  if (finding.investigation.case?.status === CLOSED_STATUS) {
+    await prisma.finding.update({ where: { id: findingId }, data: { aiStatus: "not_queued" } });
+    console.warn(`[ai-worker] finding ${findingId} belongs to a closed case — skipping`);
     return;
   }
 

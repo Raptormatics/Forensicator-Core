@@ -38,6 +38,9 @@ export const getInvestigation = cache(async (id: string) =>
       uploadedBy: {
         select: { email: true, name: true }
       },
+      case: {
+        select: { id: true, caseSeq: true, title: true, status: true }
+      },
       findings: {
         orderBy: { createdAt: "asc" }
       }

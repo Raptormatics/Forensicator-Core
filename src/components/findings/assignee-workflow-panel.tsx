@@ -34,9 +34,11 @@ interface Props {
   findingId: string;        // DB UUID of the Finding row
   initialAssigneeId: string | null;
   initialStatus: WorkflowStatus;
+  /** The finding's case is closed — status and assignee are frozen. */
+  readOnly?: boolean;
 }
 
-export function AssigneeWorkflowPanel({ findingId, initialAssigneeId, initialStatus }: Props) {
+export function AssigneeWorkflowPanel({ findingId, initialAssigneeId, initialStatus, readOnly = false }: Props) {
   const [status, setStatus] = useState<WorkflowStatus>(initialStatus);
   useEffect(() => { setStatus(initialStatus); }, [initialStatus]);
   const [statusPending, startStatusTransition] = useTransition();
@@ -82,7 +84,7 @@ export function AssigneeWorkflowPanel({ findingId, initialAssigneeId, initialSta
               <button
                 key={opt.value}
                 onClick={() => handleStatusChange(opt.value)}
-                disabled={statusPending}
+                disabled={statusPending || readOnly}
                 className={[
                   "rounded border px-2.5 py-1 text-xs font-medium transition-all",
                   opt.color,
@@ -106,7 +108,12 @@ export function AssigneeWorkflowPanel({ findingId, initialAssigneeId, initialSta
       </div>
 
       {/* ── Assignee ── */}
-      <AssigneePanel assigneeId={initialAssigneeId} onAssign={handleAssign} />
+      <AssigneePanel
+        assigneeId={initialAssigneeId}
+        onAssign={handleAssign}
+        disabled={readOnly}
+        disabledReason="This finding's case is closed — reopen the case to change it."
+      />
     </div>
   );
 }

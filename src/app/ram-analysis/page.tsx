@@ -6,7 +6,7 @@ import {
   AlertCircle, CheckCircle2, Clock, Loader2, MemoryStick,
   Plus, RefreshCw, Shield, Trash2,
 } from "lucide-react";
-import { formatCaseNumber } from "@/lib/cases/case-number";
+import { CaseBadge } from "@/components/cases/case-badge";
 
 type Upload = {
   id: string;
@@ -24,7 +24,7 @@ type Upload = {
   errorMessage: string | null;
   createdAt: string;
   uploadedBy: { email: string; name: string | null } | null;
-  case: { id: string; title: string; caseSeq: number } | null;
+  case: { id: string; title: string; caseSeq: number; status: string } | null;
 };
 
 const STATUS_ICON: Record<string, React.ReactNode> = {
@@ -67,7 +67,8 @@ export default function RamAnalysisPage() {
 
   async function deleteUpload(id: string) {
     if (!confirm("Delete this RAM upload and all its processes, connections, IOCs and findings?")) return;
-    await fetch(`/api/ram-analysis/uploads/${id}`, { method: "DELETE" });
+    const res = await fetch(`/api/ram-analysis/uploads/${id}`, { method: "DELETE" });
+    if (!res.ok) window.alert((await res.json().catch(() => ({}))).error ?? "Couldn't delete this upload.");
     load();
   }
 
@@ -208,25 +209,21 @@ export default function RamAnalysisPage() {
                       {u.assetName ?? u.hostname ?? "—"}
                     </td>
                     <td className="px-4 py-3 text-xs">
-                      {u.case ? (
-                        <Link href={`/cases/${u.case.id}`} className="text-blue-400 hover:text-blue-300 font-mono">
-                          {formatCaseNumber(u.case.caseSeq)}
-                        </Link>
-                      ) : (
-                        <span className="text-zinc-600">—</span>
-                      )}
+                      {u.case ? <CaseBadge kase={u.case} /> : <span className="text-zinc-600">—</span>}
                     </td>
                     <td className="px-4 py-3 text-zinc-500 text-xs whitespace-nowrap">
                       {new Date(u.createdAt).toLocaleString()}
                     </td>
                     <td className="px-4 py-3 text-right">
-                      <button
-                        onClick={() => deleteUpload(u.id)}
-                        className="p-1.5 rounded text-zinc-600 hover:text-red-400 hover:bg-red-900/20 transition-colors"
-                        title="Delete"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
+                      {u.case?.status !== "closed" && (
+                        <button
+                          onClick={() => deleteUpload(u.id)}
+                          className="p-1.5 rounded text-zinc-600 hover:text-red-400 hover:bg-red-900/20 transition-colors"
+                          title="Delete"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}

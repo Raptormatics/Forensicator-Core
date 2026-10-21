@@ -136,6 +136,18 @@ model Case {
   incidentType String? @map("incident_type") // matches Playbook.incidentType when a playbook's been applied
   tags        String[] @default([])
 
+  // Closure record (see src/lib/cases/case-lock.ts). A closed case's record
+  // is frozen until it's reopened with a reason; each close/reopen is also
+  // written to AuditLog, so these columns hold only the latest of each.
+  // User ids are plain columns, not relations, to keep User untouched here.
+  closedAt           DateTime? @map("closed_at")
+  closedById         String?   @map("closed_by_id") @db.Uuid
+  closureDisposition String?   @map("closure_disposition") // true_positive | false_positive | benign | inconclusive
+  closureSummary     String?   @map("closure_summary") @db.Text
+  reopenedAt         DateTime? @map("reopened_at")
+  reopenedById       String?   @map("reopened_by_id") @db.Uuid
+  reopenReason       String?   @map("reopen_reason") @db.Text
+
   createdById String   @map("created_by_id") @db.Uuid
   createdBy   User     @relation("caseCreatedBy", fields: [createdById], references: [id])
   assigneeId  String?  @map("assignee_id") @db.Uuid

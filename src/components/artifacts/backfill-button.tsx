@@ -24,7 +24,7 @@ export function BackfillButton({ investigationId }: { investigationId: string })
         setState("done");
         router.refresh();
       } else {
-        setResult(json.message ?? "Backfill failed.");
+        setResult(json.message ?? json.error ?? "Backfill failed.");
         setState("error");
       }
     } catch (e) {

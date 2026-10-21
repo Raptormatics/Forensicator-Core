@@ -3,6 +3,7 @@ export const runtime = "nodejs";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db/prisma";
 import { getActorOrThrow, AuthError, orgWhere } from "@/lib/auth/api-guard";
+import { guardCaseOpen } from "@/lib/cases/case-lock";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -45,6 +46,9 @@ export async function POST(req: NextRequest, props: Params) {
 
   const kase = await prisma.case.findFirst({ where: { id: params.id, ...orgWhere(actor) } });
   if (!kase) return NextResponse.json({ error: "not_found" }, { status: 404 });
+
+  const locked = await guardCaseOpen({ caseId: params.id }, "changing its tasks");
+  if (locked) return locked;
 
   const body = await req.json().catch(() => ({}));
   const title = typeof body.title === "string" ? body.title.trim() : "";

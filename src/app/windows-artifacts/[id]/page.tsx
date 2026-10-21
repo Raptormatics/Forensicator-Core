@@ -6,7 +6,7 @@ import Link from "next/link";
 import {
   AlertCircle, ArrowLeft, CheckCircle2, Clock, Loader2, FileSearch, RefreshCw, Search, Download,
 } from "lucide-react";
-import { formatCaseNumber } from "@/lib/cases/case-number";
+import { CaseBadge } from "@/components/cases/case-badge";
 import { formatDateTime } from "@/lib/utils";
 
 type FileRow = {
@@ -22,7 +22,7 @@ type Upload = {
   id: string; hostname: string | null; notes: string | null; findingCount: number; createdAt: string;
   collectionManifest: CollectionManifest | null;
   uploadedBy: { email: string; name: string | null } | null;
-  case: { id: string; title: string; caseSeq: number } | null;
+  case: { id: string; title: string; caseSeq: number; status: string } | null;
   files: FileRow[];
 };
 type ShimcacheRow = { id: string; fileId: string; path: string; lastModified: string | null; executionFlag: boolean | null; order: number };
@@ -240,11 +240,7 @@ export default function WindowsArtifactDetailPage() {
                 <FileSearch className="h-4 w-4" /> Windows Artifact Analysis
               </div>
               <h1 className="text-2xl font-semibold text-zinc-50">{upload.hostname ?? "(unnamed host)"}</h1>
-              {upload.case && (
-                <Link href={`/cases/${upload.case.id}`} className="text-sm text-blue-400 hover:text-blue-300 font-mono">
-                  {formatCaseNumber(upload.case.caseSeq)} — {upload.case.title}
-                </Link>
-              )}
+              {upload.case && <div className="mt-1 text-sm"><CaseBadge kase={upload.case} showTitle /></div>}
             </div>
             <button onClick={load} className="p-2 rounded-md border border-zinc-800 text-zinc-500 hover:text-zinc-300">
               <RefreshCw className="h-4 w-4" />

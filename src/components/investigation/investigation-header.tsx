@@ -1,6 +1,7 @@
 import { CalendarClock, Server, UserCircle } from "lucide-react";
 import type { ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
+import { CaseBadge, type CaseRef } from "@/components/cases/case-badge";
 import { formatDateTime } from "@/lib/utils";
 
 type InvestigationHeaderProps = {
@@ -13,6 +14,7 @@ type InvestigationHeaderProps = {
     email: string;
     name: string | null;
   };
+  caseRef?: CaseRef | null;
 };
 
 export function InvestigationHeader({
@@ -21,7 +23,8 @@ export function InvestigationHeader({
   status,
   findingCount,
   createdAt,
-  uploadedBy
+  uploadedBy,
+  caseRef = null
 }: InvestigationHeaderProps) {
   return (
     <header className="border-b border-zinc-800 bg-zinc-950/40">
@@ -33,6 +36,7 @@ export function InvestigationHeader({
               <Badge className="border-teal-400/30 bg-teal-400/10 text-teal-100">
                 {findingCount.toLocaleString()} findings
               </Badge>
+              {caseRef && <span className="text-xs"><CaseBadge kase={caseRef} showTitle /></span>}
             </div>
             <h1 className="mt-3 text-3xl font-semibold tracking-normal text-zinc-50">{title}</h1>
           </div>

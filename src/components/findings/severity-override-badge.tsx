@@ -29,6 +29,9 @@ export function SeverityOverrideBadge({ findingId, severity, onChanged }: Props)
       if (res.ok) {
         setCurrent(next);
         onChanged?.(next);
+      } else {
+        // e.g. the finding's case is closed (403 case_closed)
+        window.alert((await res.json().catch(() => ({}))).error ?? "Couldn't change the severity.");
       }
     } finally {
       setSaving(false);

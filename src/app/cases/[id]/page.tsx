@@ -3,12 +3,13 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Link2, Search, Trash2, RefreshCw, ListChecks, ChevronDown, ChevronUp, Plus, X, ClipboardList } from "lucide-react";
+import { ArrowLeft, Link2, Search, Trash2, RefreshCw, ListChecks, ChevronDown, ChevronUp, Plus, X, ClipboardList, Lock } from "lucide-react";
 import { formatCaseNumber } from "@/lib/cases/case-number";
 import { ReportGenerator } from "@/components/reports/report-generator";
 import { AssigneePanel } from "@/components/shared/assignee-panel";
 import { CaseThreatIntelSection } from "@/components/cases/case-threat-intel-section";
 import { CaseKnownHashesSection } from "@/components/cases/case-known-hashes-section";
+import { CaseClosureDialog, dispositionLabel } from "@/components/cases/case-closure-dialog";
 
 type CaseDetail = {
   id: string;
@@ -25,6 +26,14 @@ type CaseDetail = {
   assignee:  { id: string; email: string; name: string | null } | null;
   notes: { id: string; content: string; createdAt: string; author: { email: string; name: string | null } }[];
   investigations: { id: string; title: string; hostname: string | null; status: string; findingCount: number }[];
+  closedAt: string | null;
+  closureDisposition: string | null;
+  closureSummary: string | null;
+  closedBy: { email: string; name: string | null } | null;
+  reopenedAt: string | null;
+  reopenReason: string | null;
+  reopenedBy: { email: string; name: string | null } | null;
+  closureHistory: { id: string; action: "case_closed" | "case_reopened"; actorEmail: string | null; metadata: Record<string, string> | null; createdAt: string }[];
 };
 
 type InvOption = { id: string; title: string | null; hostname: string | null; status: string; findingCount: number; createdAt: string; caseId: string | null };
@@ -86,6 +95,8 @@ export default function CaseDetailPage() {
   const [selectedInv, setSelectedInv] = useState<InvOption | null>(null);
   const [note, setNote]       = useState("");
   const [saving, setSaving]   = useState(false);
+  const [closure, setClosure] = useState<{ mode: "close" | "reopen"; reopenStatus?: string } | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   // ── Tasks ────────────────────────────────────────────────────────────────
   const [tasks, setTasks]             = useState<CaseTask[]>([]);
@@ -276,12 +287,22 @@ export default function CaseDetailPage() {
   }, [id]);
 
   async function patch(data: Record<string, unknown>) {
-    await fetch(`/api/cases/${id}`, {
+    const res = await fetch(`/api/cases/${id}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(data),
     });
+    setActionError(res.ok ? null : (await res.json().catch(() => ({}))).error ?? "Couldn't update the case.");
     load();
+  }
+
+  // Closing and reopening go through CaseClosureDialog (disposition/summary,
+  // or a reopen reason); every other status change is a plain PATCH.
+  function changeStatus(next: string) {
+    if (!c || next === c.status) return;
+    if (next === "closed") setClosure({ mode: "close" });
+    else if (c.status === "closed") setClosure({ mode: "reopen", reopenStatus: next });
+    else patch({ status: next });
   }
 
   async function linkInvestigation() {
@@ -325,8 +346,9 @@ export default function CaseDetailPage() {
   if (loading) return <div className="p-8 text-zinc-500">Loading…</div>;
   if (!c)      return <div className="p-8 text-red-400">Case not found.</div>;
 
-  // Closed cases stop accepting new evidence/reassignment — reopen via the
-  // Status selector above to unlock these again. Notes/Tasks/Reports stay open.
+  // A closed case is frozen (see src/lib/cases/case-lock.ts): links, uploads,
+  // tasks, notes and imports are read-only until it's reopened with a reason
+  // via the Status selector. Viewing, export and reports stay available.
   const isClosed = c.status === "closed";
 
   return (
@@ -348,7 +370,7 @@ export default function CaseDetailPage() {
           <label className="text-xs text-zinc-500 hidden sm:block">Status:</label>
           <select
             value={c.status}
-            onChange={(e) => patch({ status: e.target.value })}
+            onChange={(e) => changeStatus(e.target.value)}
             title={STATUS_OPTS.find(o => o.value === c.status)?.desc ?? c.status}
             className="rounded-md border border-zinc-700 bg-zinc-800 px-2 py-1.5 text-sm text-zinc-200"
           >
@@ -359,6 +381,7 @@ export default function CaseDetailPage() {
           <select
             value={c.severity}
             onChange={(e) => patch({ severity: e.target.value })}
+            disabled={isClosed}
             title={SEV_OPTS.find(o => o.value === c.severity)?.desc ?? c.severity}
             className="rounded-md border border-zinc-700 bg-zinc-800 px-2 py-1.5 text-sm text-zinc-200"
           >
@@ -369,12 +392,13 @@ export default function CaseDetailPage() {
           <select
             value={c.incidentType ?? ""}
             onChange={(e) => patch({ incidentType: e.target.value || null })}
+            disabled={isClosed}
             className="rounded-md border border-zinc-700 bg-zinc-800 px-2 py-1.5 text-sm text-zinc-200"
           >
             <option value="">Unset</option>
             {playbooks.map((p) => <option key={p.incidentType} value={p.incidentType}>{p.name}</option>)}
           </select>
-          {playbooks.length === 0 && (
+          {!isClosed && playbooks.length === 0 && (
             <button
               onClick={seedPlaybooks}
               disabled={seedingPlaybooks}
@@ -390,6 +414,40 @@ export default function CaseDetailPage() {
           </button>
         </div>
       </div>
+
+      {closure && (
+        <CaseClosureDialog
+          caseId={c.id}
+          mode={closure.mode}
+          reopenStatus={closure.reopenStatus}
+          onClose={() => setClosure(null)}
+          onDone={() => { setClosure(null); load(); }}
+        />
+      )}
+
+      {actionError && (
+        <p className="mb-4 rounded-md px-3 py-2 text-xs bg-red-900/30 text-red-400">{actionError}</p>
+      )}
+
+      {isClosed && (
+        <div className="mb-6 rounded-xl border border-amber-700/40 bg-amber-900/10 p-4">
+          <div className="flex flex-wrap items-center gap-2 mb-1">
+            <span className="inline-flex items-center gap-1 rounded-full border border-amber-600/50 bg-amber-900/30 px-2 py-0.5 text-xs font-medium text-amber-300">
+              <Lock className="h-3 w-3" /> Case Closed
+            </span>
+            <span className="text-sm text-zinc-200">{dispositionLabel(c.closureDisposition)}</span>
+            {c.closedAt && (
+              <span className="text-xs text-zinc-500">
+                · {new Date(c.closedAt).toLocaleString()}{c.closedBy ? ` by ${c.closedBy.name ?? c.closedBy.email}` : ""}
+              </span>
+            )}
+          </div>
+          {c.closureSummary && <p className="text-sm text-zinc-300 whitespace-pre-wrap mt-2">{c.closureSummary}</p>}
+          <p className="text-xs text-zinc-500 mt-2">
+            Everything linked to this case is read-only. Change the Status above to reopen it.
+          </p>
+        </div>
+      )}
 
       {/* Case stats — always reflects what's currently linked to this case; refresh (above) or reload the page to pick up anything added elsewhere */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
@@ -524,7 +582,7 @@ export default function CaseDetailPage() {
               <h2 className="text-sm font-semibold text-zinc-300 flex items-center gap-2">
                 <ListChecks className="h-4 w-4 text-zinc-500" /> Tasks ({tasks.length})
               </h2>
-              {c.incidentType && (
+              {!isClosed && c.incidentType && (
                 <button
                   onClick={applyPlaybook}
                   disabled={applyingPlaybook}
@@ -550,6 +608,7 @@ export default function CaseDetailPage() {
                           type="checkbox"
                           checked={task.status === "done"}
                           onChange={() => toggleTaskDone(task)}
+                          disabled={isClosed}
                           className="shrink-0 accent-teal-500"
                         />
                         <button
@@ -567,6 +626,7 @@ export default function CaseDetailPage() {
                         <select
                           value={task.owner?.id ?? ""}
                           onChange={(e) => patchTask(task.id, { ownerId: e.target.value || null })}
+                          disabled={isClosed}
                           className="shrink-0 rounded border border-zinc-700 bg-zinc-800 px-1.5 py-0.5 text-xs text-zinc-300 max-w-[110px]"
                         >
                           <option value="">Unassigned</option>
@@ -577,9 +637,11 @@ export default function CaseDetailPage() {
                         <button onClick={() => toggleExpand(task.id)} className="shrink-0 text-zinc-600 hover:text-zinc-300">
                           {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
                         </button>
-                        <button onClick={() => deleteTask(task.id)} className="shrink-0 text-zinc-600 hover:text-red-400">
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
+                        {!isClosed && (
+                          <button onClick={() => deleteTask(task.id)} className="shrink-0 text-zinc-600 hover:text-red-400">
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        )}
                       </div>
 
                       {isExpanded && (
@@ -590,6 +652,7 @@ export default function CaseDetailPage() {
                               <button
                                 key={opt.value}
                                 onClick={() => patchTask(task.id, { status: opt.value })}
+                                disabled={isClosed}
                                 className={`rounded border px-2.5 py-1 text-xs font-medium transition-all ${opt.color} ${task.status === opt.value ? "ring-1 ring-offset-1 ring-offset-zinc-950" : "opacity-70"}`}
                               >
                                 {opt.label}
@@ -601,6 +664,7 @@ export default function CaseDetailPage() {
                           <textarea
                             defaultValue={task.notes ?? ""}
                             onBlur={(e) => { if (e.target.value !== (task.notes ?? "")) patchTask(task.id, { notes: e.target.value }); }}
+                            readOnly={isClosed}
                             placeholder="Notes…"
                             rows={2}
                             className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm text-zinc-200 placeholder-zinc-600 outline-none focus:border-teal-500 resize-none"
@@ -621,15 +685,17 @@ export default function CaseDetailPage() {
                                     ) : (
                                       <span className="text-zinc-600">{fid.slice(0, 8)}</span>
                                     )}
-                                    <button onClick={() => unlinkFinding(task, fid)} className="text-zinc-600 hover:text-red-400">
-                                      <X className="h-3 w-3" />
-                                    </button>
+                                    {!isClosed && (
+                                      <button onClick={() => unlinkFinding(task, fid)} className="text-zinc-600 hover:text-red-400">
+                                        <X className="h-3 w-3" />
+                                      </button>
+                                    )}
                                   </span>
                                 );
                               })}
                             </div>
 
-                            {findingPickerTaskId === task.id ? (
+                            {isClosed ? null : findingPickerTaskId === task.id ? (
                               <div className="rounded-lg border border-zinc-700 bg-zinc-950 overflow-hidden">
                                 <div className="flex items-center gap-2 px-3 py-2 border-b border-zinc-800">
                                   <Search className="h-3.5 w-3.5 text-zinc-500 shrink-0" />
@@ -683,6 +749,7 @@ export default function CaseDetailPage() {
             )}
 
             {/* Add-task inline form */}
+            {!isClosed && (
             <div className="flex flex-wrap gap-2">
               <input
                 value={newTaskTitle}
@@ -725,6 +792,7 @@ export default function CaseDetailPage() {
                 <Plus className="h-3.5 w-3.5" /> Add
               </button>
             </div>
+            )}
           </section>
 
           {/* Reports */}
@@ -732,12 +800,12 @@ export default function CaseDetailPage() {
 
           {/* Threat Intel */}
           <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
-            <CaseThreatIntelSection caseId={c.id} />
+            <CaseThreatIntelSection caseId={c.id} readOnly={isClosed} />
           </section>
 
           {/* Known-Good Hashes */}
           <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
-            <CaseKnownHashesSection caseId={c.id} />
+            <CaseKnownHashesSection caseId={c.id} readOnly={isClosed} />
           </section>
         </div>
 
@@ -781,6 +849,7 @@ export default function CaseDetailPage() {
                 </div>
               ))}
             </div>
+            {!isClosed && (
             <div className="flex gap-2">
               <input
                 value={note}
@@ -797,7 +866,28 @@ export default function CaseDetailPage() {
                 Add
               </button>
             </div>
+            )}
           </section>
+
+          {/* Closure history — every close/reopen, from the audit log */}
+          {c.closureHistory.length > 0 && (
+            <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
+              <h2 className="text-sm font-semibold text-zinc-300 mb-3">Closure History</h2>
+              <div className="space-y-2">
+                {c.closureHistory.map((h) => (
+                  <div key={h.id} className="rounded-lg bg-zinc-800 px-3 py-2 text-xs">
+                    <p className={h.action === "case_closed" ? "text-amber-300" : "text-teal-300"}>
+                      {h.action === "case_closed" ? `Closed — ${dispositionLabel(h.metadata?.disposition)}` : "Reopened"}
+                    </p>
+                    {(h.metadata?.summary || h.metadata?.reason) && (
+                      <p className="text-zinc-300 mt-1 whitespace-pre-wrap">{h.metadata?.summary ?? h.metadata?.reason}</p>
+                    )}
+                    <p className="text-zinc-600 mt-1">{h.actorEmail ?? "—"} · {new Date(h.createdAt).toLocaleString()}</p>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
         </div>
       </div>
     </div>

@@ -25,9 +25,11 @@ type FindingDetailProps = {
   aiSummary: string | null;
   aiConfidence: number | null;
   aiModel: string | null;
+  /** The finding's case is closed — analyst workflow and AI are read-only. */
+  readOnly?: boolean;
 };
 
-export function FindingDetail({ finding, findingDbId, assigneeId, workflowStatus, aiStatus, aiSummary, aiConfidence, aiModel }: FindingDetailProps) {
+export function FindingDetail({ finding, findingDbId, assigneeId, workflowStatus, aiStatus, aiSummary, aiConfidence, aiModel, readOnly = false }: FindingDetailProps) {
   const title = stringValue(finding.summary?.title) ?? finding.finding_type;
   const description = stringValue(finding.summary?.description);
   const riskScore = numberValue(finding.risk?.score);
@@ -77,6 +79,7 @@ export function FindingDetail({ finding, findingDbId, assigneeId, workflowStatus
             findingId={findingDbId}
             initialAssigneeId={assigneeId}
             initialStatus={workflowStatus as "new" | "under_review" | "confirmed" | "false_positive" | "escalated" | "resolved"}
+            readOnly={readOnly}
           />
         </Panel>
 
@@ -87,6 +90,7 @@ export function FindingDetail({ finding, findingDbId, assigneeId, workflowStatus
           initialConfidence={aiConfidence}
           initialModel={aiModel}
           initialAnalysis={asAiAnalysis(finding.ai_analysis)}
+          readOnly={readOnly}
         />
 
         <RiskMeter level={riskLevel ?? finding.severity} score={riskScore} reason={riskReason} />

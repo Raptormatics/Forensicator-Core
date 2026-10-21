@@ -29,7 +29,7 @@ export async function GET(req: NextRequest) {
         createdAt: true, updatedAt: true,
         uploadedBy: { select: { email: true, name: true } },
         organization: { select: { id: true, name: true } },
-        case: { select: { id: true, title: true, caseSeq: true } },
+        case: { select: { id: true, title: true, caseSeq: true, status: true } },
         _count: { select: { conversations: true, dnsQueries: true, findings: true, iocs: true } },
       },
     });

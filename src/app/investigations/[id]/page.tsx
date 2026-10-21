@@ -107,6 +107,8 @@ export default async function InvestigationPage(props: InvestigationPageProps) {
   // never got promoted to dedicated columns, but they're real chain-of-custody
   // detail (when collection actually ran, who ran it, what collector version).
   const rawMetadata = (investigation.metadata ?? {}) as Record<string, unknown>;
+  // Everything linked to a closed case is read-only (src/lib/cases/case-lock.ts).
+  const caseClosed = investigation.case?.status === "closed";
   const collectionStartTime = typeof rawMetadata.collection_start_time === "string" ? rawMetadata.collection_start_time : null;
   const operator = typeof rawMetadata.operator === "string" ? rawMetadata.operator : null;
   const collectorVersion = typeof rawMetadata.collector_version === "string" ? rawMetadata.collector_version : null;
@@ -120,6 +122,7 @@ export default async function InvestigationPage(props: InvestigationPageProps) {
         findingCount={investigation.findingCount || investigation.findings.length}
         createdAt={investigation.createdAt}
         uploadedBy={investigation.uploadedBy}
+        caseRef={investigation.case}
       />
 
       <div className="mx-auto w-full max-w-[1800px] px-4 py-6 sm:px-6 lg:px-8">
@@ -209,6 +212,7 @@ export default async function InvestigationPage(props: InvestigationPageProps) {
                 aiSummary={(selected.row as { aiSummary?: string | null }).aiSummary ?? null}
                 aiConfidence={(selected.row as { aiConfidence?: number | null }).aiConfidence ?? null}
                 aiModel={(selected.row as { aiModel?: string | null }).aiModel ?? null}
+                readOnly={caseClosed}
               />
             ) : null}
           </div>
@@ -225,6 +229,7 @@ export default async function InvestigationPage(props: InvestigationPageProps) {
                 author: { name: n.author.name, email: n.author.email },
               }))}
               investigationId={investigation.id}
+              readOnly={caseClosed}
             />
           </div>
           <div className="rounded-lg border border-zinc-800 bg-zinc-950/55">

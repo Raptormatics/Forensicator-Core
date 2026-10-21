@@ -49,8 +49,10 @@ export default function AttackPathPage() {
 
   async function generate() {
     setGen(true);
-    await fetch(`/api/investigations/${id}/attack-path/generate`, { method: "POST" });
+    const res = await fetch(`/api/investigations/${id}/attack-path/generate`, { method: "POST" });
     setGen(false);
+    // e.g. the investigation's case is closed (403 case_closed)
+    if (!res.ok) window.alert((await res.json().catch(() => ({}))).error ?? "Couldn't generate the attack path.");
     load();
   }
 

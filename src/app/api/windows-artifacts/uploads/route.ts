@@ -79,7 +79,7 @@ export async function GET(req: NextRequest) {
         id: true, hostname: true, notes: true, findingCount: true,
         createdAt: true, updatedAt: true,
         uploadedBy: { select: { email: true, name: true } },
-        case: { select: { id: true, title: true, caseSeq: true } },
+        case: { select: { id: true, title: true, caseSeq: true, status: true } },
         files: { select: { id: true, role: true, filename: true, status: true, findingCount: true } },
       },
     });

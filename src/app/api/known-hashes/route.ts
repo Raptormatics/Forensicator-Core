@@ -4,6 +4,7 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db/prisma";
 import { getActorOrThrow, AuthError } from "@/lib/auth/api-guard";
+import { guardCaseOpen } from "@/lib/cases/case-lock";
 
 /** GET /api/known-hashes?caseId=X — how many known-good hashes are linked to this case. */
 export async function GET(req: NextRequest) {
@@ -28,6 +29,9 @@ export async function DELETE(req: NextRequest) {
   if (!caseId) {
     return NextResponse.json({ error: "missing_case", message: "caseId is required." }, { status: 400 });
   }
+
+  const locked = await guardCaseOpen({ caseId }, "unlinking its known hashes");
+  if (locked) return locked;
 
   const result = await prisma.caseKnownHash.deleteMany({ where: { caseId } });
   return NextResponse.json({ removed: result.count });

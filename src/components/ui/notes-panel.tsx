@@ -15,9 +15,11 @@ type Props = {
   investigationId?: string;
   findingId?: string;
   evidenceId?: string;
+  /** The notes' case is closed — no adding or deleting. */
+  readOnly?: boolean;
 };
 
-export function NotesPanel({ initialNotes, investigationId, findingId, evidenceId }: Props) {
+export function NotesPanel({ initialNotes, investigationId, findingId, evidenceId, readOnly = false }: Props) {
   const [notes, setNotes] = useState<Note[]>(initialNotes);
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
@@ -52,6 +54,7 @@ export function NotesPanel({ initialNotes, investigationId, findingId, evidenceI
       <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-400">Analyst Notes</h3>
 
       {/* Composer */}
+      {!readOnly && (
       <form onSubmit={submit} className="flex gap-2">
         <textarea
           value={draft}
@@ -68,6 +71,7 @@ export function NotesPanel({ initialNotes, investigationId, findingId, evidenceI
           <Send className="h-4 w-4" />
         </button>
       </form>
+      )}
 
       {/* Notes list */}
       {notes.length === 0 ? (
@@ -80,12 +84,14 @@ export function NotesPanel({ initialNotes, investigationId, findingId, evidenceI
                 <span className="text-xs text-zinc-500">
                   {note.author.name ?? note.author.email} · {new Date(note.createdAt).toLocaleString()}
                 </span>
-                <button
-                  onClick={() => deleteNote(note.id)}
-                  className="invisible text-zinc-600 hover:text-red-400 group-hover:visible"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
+                {!readOnly && (
+                  <button
+                    onClick={() => deleteNote(note.id)}
+                    className="invisible text-zinc-600 hover:text-red-400 group-hover:visible"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                )}
               </div>
               <p className="mt-1 whitespace-pre-wrap text-sm text-zinc-300">{note.content}</p>
             </div>

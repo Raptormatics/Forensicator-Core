@@ -11,7 +11,8 @@ import { FileText, ShieldCheck, Trash2, Upload, X } from "lucide-react";
 
 type ImportResult = { total: number; linked: number; skipped: number; skippedSamples: string[]; truncated: boolean };
 
-export function CaseKnownHashesSection({ caseId }: { caseId: string }) {
+// readOnly: the case is closed — importing or clearing known hashes is frozen.
+export function CaseKnownHashesSection({ caseId, readOnly = false }: { caseId: string; readOnly?: boolean }) {
   const [count, setCount] = useState<number | null>(null);
   const [showUpload, setShowUpload] = useState(false);
   const [file, setFile] = useState<File | null>(null);
@@ -68,15 +69,17 @@ export function CaseKnownHashesSection({ caseId }: { caseId: string }) {
           <ShieldCheck className="h-4 w-4 text-zinc-500" /> Known-Good Hashes
         </h2>
         <div className="flex items-center gap-2">
-          <button
-            onClick={() => { setShowUpload((v) => !v); setUploadError(null); setResult(null); }}
-            className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium ${
-              showUpload ? "border-teal-700 bg-teal-900/30 text-teal-300" : "border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-600"
-            }`}
-          >
-            <Upload className="h-3.5 w-3.5" /> Import
-          </button>
-          {count !== null && count > 0 && (
+          {!readOnly && (
+            <button
+              onClick={() => { setShowUpload((v) => !v); setUploadError(null); setResult(null); }}
+              className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium ${
+                showUpload ? "border-teal-700 bg-teal-900/30 text-teal-300" : "border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-600"
+              }`}
+            >
+              <Upload className="h-3.5 w-3.5" /> Import
+            </button>
+          )}
+          {!readOnly && count !== null && count > 0 && (
             <button onClick={clearAll} title="Remove all known-good hashes from this case" className="p-1.5 rounded-md border border-zinc-800 text-zinc-500 hover:text-red-400 hover:border-red-900">
               <Trash2 className="h-3.5 w-3.5" />
             </button>
@@ -90,7 +93,7 @@ export function CaseKnownHashesSection({ caseId }: { caseId: string }) {
           : `${count.toLocaleString()} known-good hash${count !== 1 ? "es" : ""} imported — hidden by default wherever evidence is browsed for this case's investigations.`}
       </p>
 
-      {showUpload && (
+      {showUpload && !readOnly && (
         <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-4 mb-2">
           <div className="flex items-start justify-between mb-3">
             <div>

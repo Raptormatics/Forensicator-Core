@@ -3,6 +3,7 @@ export const runtime = "nodejs";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db/prisma";
 import { getActorOrThrow, AuthError, orgWhere } from "@/lib/auth/api-guard";
+import { guardCaseOpen } from "@/lib/cases/case-lock";
 
 type Params = { params: Promise<{ id: string; taskId: string }> };
 
@@ -22,6 +23,8 @@ export async function PATCH(req: NextRequest, props: Params) {
 
   const existing = await loadOwnedTask(params.id, params.taskId, actor);
   if (!existing) return NextResponse.json({ error: "not_found" }, { status: 404 });
+  const locked = await guardCaseOpen({ caseId: params.id }, "changing its tasks");
+  if (locked) return locked;
 
   const body = await req.json().catch(() => ({}));
   const { title, notes, status, priority, dueAt, ownerId, relatedFindingIds } = body;
@@ -62,6 +65,8 @@ export async function DELETE(req: NextRequest, props: Params) {
 
   const existing = await loadOwnedTask(params.id, params.taskId, actor);
   if (!existing) return NextResponse.json({ error: "not_found" }, { status: 404 });
+  const locked = await guardCaseOpen({ caseId: params.id }, "changing its tasks");
+  if (locked) return locked;
 
   await prisma.caseTask.delete({ where: { id: params.taskId } });
   return NextResponse.json({ ok: true });

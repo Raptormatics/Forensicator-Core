@@ -11,6 +11,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { getUploadActor } from "@/lib/upload/actor";
 import { getAiQueue } from "@/lib/jobs/queues";
+import { guardCaseOpen } from "@/lib/cases/case-lock";
 
 export const runtime = "nodejs";
 
@@ -29,6 +30,8 @@ export async function POST(request: NextRequest, props: { params: Promise<{ id: 
       select: { id: true, investigationId: true, aiStatus: true },
     });
     if (!finding) return NextResponse.json({ error: "not_found" }, { status: 404 });
+    const locked = await guardCaseOpen({ investigationId: finding.investigationId }, "changing its findings");
+    if (locked) return locked;
 
     if (finding.aiStatus === "processing" && !force) {
       return NextResponse.json({ queued: false, reason: "already_processing", aiStatus: finding.aiStatus });

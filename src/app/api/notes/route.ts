@@ -7,6 +7,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { getUploadActor } from "@/lib/upload/actor";
+import { guardCaseOpen } from "@/lib/cases/case-lock";
 
 export const runtime = "nodejs";
 
@@ -38,6 +39,11 @@ export async function POST(request: NextRequest) {
   try {
     const body = createSchema.parse(await request.json());
     const actor = await getUploadActor(request);
+    const locked = body.investigationId ? await guardCaseOpen({ investigationId: body.investigationId }, "adding notes")
+      : body.findingId ? await guardCaseOpen({ findingId: body.findingId }, "adding notes")
+      : body.evidenceId ? await guardCaseOpen({ evidenceId: body.evidenceId }, "adding notes")
+      : null;
+    if (locked) return locked;
 
     const note = await prisma.note.create({
       data: { ...body, authorId: actor.id },

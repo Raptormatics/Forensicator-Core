@@ -8,6 +8,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { getUploadActor } from "@/lib/upload/actor";
 import { SEVERITY_LABELS } from "@/lib/severity";
+import { guardCaseOpen } from "@/lib/cases/case-lock";
 
 export const runtime = "nodejs";
 
@@ -26,6 +27,8 @@ export async function PATCH(request: NextRequest, props: { params: Promise<{ id:
       select: { id: true, severity: true, investigationId: true },
     });
     if (!finding) return NextResponse.json({ error: "not_found" }, { status: 404 });
+    const locked = await guardCaseOpen({ investigationId: finding.investigationId }, "changing its findings");
+    if (locked) return locked;
 
     const updated = await prisma.finding.update({
       where: { id: params.id },

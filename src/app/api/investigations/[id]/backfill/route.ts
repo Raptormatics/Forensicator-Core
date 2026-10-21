@@ -11,6 +11,7 @@ import { extractEvidence, extractTimelineEvents } from "@/lib/upload/evidence-ex
 import { getActorOrThrow, AuthError, orgWhere } from "@/lib/auth/api-guard";
 import type { FindingJson } from "@/types/findings";
 import type { JsonObject } from "@/types/json";
+import { guardCaseOpen } from "@/lib/cases/case-lock";
 
 export const runtime = "nodejs";
 
@@ -30,6 +31,8 @@ export async function POST(request: NextRequest, props: { params: Promise<{ id: 
   if (!investigation) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
+  const locked = await guardCaseOpen({ investigationId }, "re-extracting its evidence");
+  if (locked) return locked;
 
   // Load all findings with their stored JSON + sourceCategory.
   const findings = await prisma.finding.findMany({

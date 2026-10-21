@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db/prisma";
 import { getActorOrThrow, AuthError, orgWhere } from "@/lib/auth/api-guard";
 import { runCorrelation } from "@/lib/correlation/engine";
+import { guardCaseOpen } from "@/lib/cases/case-lock";
 
 /**
  * POST /api/correlations/run
@@ -25,6 +26,8 @@ export async function POST(req: NextRequest) {
 
   const kase = await prisma.case.findFirst({ where: { id: caseId, ...orgWhere(actor) } });
   if (!kase) return NextResponse.json({ error: "not_found" }, { status: 404 });
+  const locked = await guardCaseOpen({ caseId }, "re-running correlation");
+  if (locked) return locked;
 
   const links = await prisma.investigation.findMany({
     where: { caseId },

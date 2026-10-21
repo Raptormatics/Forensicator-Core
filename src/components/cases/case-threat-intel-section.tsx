@@ -73,7 +73,9 @@ function reputationColor(rep: number | null): string {
   return "text-green-400";
 }
 
-export function CaseThreatIntelSection({ caseId }: { caseId: string }) {
+// readOnly: the case is closed — importing IOCs into it is frozen, while
+// enrichment (shared threat-intel records) and export stay available.
+export function CaseThreatIntelSection({ caseId, readOnly = false }: { caseId: string; readOnly?: boolean }) {
   const [stats, setStats]       = useState<ThreatIntelStats | null>(null);
   const [iocs, setIocs]         = useState<IocRecord[]>([]);
   const [loading, setLoading]   = useState(true);
@@ -185,14 +187,16 @@ export function CaseThreatIntelSection({ caseId }: { caseId: string }) {
           >
             <Sparkles className="h-3.5 w-3.5" /> {enrichingAll ? "Enriching…" : "Enrich All"}
           </button>
-          <button
-            onClick={() => { setShowUpload((v) => !v); setUploadError(null); setResult(null); }}
-            className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium ${
-              showUpload ? "border-teal-700 bg-teal-900/30 text-teal-300" : "border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-600"
-            }`}
-          >
-            <Upload className="h-3.5 w-3.5" /> Import
-          </button>
+          {!readOnly && (
+            <button
+              onClick={() => { setShowUpload((v) => !v); setUploadError(null); setResult(null); }}
+              className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium ${
+                showUpload ? "border-teal-700 bg-teal-900/30 text-teal-300" : "border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-600"
+              }`}
+            >
+              <Upload className="h-3.5 w-3.5" /> Import
+            </button>
+          )}
           <a
             href={exportHref}
             className="flex items-center gap-1.5 rounded-md border border-zinc-800 px-2.5 py-1.5 text-xs text-zinc-400 hover:text-zinc-200 hover:border-zinc-600"
@@ -209,7 +213,7 @@ export function CaseThreatIntelSection({ caseId }: { caseId: string }) {
         <p className="mb-3 rounded-md border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs text-zinc-400">{enrichAllMsg}</p>
       )}
 
-      {showUpload && (
+      {showUpload && !readOnly && (
         <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-4 mb-4">
           <div className="flex items-start justify-between mb-3">
             <div>

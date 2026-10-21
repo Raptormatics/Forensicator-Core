@@ -8,10 +8,12 @@ import {
   Network, RefreshCw, Shield, Zap,
 } from "lucide-react";
 import { UploadEnrichButton } from "@/components/intelligence/upload-enrich-button";
+import { CaseBadge } from "@/components/cases/case-badge";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
 type Upload = {
+  case: { id: string; caseSeq: number; title: string; status: string } | null;
   id: string; filename: string; status: string; errorMessage: string | null;
   packetCount: number; byteCount: string; linkType: string | null;
   captureStart: string | null; captureEnd: string | null;
@@ -146,6 +148,7 @@ export default function PcapUploadDetailPage() {
                 PCAP Analysis
               </div>
               <h1 className="text-2xl font-semibold text-zinc-50 break-all">{upload.filename}</h1>
+              {upload.case && <div className="mt-1 text-sm"><CaseBadge kase={upload.case} showTitle /></div>}
               <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-zinc-500">
                 <span className="flex items-center gap-1">
                   {upload.status === "ready"

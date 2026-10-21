@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db/prisma";
 import { normalizeSeverity, severityRank } from "@/lib/severity";
 import { getActorOrThrow, AuthError, orgWhere } from "@/lib/auth/api-guard";
+import { guardCaseOpen } from "@/lib/cases/case-lock";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -37,6 +38,8 @@ export async function POST(req: NextRequest, props: Params) {
 
   const inv = await prisma.investigation.findFirst({ where: { id: params.id, ...orgWhere(actor) } });
   if (!inv) return NextResponse.json({ error: "Investigation not found" }, { status: 404 });
+  const locked = await guardCaseOpen({ investigationId: inv.id }, "regenerating its attack path");
+  if (locked) return locked;
 
   // `severity` is free-text (Important/Notable/...), so DB orderBy would sort
   // alphabetically — sort by rank in JS instead, most-severe-first.
