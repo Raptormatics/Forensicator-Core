@@ -4,18 +4,18 @@ import { NextRequest, NextResponse } from "next/server";
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { createHash, randomUUID } from "crypto";
+import { randomUUID } from "crypto";
 import { getActorOrThrow, AuthError } from "@/lib/auth/api-guard";
 import { currentProgress } from "@/lib/updates/paths";
-import { checkForOverlay } from "@/lib/updates/overlay";
+import { checkForOverlay, downloadOverlayPackage } from "@/lib/updates/overlay";
 import { startOverlayInstall, actorIp } from "@/lib/updates/install";
 import { containerUpdateBlockedResponse } from "@/lib/updates/container-guard";
 
-const MAX_PACKAGE_BYTES = 500 * 1024 * 1024;
 
-// POST — unrestricted (Core's sole user). Re-resolves the overlay channel here, never trusting
-// a client-supplied URL — same pattern as the regular online-install
-// route. Requires an activated license (checkForOverlay() returns
+// POST — unrestricted (Core's sole user). Re-resolves the overlay channel
+// here, then downloads the package from the license server with the
+// activated license (downloadOverlayPackage) — the .fpk has no public URL.
+// Requires an activated license (checkForOverlay() returns
 // licensed:false otherwise); the download itself is unprivileged, only
 // deploy/forensicator-update.sh's --overlay mode (invoked next) runs as
 // root, and it re-verifies the package's signature regardless.
@@ -49,31 +49,17 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const res = await fetch(check.latest.packageUrl, { signal: AbortSignal.timeout(120_000) });
-  if (!res.ok) {
-    return NextResponse.json({ error: `Failed to download package: HTTP ${res.status}` }, { status: 502 });
-  }
-  const bytes = Buffer.from(await res.arrayBuffer());
-  if (bytes.length > MAX_PACKAGE_BYTES) {
-    return NextResponse.json({ error: "Downloaded package exceeds the 500 MB limit." }, { status: 502 });
-  }
-
-  const actualSha256 = createHash("sha256").update(bytes).digest("hex");
-  if (actualSha256 !== check.latest.packageSha256) {
-    return NextResponse.json(
-      { error: "Downloaded package's checksum does not match the overlay server's manifest — refusing to install." },
-      { status: 502 }
-    );
-  }
+  const download = await downloadOverlayPackage(check.latest);
+  if (!download.ok) return NextResponse.json({ error: download.error }, { status: 502 });
 
   const tmpPath = path.join(os.tmpdir(), `forensicator-overlay-${randomUUID()}.fpk`);
-  fs.writeFileSync(tmpPath, bytes);
+  fs.writeFileSync(tmpPath, download.bytes);
 
   await startOverlayInstall({
     packagePath: tmpPath,
     actor,
     actorIp: actorIp(req.headers),
-    metadata: { version: check.latest.version, packageUrl: check.latest.packageUrl },
+    metadata: { version: check.latest.version, source: "license-server" },
   });
 
   return NextResponse.json({ started: true }, { status: 202 });

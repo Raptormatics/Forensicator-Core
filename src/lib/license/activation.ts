@@ -92,6 +92,16 @@ export function getActivationState(): EnterpriseActivationState {
   }
 }
 
+/** The activated .lic file's raw content, or null if none is activated. Used to authenticate
+ *  the Enterprise overlay download (src/lib/updates/overlay.ts). */
+export function readActivatedLicense(): string | null {
+  try {
+    return fs.readFileSync(LIC_PATH, "utf8").trim() || null;
+  } catch {
+    return null;
+  }
+}
+
 /** Verifies and stores a .lic file's raw content. Throws InvalidLicenseError if invalid. */
 export function activateLicense(licContent: string): EnterpriseActivationState {
   const payload = verifyLicense(licContent); // throws on invalid — nothing is written

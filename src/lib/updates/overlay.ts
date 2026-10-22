@@ -13,6 +13,11 @@
  * src/lib/updates/paths.ts's installedVersion()) and the overlay's own
  * (CONFIG_DIR/enterprise-delta.json, read here).
  *
+ * The package itself is not publicly downloadable: latest.json (public)
+ * only says which version is current, and the .fpk is fetched from the
+ * license server, which streams it only to a caller presenting an
+ * issued, active license (downloadOverlayPackage() below).
+ *
  * Gated on an already-activated license (src/lib/license/activation.ts) —
  * same low-trust-response posture as online.ts's own security note:
  * this only tells the admin *where* to look. Whatever it points to still
@@ -23,20 +28,23 @@
  * boundary.
  */
 import fs from "fs";
+import { createHash } from "crypto";
 import { z } from "zod";
-import { getActivationState } from "@/lib/license/activation";
+import { getActivationState, readActivatedLicense } from "@/lib/license/activation";
 import { getChannel } from "./online";
 import { installedVersion } from "./paths";
 import { isNewerVersion } from "./version";
 
 const OVERLAY_BASE_URL = "https://updates.forensicator.io/overlay";
+// Where licensed overlay downloads come from — the vendor's license service.
+// LICENSE_SERVER_URL overrides it (the same variable Enterprise's check-in uses).
+const LICENSE_SERVER_URL = (process.env.LICENSE_SERVER_URL || "https://license.forensicator.io").replace(/\/+$/, "");
 const DELTA_STATE_FILE = "/etc/forensicator/enterprise-delta.json";
 
 const latestSchema = z.object({
   version: z.string().min(1),
   requiresCoreVersion: z.string().min(1),
   releaseNotes: z.string().default(""),
-  packageUrl: z.string().url(),
   packageSha256: z.string().min(1),
   packageSize: z.number().nonnegative().optional(),
   publishedAt: z.string().optional(),
@@ -107,4 +115,39 @@ export async function checkForOverlay(): Promise<OverlayCheckResult> {
     const message = err instanceof Error ? err.message : String(err);
     return { licensed: true, ok: false, error: `Could not reach the overlay server: ${message}` };
   }
+}
+
+const MAX_PACKAGE_BYTES = 500 * 1024 * 1024;
+
+/**
+ * Download overlay `version` from the license server, authenticated with the
+ * activated license, and check it against latest.json's SHA-256. Returns the
+ * package bytes, or an error message (e.g. the license server refused the
+ * license as revoked or expired).
+ */
+export async function downloadOverlayPackage(latest: LatestOverlayInfo): Promise<{ ok: true; bytes: Buffer } | { ok: false; error: string }> {
+  const licContent = readActivatedLicense();
+  if (!licContent) return { ok: false, error: "No Enterprise license activated — activate one under Settings -> License first." };
+
+  let res: Response;
+  try {
+    res = await fetch(`${LICENSE_SERVER_URL}/overlay/package`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ licContent, version: latest.version }),
+      signal: AbortSignal.timeout(300_000),
+    });
+  } catch (err) {
+    return { ok: false, error: `Could not reach the license server: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  if (!res.ok) {
+    const detail = await res.json().then((d: { error?: string }) => d.error).catch(() => null);
+    return { ok: false, error: `The license server refused the download (HTTP ${res.status})${detail ? `: ${detail}` : ""}` };
+  }
+  const bytes = Buffer.from(await res.arrayBuffer());
+  if (bytes.length > MAX_PACKAGE_BYTES) return { ok: false, error: "Downloaded package exceeds the 500 MB limit." };
+  if (createHash("sha256").update(bytes).digest("hex") !== latest.packageSha256) {
+    return { ok: false, error: "Downloaded package's checksum does not match the overlay server's manifest — refusing to install." };
+  }
+  return { ok: true, bytes };
 }
