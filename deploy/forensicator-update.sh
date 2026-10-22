@@ -276,6 +276,18 @@ rebuild_app() {
   runuser -u "$SERVICE_USER" -- bash -lc "cd '${APP_DIR}' && NODE_ENV=development npm ci && npm run prisma:generate && NEXT_PUBLIC_DEPLOYMENT_MODE='$(current_deployment_mode)' npm run build"
 }
 
+# Earlier overlay applies set UPDATE_SERVER_URL to the bucket root (the
+# retired monolith Enterprise channel) — point it back at Core's channel.
+# Leaves any other (custom or mirror) value alone. Idempotent.
+heal_update_channel() {
+  if grep -qE '^UPDATE_SERVER_URL="?https://updates\.forensicator\.io/?"?$' "$ENV_FILE" 2>/dev/null; then
+    grep -v '^UPDATE_SERVER_URL=' "$ENV_FILE" > "${ENV_FILE}.tmp" || true
+    echo 'UPDATE_SERVER_URL="https://updates.forensicator.io/core"' >> "${ENV_FILE}.tmp"
+    mv "${ENV_FILE}.tmp" "$ENV_FILE"
+    chmod 600 "$ENV_FILE"
+  fi
+}
+
 # Merges enterprise.deps.json (shipped by the overlay, extracted alongside
 # everything else) into package.json's dependencies/devDependencies. The
 # overlay never ships a package.json of its own — see the header comment
@@ -564,6 +576,8 @@ do_install() {
     set_progress "install" "Running database migrations"
     runuser -u "$SERVICE_USER" -- bash -lc "cd '${APP_DIR}' && npx prisma migrate deploy"
 
+    heal_update_channel
+
     set_progress "install" "Restarting services"
     start_services
 
@@ -705,21 +719,15 @@ do_overlay() {
       fi
     fi
 
-    # Edited before the restart below (not after) so the services that
-    # restart already pick it up — env vars are read once at process
-    # startup, not hot-reloaded. Safe even if this whole block later
-    # fails: restore_backup() below reverts this file from the backup
-    # taken moments ago, same as every other file touched here. Core's
-    # own channel stays live and independently useful even after this —
-    # see do_install()'s replay step — so this only ever adds the
-    # Enterprise channel on top, never removes Core's.
-    if [[ "$first_apply" -eq 1 ]]; then
-      set_progress "overlay" "Adding the Enterprise update channel"
-      grep -v '^UPDATE_SERVER_URL=' "$ENV_FILE" > "${ENV_FILE}.tmp" || true
-      echo 'UPDATE_SERVER_URL="https://updates.forensicator.io"' >> "${ENV_FILE}.tmp"
-      mv "${ENV_FILE}.tmp" "$ENV_FILE"
-      chmod 600 "$ENV_FILE"
-    fi
+    # Core updates keep coming from Core's own channel (UPDATE_SERVER_URL,
+    # .../core) after the overlay is applied; overlay updates have their own
+    # fixed channel (src/lib/updates/overlay.ts). This used to repoint
+    # UPDATE_SERVER_URL to the bucket root — the retired monolith Enterprise
+    # channel — so an overlaid instance stopped seeing Core updates and
+    # would have been offered monolith builds as full-package installs.
+    # Undo that on any instance it already happened to (before the restart
+    # below, which is what picks env changes up).
+    heal_update_channel
 
     set_progress "overlay" "Restarting services"
     start_services
