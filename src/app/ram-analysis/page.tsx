@@ -7,6 +7,7 @@ import {
   Plus, RefreshCw, Shield, Trash2,
 } from "lucide-react";
 import { CaseBadge } from "@/components/cases/case-badge";
+import { ArchiveButton } from "@/components/cases/archive-button";
 
 type Upload = {
   id: string;
@@ -24,7 +25,7 @@ type Upload = {
   errorMessage: string | null;
   createdAt: string;
   uploadedBy: { email: string; name: string | null } | null;
-  case: { id: string; title: string; caseSeq: number; status: string } | null;
+  case: { id: string; title: string; caseSeq: number; status: string; archivedAt: string | null } | null;
 };
 
 const STATUS_ICON: Record<string, React.ReactNode> = {
@@ -215,6 +216,7 @@ export default function RamAnalysisPage() {
                       {new Date(u.createdAt).toLocaleString()}
                     </td>
                     <td className="px-4 py-3 text-right">
+                      {!u.case && <ArchiveButton compact type="ram" id={u.id} action="archive" onDone={load} />}
                       {u.case?.status !== "closed" && (
                         <button
                           onClick={() => deleteUpload(u.id)}

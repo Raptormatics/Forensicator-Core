@@ -7,6 +7,7 @@ import {
   AlertCircle, ArrowLeft, CheckCircle2, Clock, Loader2, FileSearch, RefreshCw, Search, Download,
 } from "lucide-react";
 import { CaseBadge } from "@/components/cases/case-badge";
+import { ArchiveButton, ArchivedPill } from "@/components/cases/archive-button";
 import { formatDateTime } from "@/lib/utils";
 
 type FileRow = {
@@ -22,7 +23,8 @@ type Upload = {
   id: string; hostname: string | null; notes: string | null; findingCount: number; createdAt: string;
   collectionManifest: CollectionManifest | null;
   uploadedBy: { email: string; name: string | null } | null;
-  case: { id: string; title: string; caseSeq: number; status: string } | null;
+  case: { id: string; title: string; caseSeq: number; status: string; archivedAt: string | null } | null;
+  archivedAt: string | null;
   files: FileRow[];
 };
 type ShimcacheRow = { id: string; fileId: string; path: string; lastModified: string | null; executionFlag: boolean | null; order: number };
@@ -241,6 +243,13 @@ export default function WindowsArtifactDetailPage() {
               </div>
               <h1 className="text-2xl font-semibold text-zinc-50">{upload.hostname ?? "(unnamed host)"}</h1>
               {upload.case && <div className="mt-1 text-sm"><CaseBadge kase={upload.case} showTitle /></div>}
+              {/* Only an upload with no case is archived on its own — one in a case goes with its case. */}
+              {!upload.case && (
+                <div className="mt-2 flex items-center gap-2">
+                  {upload.archivedAt && <ArchivedPill />}
+                  <ArchiveButton type="windows-artifacts" id={upload.id} action={upload.archivedAt ? "restore" : "archive"} onDone={() => load()} />
+                </div>
+              )}
             </div>
             <button onClick={load} className="p-2 rounded-md border border-zinc-800 text-zinc-500 hover:text-zinc-300">
               <RefreshCw className="h-4 w-4" />

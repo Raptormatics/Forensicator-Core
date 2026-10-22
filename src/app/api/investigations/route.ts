@@ -4,6 +4,7 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma }            from "@/lib/db/prisma";
 import { getActorOrThrow, AuthError } from "@/lib/auth/api-guard";
+import { notArchived } from "@/lib/cases/archive";
 
 // ── GET /api/investigations ─────────────────────────────────────────────────
 // Lightweight list used by pickers (e.g. link-to-case). Returns id, title,
@@ -23,8 +24,9 @@ export async function GET(req: NextRequest) {
       ];
     }
 
+    // Archived investigations can't be linked to a case — keep them out of pickers.
     const investigations = await prisma.investigation.findMany({
-      where,
+      where: { AND: [where, notArchived()] },
       orderBy: { createdAt: "desc" },
       take: 100,
       select: {

@@ -107,8 +107,9 @@ export default async function InvestigationPage(props: InvestigationPageProps) {
   // never got promoted to dedicated columns, but they're real chain-of-custody
   // detail (when collection actually ran, who ran it, what collector version).
   const rawMetadata = (investigation.metadata ?? {}) as Record<string, unknown>;
-  // Everything linked to a closed case is read-only (src/lib/cases/case-lock.ts).
-  const caseClosed = investigation.case?.status === "closed";
+  // Everything linked to a closed case is read-only, and so is an archived
+  // investigation with no case (src/lib/cases/case-lock.ts).
+  const caseClosed = investigation.case?.status === "closed" || !!investigation.archivedAt;
   const collectionStartTime = typeof rawMetadata.collection_start_time === "string" ? rawMetadata.collection_start_time : null;
   const operator = typeof rawMetadata.operator === "string" ? rawMetadata.operator : null;
   const collectorVersion = typeof rawMetadata.collector_version === "string" ? rawMetadata.collector_version : null;
@@ -123,6 +124,8 @@ export default async function InvestigationPage(props: InvestigationPageProps) {
         createdAt={investigation.createdAt}
         uploadedBy={investigation.uploadedBy}
         caseRef={investigation.case}
+        investigationId={investigation.id}
+        archivedAt={investigation.archivedAt}
       />
 
       <div className="mx-auto w-full max-w-[1800px] px-4 py-6 sm:px-6 lg:px-8">

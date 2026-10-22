@@ -5,7 +5,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import fs from "fs";
 import { prisma } from "@/lib/db/prisma";
-import { guardCaseOpen } from "@/lib/cases/case-lock";
+import { guardDeletion } from "@/lib/cases/case-lock";
 
 export const runtime = "nodejs";
 
@@ -29,7 +29,7 @@ export async function DELETE(_req: NextRequest, props: { params: Promise<{ id: s
   const report = await prisma.report.findUnique({ where: { id: params.id } });
   if (!report) return NextResponse.json({ error: "not_found" }, { status: 404 });
 
-  const locked = await guardCaseOpen({ reportId: report.id }, "deleting its reports");
+  const locked = await guardDeletion({ reportId: report.id }, "deleting its reports");
   if (locked) return locked;
 
   if (report.filePath && fs.existsSync(report.filePath)) {

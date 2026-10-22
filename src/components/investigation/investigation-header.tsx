@@ -2,6 +2,7 @@ import { CalendarClock, Server, UserCircle } from "lucide-react";
 import type { ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { CaseBadge, type CaseRef } from "@/components/cases/case-badge";
+import { ArchiveButton, ArchivedPill } from "@/components/cases/archive-button";
 import { formatDateTime } from "@/lib/utils";
 
 type InvestigationHeaderProps = {
@@ -15,6 +16,9 @@ type InvestigationHeaderProps = {
     name: string | null;
   };
   caseRef?: CaseRef | null;
+  /** Investigation id + own archive flag — archive controls show only when it has no case. */
+  investigationId?: string;
+  archivedAt?: Date | null;
 };
 
 export function InvestigationHeader({
@@ -24,7 +28,9 @@ export function InvestigationHeader({
   findingCount,
   createdAt,
   uploadedBy,
-  caseRef = null
+  caseRef = null,
+  investigationId,
+  archivedAt = null
 }: InvestigationHeaderProps) {
   return (
     <header className="border-b border-zinc-800 bg-zinc-950/40">
@@ -37,6 +43,10 @@ export function InvestigationHeader({
                 {findingCount.toLocaleString()} findings
               </Badge>
               {caseRef && <span className="text-xs"><CaseBadge kase={caseRef} showTitle /></span>}
+              {!caseRef && archivedAt && <ArchivedPill />}
+              {!caseRef && investigationId && (
+                <ArchiveButton type="investigation" id={investigationId} action={archivedAt ? "restore" : "archive"} />
+              )}
             </div>
             <h1 className="mt-3 text-3xl font-semibold tracking-normal text-zinc-50">{title}</h1>
           </div>

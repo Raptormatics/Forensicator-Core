@@ -3,11 +3,12 @@ import Link from "next/link";
 import { prisma } from "@/lib/db/prisma";
 import { SeverityBadge } from "@/components/findings/severity-badge";
 import { formatDateTime } from "@/lib/utils";
+import { notArchived, investigationNotArchived } from "@/lib/cases/archive";
 
 export const dynamic = "force-dynamic";
 
 type SearchPageProps = {
-  searchParams: Promise<{ q?: string }>;
+  searchParams: Promise<{ q?: string; archived?: string }>;
 };
 
 export default async function SearchPage(props: SearchPageProps) {
@@ -29,10 +30,16 @@ export default async function SearchPage(props: SearchPageProps) {
   }
 
   const LIMIT = 15;
+  // Archived cases/investigations are left out unless asked for — but old
+  // incidents are exactly where a known IOC is worth looking, so it's one click.
+  const includeArchived = searchParams.archived === "include";
+  const invScope = includeArchived ? {} : { AND: [notArchived()] };
+  const childScope = includeArchived ? {} : investigationNotArchived();
 
   const [investigations, findings, evidenceRows] = await Promise.all([
     prisma.investigation.findMany({
       where: {
+        ...invScope,
         OR: [
           { title: { contains: q, mode: "insensitive" } },
           { hostname: { contains: q, mode: "insensitive" } },
@@ -45,6 +52,7 @@ export default async function SearchPage(props: SearchPageProps) {
     }),
     prisma.finding.findMany({
       where: {
+        ...childScope,
         OR: [
           { searchText: { contains: q, mode: "insensitive" } },
           { findingType: { contains: q, mode: "insensitive" } },
@@ -66,6 +74,7 @@ export default async function SearchPage(props: SearchPageProps) {
     }),
     prisma.evidence.findMany({
       where: {
+        ...childScope,
         OR: [
           { url: { contains: q, mode: "insensitive" } },
           { ip: { contains: q, mode: "insensitive" } },
@@ -113,6 +122,13 @@ export default async function SearchPage(props: SearchPageProps) {
         </h1>
         <p className="mt-1 text-sm text-zinc-500">
           {total === 0 ? "No results found." : `${total} result${total !== 1 ? "s" : ""} across investigations, findings and evidence.`}
+          {" "}
+          <Link
+            href={`/search?q=${encodeURIComponent(q)}${includeArchived ? "" : "&archived=include"}`}
+            className="text-teal-400 hover:text-teal-300"
+          >
+            {includeArchived ? "Hide archived" : "Include archived"}
+          </Link>
         </p>
       </div>
 

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma }      from "@/lib/db/prisma";
 import { requireAuth } from "@/lib/auth/api-guard";
-import { guardCaseOpen } from "@/lib/cases/case-lock";
+import { guardDeletion } from "@/lib/cases/case-lock";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -17,7 +17,7 @@ export async function GET(req: NextRequest, props: Params) {
       include: {
         uploadedBy:   { select: { email: true, name: true } },
         organization: { select: { id: true, name: true } },
-        case:         { select: { id: true, caseSeq: true, title: true, status: true } },
+        case:         { select: { id: true, caseSeq: true, title: true, status: true, archivedAt: true } },
         _count:       { select: { conversations: true, dnsQueries: true, findings: true, iocs: true } },
       },
     });
@@ -83,7 +83,7 @@ export async function DELETE(req: NextRequest, props: Params) {
   const params = await props.params;
   try {
     await requireAuth(req);
-    const locked = await guardCaseOpen({ pcapUploadId: params.id }, "deleting its uploads");
+    const locked = await guardDeletion({ pcapUploadId: params.id }, "deleting this upload");
     if (locked) return locked;
     await prisma.pcapUpload.delete({ where: { id: params.id } });
     return NextResponse.json({ ok: true });

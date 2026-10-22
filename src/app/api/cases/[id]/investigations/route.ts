@@ -20,8 +20,14 @@ export async function POST(req: NextRequest, props: Params) {
     return NextResponse.json({ error: "This case is closed — reopen it before linking investigations." }, { status: 403 });
   }
 
-  const inv = await prisma.investigation.findUnique({ where: { id: investigationId }, select: { id: true, caseId: true } });
+  const inv = await prisma.investigation.findUnique({ where: { id: investigationId }, select: { id: true, caseId: true, archivedAt: true } });
   if (!inv) return NextResponse.json({ error: "Investigation not found" }, { status: 404 });
+  if (inv.archivedAt) {
+    return NextResponse.json(
+      { error: "This investigation is archived — restore it from the Archive page before linking it to a case.", code: "archived" },
+      { status: 403 },
+    );
+  }
   if (inv.caseId && inv.caseId !== params.id) {
     return NextResponse.json(
       { error: "An investigation can only belong to one case. Unlink it from its current case first." },

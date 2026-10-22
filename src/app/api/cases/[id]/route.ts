@@ -7,6 +7,7 @@ import {
   CLOSED_STATUS, CLOSURE_DISPOSITIONS, caseClosedResponse, pendingCaseWork,
   type ClosureDisposition,
 } from "@/lib/cases/case-lock";
+import { legalHoldForCase } from "@/lib/cases/legal-hold";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -29,13 +30,13 @@ export async function GET(_req: NextRequest, props: Params) {
   });
   if (!c) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-  const userIds = [c.closedById, c.reopenedById].filter((v): v is string => !!v);
+  const userIds = [c.closedById, c.reopenedById, c.archivedById].filter((v): v is string => !!v);
   const users = userIds.length
     ? await prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, email: true, name: true } })
     : [];
   const byId = new Map(users.map((u) => [u.id, u]));
   const closureHistory = await prisma.auditLog.findMany({
-    where: { resourceType: "case", resourceId: c.id, action: { in: ["case_closed", "case_reopened"] } },
+    where: { resourceType: "case", resourceId: c.id, action: { in: ["case_closed", "case_reopened", "archived", "archive_restored"] } },
     orderBy: { createdAt: "desc" },
     select: { id: true, action: true, actorEmail: true, metadata: true, createdAt: true },
   });
@@ -45,6 +46,7 @@ export async function GET(_req: NextRequest, props: Params) {
       ...c,
       closedBy: c.closedById ? byId.get(c.closedById) ?? null : null,
       reopenedBy: c.reopenedById ? byId.get(c.reopenedById) ?? null : null,
+      archivedBy: c.archivedById ? byId.get(c.archivedById) ?? null : null,
       closureHistory,
     },
   });
@@ -63,7 +65,7 @@ export async function PATCH(req: NextRequest, props: Params) {
 
   const kase = await prisma.case.findUnique({
     where: { id: params.id },
-    select: { id: true, caseSeq: true, title: true, status: true, organizationId: true },
+    select: { id: true, caseSeq: true, title: true, status: true, organizationId: true, archivedAt: true },
   });
   if (!kase) return NextResponse.json({ error: "Case not found" }, { status: 404 });
 
@@ -84,6 +86,12 @@ export async function PATCH(req: NextRequest, props: Params) {
     const otherFields = [title, description, severity, tags, assigneeId, incidentType].some((v) => v !== undefined);
     if (status === undefined || status === CLOSED_STATUS || otherFields) {
       return caseClosedResponse(kase, "changing it");
+    }
+    if (kase.archivedAt) {
+      return NextResponse.json(
+        { error: "This case is archived — restore it from the Archive page before reopening it.", code: "archived" },
+        { status: 403 },
+      );
     }
     const reopenReason = typeof body.reopenReason === "string" ? body.reopenReason.trim() : "";
     if (reopenReason.length < MIN_REOPEN_REASON) {
@@ -156,6 +164,13 @@ export async function DELETE(req: NextRequest, props: Params) {
   });
   if (!kase) return NextResponse.json({ error: "Case not found" }, { status: 404 });
   if (kase.status === CLOSED_STATUS) return caseClosedResponse(kase, "deleting it");
+  const hold = await legalHoldForCase(kase.id);
+  if (hold) {
+    return NextResponse.json(
+      { error: `This case is under legal hold (${hold.reason}) — the hold must be released before deleting it.`, code: "legal_hold" },
+      { status: 403 },
+    );
+  }
 
   await prisma.case.delete({ where: { id: kase.id } });
   await prisma.auditLog.create({

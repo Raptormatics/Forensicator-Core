@@ -33,6 +33,11 @@ model LogUpload {
   caseId String? @map("case_id") @db.Uuid
   case   Case?   @relation(fields: [caseId], references: [id], onDelete: SetNull)
 
+  // Archive (see src/lib/cases/archive.ts). Set only on an item with no
+  // case; an item in an archived case counts as archived through the case.
+  archivedAt   DateTime? @map("archived_at")
+  archivedById String?   @map("archived_by_id") @db.Uuid
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 

@@ -6,6 +6,7 @@ import { getServerSession } from "@/lib/auth/session";
 import { normalizeSeverity, severityRank, HIGH_SEVERITY_LABELS, type SeverityLabel } from "@/lib/severity";
 import { formatCaseNumber } from "@/lib/cases/case-number";
 import { RelativeTime } from "@/components/dashboard/relative-time";
+import { notArchived } from "@/lib/cases/archive";
 
 export const dynamic = "force-dynamic";
 
@@ -77,8 +78,13 @@ export default async function DashboardPage() {
   // Core is single-user/single-org — scope everything to the sole org.
   const orgScope: { organizationId?: { in: string[] } } = { organizationId: { in: orgIds } };
 
-  // Finding count scope: scoped to investigations in org
-  const findingInvScope = { investigation: orgScope };
+  // Working set: investigations not archived (on their own or through an
+  // archived case) — the dashboard tracks active work; archived records are
+  // on the Archive page.
+  const activeInvScope = { ...orgScope, ...notArchived() };
+
+  // Finding count scope: scoped to active investigations in org
+  const findingInvScope = { investigation: activeInvScope };
 
   // Activity feed scope: activity on org investigations (or own)
   const activityWhere = {
@@ -113,7 +119,7 @@ export default async function DashboardPage() {
     // (Important/Notable/...), so DB orderBy would sort alphabetically —
     // fetch a larger candidate set ordered by recency, then rank+slice in JS.
     prisma.finding.findMany({
-      where: { assigneeId: actor.id, workflowStatus: { notIn: ["resolved", "false_positive"] } },
+      where: { assigneeId: actor.id, workflowStatus: { notIn: ["resolved", "false_positive"] }, investigation: notArchived() },
       orderBy: { createdAt: "desc" },
       take: 50,
       select: {
@@ -123,7 +129,7 @@ export default async function DashboardPage() {
     }).then((rows) => rows.sort((a, b) => severityRank(b.severity) - severityRank(a.severity)).slice(0, 10)),
     // High risk investigations — org-scoped
     prisma.investigation.findMany({
-      where: { ...orgScope, findings: { some: { severity: { in: HIGH_SEVERITY_LABELS } } } },
+      where: { ...activeInvScope, findings: { some: { severity: { in: HIGH_SEVERITY_LABELS } } } },
       orderBy: { createdAt: "desc" },
       take: 5,
       select: {
@@ -152,7 +158,7 @@ export default async function DashboardPage() {
       include: { user: { select: { name: true, email: true } } },
     }),
     // Stats — org-scoped
-    prisma.investigation.count({ where: orgScope }),
+    prisma.investigation.count({ where: activeInvScope }),
     prisma.finding.count({ where: { ...findingInvScope, workflowStatus: "new" } }),
     prisma.finding.count({ where: { ...findingInvScope, workflowStatus: "escalated" } }),
     // Trend pairs

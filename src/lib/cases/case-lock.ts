@@ -6,6 +6,8 @@
  *
  * Every route that mutates case-scoped data resolves the owning case
  * through guardCaseOpen() and returns its response when it's non-null.
+ * The same guard freezes an archived investigation/upload that has no case
+ * (see archive.ts).
  * Reading, exporting and generating reports stay allowed; so does IOC
  * enrichment, since it refreshes shared threat-intel records rather than
  * anything stored on the case.
@@ -13,6 +15,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db/prisma";
 import { formatCaseNumber } from "@/lib/cases/case-number";
+import { legalHoldForCase } from "@/lib/cases/legal-hold";
 
 export const CLOSED_STATUS = "closed";
 
@@ -33,48 +36,56 @@ export type CaseLockRef =
 
 type CaseSummary = { id: string; caseSeq: number; title: string; status: string };
 const CASE_SELECT = { id: true, caseSeq: true, title: true, status: true } as const;
+// An investigation/upload with its own archive flag (only ever set when it
+// belongs to no case — see archive.ts) and its case, if any.
+const OWNER_SELECT = { archivedAt: true, case: { select: CASE_SELECT } } as const;
 
-async function resolveCase(ref: CaseLockRef): Promise<CaseSummary | null> {
+type Lock = { kase: CaseSummary | null; archivedItem: string | null };
+const NONE: Lock = { kase: null, archivedItem: null };
+const owner = (o: { archivedAt: Date | null; case: CaseSummary | null } | null | undefined, label: string): Lock =>
+  o ? { kase: o.case, archivedItem: o.archivedAt ? label : null } : NONE;
+
+async function resolveLock(ref: CaseLockRef): Promise<Lock> {
   if ("caseId" in ref) {
-    return ref.caseId ? prisma.case.findUnique({ where: { id: ref.caseId }, select: CASE_SELECT }) : null;
+    return { kase: ref.caseId ? await prisma.case.findUnique({ where: { id: ref.caseId }, select: CASE_SELECT }) : null, archivedItem: null };
   }
   if ("investigationId" in ref) {
-    if (!ref.investigationId) return null;
-    const inv = await prisma.investigation.findUnique({ where: { id: ref.investigationId }, select: { case: { select: CASE_SELECT } } });
-    return inv?.case ?? null;
+    if (!ref.investigationId) return NONE;
+    return owner(await prisma.investigation.findUnique({ where: { id: ref.investigationId }, select: OWNER_SELECT }), "investigation");
   }
   if ("findingId" in ref) {
-    const f = await prisma.finding.findUnique({ where: { id: ref.findingId }, select: { investigation: { select: { case: { select: CASE_SELECT } } } } });
-    return f?.investigation.case ?? null;
+    const f = await prisma.finding.findUnique({ where: { id: ref.findingId }, select: { investigation: { select: OWNER_SELECT } } });
+    return owner(f?.investigation, "investigation");
   }
   if ("evidenceId" in ref) {
-    const e = await prisma.evidence.findUnique({ where: { id: ref.evidenceId }, select: { investigation: { select: { case: { select: CASE_SELECT } } } } });
-    return e?.investigation.case ?? null;
+    const e = await prisma.evidence.findUnique({ where: { id: ref.evidenceId }, select: { investigation: { select: OWNER_SELECT } } });
+    return owner(e?.investigation, "investigation");
   }
   if ("noteId" in ref) {
     const n = await prisma.note.findUnique({ where: { id: ref.noteId }, select: { investigationId: true, findingId: true, evidenceId: true } });
-    if (!n) return null;
-    if (n.investigationId) return resolveCase({ investigationId: n.investigationId });
-    if (n.findingId) return resolveCase({ findingId: n.findingId });
-    return n.evidenceId ? resolveCase({ evidenceId: n.evidenceId }) : null;
+    if (!n) return NONE;
+    if (n.investigationId) return resolveLock({ investigationId: n.investigationId });
+    if (n.findingId) return resolveLock({ findingId: n.findingId });
+    return n.evidenceId ? resolveLock({ evidenceId: n.evidenceId }) : NONE;
   }
   if ("reportId" in ref) {
     const r = await prisma.report.findUnique({
       where: { id: ref.reportId },
-      select: { case: { select: CASE_SELECT }, investigation: { select: { case: { select: CASE_SELECT } } } },
+      select: { case: { select: CASE_SELECT }, investigation: { select: OWNER_SELECT } },
     });
-    return r?.case ?? r?.investigation?.case ?? null;
+    if (!r) return NONE;
+    return r.case ? { kase: r.case, archivedItem: null } : owner(r.investigation, "investigation");
   }
   if ("logUploadId" in ref) {
-    return (await prisma.logUpload.findUnique({ where: { id: ref.logUploadId }, select: { case: { select: CASE_SELECT } } }))?.case ?? null;
+    return owner(await prisma.logUpload.findUnique({ where: { id: ref.logUploadId }, select: OWNER_SELECT }), "log upload");
   }
   if ("pcapUploadId" in ref) {
-    return (await prisma.pcapUpload.findUnique({ where: { id: ref.pcapUploadId }, select: { case: { select: CASE_SELECT } } }))?.case ?? null;
+    return owner(await prisma.pcapUpload.findUnique({ where: { id: ref.pcapUploadId }, select: OWNER_SELECT }), "PCAP upload");
   }
   if ("ramUploadId" in ref) {
-    return (await prisma.ramUpload.findUnique({ where: { id: ref.ramUploadId }, select: { case: { select: CASE_SELECT } } }))?.case ?? null;
+    return owner(await prisma.ramUpload.findUnique({ where: { id: ref.ramUploadId }, select: OWNER_SELECT }), "RAM upload");
   }
-  return (await prisma.windowsArtifactUpload.findUnique({ where: { id: ref.windowsArtifactUploadId }, select: { case: { select: CASE_SELECT } } }))?.case ?? null;
+  return owner(await prisma.windowsArtifactUpload.findUnique({ where: { id: ref.windowsArtifactUploadId }, select: OWNER_SELECT }), "Windows artifact collection");
 }
 
 export function caseClosedResponse(kase: CaseSummary, action: string): NextResponse {
@@ -88,13 +99,47 @@ export function caseClosedResponse(kase: CaseSummary, action: string): NextRespo
   );
 }
 
+export function itemArchivedResponse(label: string, action: string): NextResponse {
+  return NextResponse.json(
+    { error: `This ${label} is archived — restore it from the Archive page before ${action}.`, code: "archived" },
+    { status: 403 },
+  );
+}
+
 /**
- * Returns a 403 response when `ref` belongs to a closed case, otherwise null.
- * `action` completes the sentence "reopen it before …", e.g. "adding notes".
+ * Returns a 403 response when `ref` belongs to a closed case (an archived
+ * case is always closed too) or is itself an archived item with no case;
+ * otherwise null. `action` completes the sentence "… before …", e.g.
+ * "adding notes".
  */
 export async function guardCaseOpen(ref: CaseLockRef, action: string): Promise<NextResponse | null> {
-  const kase = await resolveCase(ref);
-  return kase && kase.status === CLOSED_STATUS ? caseClosedResponse(kase, action) : null;
+  const { kase, archivedItem } = await resolveLock(ref);
+  if (kase && kase.status === CLOSED_STATUS) return caseClosedResponse(kase, action);
+  return archivedItem ? itemArchivedResponse(archivedItem, action) : null;
+}
+
+/**
+ * guardCaseOpen() plus legal hold, for routes that destroy data (deleting a
+ * case, an upload, a report or a note). A hold blocks deletion even while
+ * the case is open; legal hold itself is an Enterprise feature (see
+ * legal-hold.ts — Core's stub never reports one).
+ */
+export async function guardDeletion(ref: CaseLockRef, action: string): Promise<NextResponse | null> {
+  const lock = await resolveLock(ref);
+  if (lock.kase && lock.kase.status === CLOSED_STATUS) return caseClosedResponse(lock.kase, action);
+  if (lock.archivedItem) return itemArchivedResponse(lock.archivedItem, action);
+  const hold = lock.kase ? await legalHoldForCase(lock.kase.id) : null;
+  if (lock.kase && hold) {
+    return NextResponse.json(
+      {
+        error: `${formatCaseNumber(lock.kase.caseSeq)} "${lock.kase.title}" is under legal hold (${hold.reason}) — the hold must be released before ${action}.`,
+        code: "legal_hold",
+        caseId: lock.kase.id,
+      },
+      { status: 403 },
+    );
+  }
+  return null;
 }
 
 /**

@@ -4,6 +4,7 @@ import { requireAuth, orgWhere } from "@/lib/auth/api-guard";
 import { processLogUpload }  from "@/lib/log-analysis/processor";
 import { convertEvtx, decodeLogBuffer, isEvtx } from "@/lib/log-analysis/content";
 import { getWinArtifactsPythonPath } from "@/lib/settings/system";
+import { notArchived } from "@/lib/cases/archive";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -18,8 +19,9 @@ export async function GET(req: NextRequest) {
     const actor = await requireAuth(req);
     const where = orgWhere(actor);
 
+    // Archived uploads (or ones in an archived case) are on the Archive page.
     const uploads = await prisma.logUpload.findMany({
-      where: { ...where },
+      where: { ...where, ...notArchived() },
       orderBy: { createdAt: "desc" },
       take: 100,
       select: {
@@ -28,7 +30,7 @@ export async function GET(req: NextRequest) {
         ipAddress: true, errorMessage: true, createdAt: true, updatedAt: true,
         uploadedBy: { select: { email: true, name: true } },
         organization: { select: { id: true, name: true } },
-        case: { select: { id: true, title: true, caseSeq: true, status: true } },
+        case: { select: { id: true, title: true, caseSeq: true, status: true, archivedAt: true } },
         _count: { select: { findings: true, iocs: true } },
       },
     });

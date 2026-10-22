@@ -14,10 +14,13 @@ export async function GET(req: NextRequest) {
   const status   = searchParams.get("status") ?? undefined;
   const severity = searchParams.get("severity") ?? undefined;
   const q        = searchParams.get("q") ?? undefined;
+  // Archived cases live on the Archive page (/api/archive), not here.
+  const includeArchived = searchParams.get("archived") === "include";
 
   const cases = await prisma.case.findMany({
     where: {
       ...orgWhere(actor),
+      ...(includeArchived ? {} : { archivedAt: null }),
       ...(status   ? { status }   : {}),
       ...(severity ? { severity } : {}),
       ...(q        ? { OR: [{ title: { contains: q, mode: "insensitive" } }, { description: { contains: q, mode: "insensitive" } }] } : {}),

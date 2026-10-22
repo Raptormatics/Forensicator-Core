@@ -1,8 +1,9 @@
 import Link from "next/link";
 import { Lock } from "lucide-react";
 import { formatCaseNumber } from "@/lib/cases/case-number";
+import { ArchivedPill } from "@/components/cases/archive-button";
 
-export type CaseRef = { id: string; caseSeq: number; title: string; status: string };
+export type CaseRef = { id: string; caseSeq: number; title: string; status: string; archivedAt?: string | Date | null };
 
 /**
  * The case an investigation or upload belongs to, with a "Case Closed" badge
@@ -17,6 +18,7 @@ export function CaseBadge({ kase, showTitle = false }: { kase: CaseRef | null; s
         {formatCaseNumber(kase.caseSeq)}{showTitle ? ` · ${kase.title}` : ""}
       </Link>
       {kase.status === "closed" && <CaseClosedPill />}
+      {kase.archivedAt && <ArchivedPill />}
     </span>
   );
 }

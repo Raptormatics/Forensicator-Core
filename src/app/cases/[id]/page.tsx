@@ -10,6 +10,8 @@ import { AssigneePanel } from "@/components/shared/assignee-panel";
 import { CaseThreatIntelSection } from "@/components/cases/case-threat-intel-section";
 import { CaseKnownHashesSection } from "@/components/cases/case-known-hashes-section";
 import { CaseClosureDialog, dispositionLabel } from "@/components/cases/case-closure-dialog";
+import { ArchiveButton, ArchivedPill } from "@/components/cases/archive-button";
+import { CaseEnterprisePanel } from "@/components/enterprise-slots/case-panel";
 
 type CaseDetail = {
   id: string;
@@ -33,7 +35,9 @@ type CaseDetail = {
   reopenedAt: string | null;
   reopenReason: string | null;
   reopenedBy: { email: string; name: string | null } | null;
-  closureHistory: { id: string; action: "case_closed" | "case_reopened"; actorEmail: string | null; metadata: Record<string, string> | null; createdAt: string }[];
+  archivedAt: string | null;
+  archivedBy: { email: string; name: string | null } | null;
+  closureHistory: { id: string; action: "case_closed" | "case_reopened" | "archived" | "archive_restored"; actorEmail: string | null; metadata: Record<string, string> | null; createdAt: string }[];
 };
 
 type InvOption = { id: string; title: string | null; hostname: string | null; status: string; findingCount: number; createdAt: string; caseId: string | null };
@@ -371,6 +375,7 @@ export default function CaseDetailPage() {
           <select
             value={c.status}
             onChange={(e) => changeStatus(e.target.value)}
+            disabled={!!c.archivedAt}
             title={STATUS_OPTS.find(o => o.value === c.status)?.desc ?? c.status}
             className="rounded-md border border-zinc-700 bg-zinc-800 px-2 py-1.5 text-sm text-zinc-200"
           >
@@ -443,9 +448,23 @@ export default function CaseDetailPage() {
             )}
           </div>
           {c.closureSummary && <p className="text-sm text-zinc-300 whitespace-pre-wrap mt-2">{c.closureSummary}</p>}
-          <p className="text-xs text-zinc-500 mt-2">
-            Everything linked to this case is read-only. Change the Status above to reopen it.
-          </p>
+          {c.archivedAt ? (
+            <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-amber-700/30 pt-3">
+              <ArchivedPill />
+              <span className="text-xs text-zinc-500">
+                {new Date(c.archivedAt).toLocaleString()}{c.archivedBy ? ` by ${c.archivedBy.name ?? c.archivedBy.email}` : ""} — hidden
+                from the working lists. Restore it to reopen it.
+              </span>
+              <span className="ml-auto"><ArchiveButton type="case" id={c.id} action="restore" onDone={load} /></span>
+            </div>
+          ) : (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <p className="text-xs text-zinc-500">
+                Everything linked to this case is read-only. Change the Status above to reopen it, or archive it once it no longer needs to be in the working lists.
+              </p>
+              <span className="ml-auto"><ArchiveButton type="case" id={c.id} action="archive" onDone={load} /></span>
+            </div>
+          )}
         </div>
       )}
 
@@ -811,6 +830,7 @@ export default function CaseDetailPage() {
 
         {/* Right — Notes + Meta */}
         <div className="space-y-6">
+          <CaseEnterprisePanel caseId={c.id} caseStatus={c.status} archived={!!c.archivedAt} onChanged={load} />
           {/* Assignee */}
           <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
             <AssigneePanel
@@ -876,8 +896,10 @@ export default function CaseDetailPage() {
               <div className="space-y-2">
                 {c.closureHistory.map((h) => (
                   <div key={h.id} className="rounded-lg bg-zinc-800 px-3 py-2 text-xs">
-                    <p className={h.action === "case_closed" ? "text-amber-300" : "text-teal-300"}>
-                      {h.action === "case_closed" ? `Closed — ${dispositionLabel(h.metadata?.disposition)}` : "Reopened"}
+                    <p className={h.action === "case_closed" ? "text-amber-300" : h.action === "case_reopened" ? "text-teal-300" : "text-zinc-300"}>
+                      {h.action === "case_closed" ? `Closed — ${dispositionLabel(h.metadata?.disposition)}`
+                        : h.action === "case_reopened" ? "Reopened"
+                        : h.action === "archived" ? "Archived" : "Restored from archive"}
                     </p>
                     {(h.metadata?.summary || h.metadata?.reason) && (
                       <p className="text-zinc-300 mt-1 whitespace-pre-wrap">{h.metadata?.summary ?? h.metadata?.reason}</p>

@@ -7,6 +7,7 @@ import {
   Plus, RefreshCw, Shield, Trash2,
 } from "lucide-react";
 import { CaseBadge } from "@/components/cases/case-badge";
+import { ArchiveButton } from "@/components/cases/archive-button";
 
 type FileRow = { id: string; role: string; filename: string; status: string; findingCount: number };
 type Upload = {
@@ -16,7 +17,7 @@ type Upload = {
   findingCount: number;
   createdAt: string;
   uploadedBy: { email: string; name: string | null } | null;
-  case: { id: string; title: string; caseSeq: number; status: string } | null;
+  case: { id: string; title: string; caseSeq: number; status: string; archivedAt: string | null } | null;
   files: FileRow[];
 };
 
@@ -172,6 +173,7 @@ export default function WindowsArtifactsPage() {
                     </td>
                     <td className="px-4 py-3 text-zinc-500 text-xs whitespace-nowrap">{new Date(u.createdAt).toLocaleString()}</td>
                     <td className="px-4 py-3 text-right">
+                      {!u.case && <ArchiveButton compact type="windows-artifacts" id={u.id} action="archive" onDone={load} />}
                       {u.case?.status !== "closed" && (
                         <button onClick={() => deleteUpload(u.id)} className="p-1.5 rounded text-zinc-600 hover:text-red-400 hover:bg-red-900/20 transition-colors" title="Delete">
                           <Trash2 className="h-3.5 w-3.5" />

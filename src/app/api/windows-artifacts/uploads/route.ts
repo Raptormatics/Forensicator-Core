@@ -9,6 +9,7 @@ import { getWinArtifactsQueue } from "@/lib/jobs/queues";
 import type { WinArtifactFileRole } from "@/lib/windows-artifacts/types";
 import { classifyForUpload } from "@/lib/windows-artifacts/collector-layout";
 import { parseCollectionManifest, verifyAgainstManifest, type ParsedCollectionManifest } from "@/lib/windows-artifacts/collection-manifest";
+import { notArchived } from "@/lib/cases/archive";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -71,15 +72,16 @@ export async function GET(req: NextRequest) {
     const actor = await requireAuth(req);
     const where = orgWhere(actor);
 
+    // Archived uploads (or ones in an archived case) are on the Archive page.
     const uploads = await prisma.windowsArtifactUpload.findMany({
-      where: { ...where },
+      where: { ...where, ...notArchived() },
       orderBy: { createdAt: "desc" },
       take: 100,
       select: {
         id: true, hostname: true, notes: true, findingCount: true,
         createdAt: true, updatedAt: true,
         uploadedBy: { select: { email: true, name: true } },
-        case: { select: { id: true, title: true, caseSeq: true, status: true } },
+        case: { select: { id: true, title: true, caseSeq: true, status: true, archivedAt: true } },
         files: { select: { id: true, role: true, filename: true, status: true, findingCount: true } },
       },
     });

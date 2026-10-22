@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import fs from "fs";
 import { prisma } from "@/lib/db/prisma";
 import { requireAuth } from "@/lib/auth/api-guard";
-import { guardCaseOpen } from "@/lib/cases/case-lock";
+import { guardDeletion } from "@/lib/cases/case-lock";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -23,7 +23,7 @@ export async function GET(req: NextRequest, props: Params) {
       include: {
         uploadedBy: { select: { email: true, name: true } },
         organization: { select: { id: true, name: true } },
-        case: { select: { id: true, title: true, caseSeq: true, status: true } },
+        case: { select: { id: true, title: true, caseSeq: true, status: true, archivedAt: true } },
         files: { orderBy: { createdAt: "asc" } },
       },
     });
@@ -130,7 +130,7 @@ export async function DELETE(req: NextRequest, props: Params) {
   const params = await props.params;
   try {
     await requireAuth(req);
-    const locked = await guardCaseOpen({ windowsArtifactUploadId: params.id }, "deleting its uploads");
+    const locked = await guardDeletion({ windowsArtifactUploadId: params.id }, "deleting this upload");
     if (locked) return locked;
     const { id } = params;
 

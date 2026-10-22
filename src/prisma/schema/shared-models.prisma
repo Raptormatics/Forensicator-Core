@@ -100,6 +100,11 @@ model Investigation {
   caseId                String?   @map("case_id") @db.Uuid
   case                  Case?     @relation(fields: [caseId], references: [id], onDelete: SetNull)
 
+  // Archive (see src/lib/cases/archive.ts). Set only on an investigation
+  // with no case; one in an archived case counts as archived through it.
+  archivedAt            DateTime? @map("archived_at")
+  archivedById          String?   @map("archived_by_id") @db.Uuid
+
   organizationId        String?   @map("organization_id") @db.Uuid
   organization          Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
 
@@ -123,6 +128,7 @@ model Investigation {
   @@index([createdAt])
   @@index([archiveSha256])
   @@index([caseId])
+  @@index([archivedAt])
   @@map("investigations")
 }
 
@@ -147,6 +153,10 @@ model Case {
   reopenedAt         DateTime? @map("reopened_at")
   reopenedById       String?   @map("reopened_by_id") @db.Uuid
   reopenReason       String?   @map("reopen_reason") @db.Text
+  // Archive: only a closed case can be archived, and it must be restored
+  // (archivedAt cleared) before it can be reopened.
+  archivedAt         DateTime? @map("archived_at")
+  archivedById       String?   @map("archived_by_id") @db.Uuid
 
   createdById String   @map("created_by_id") @db.Uuid
   createdBy   User     @relation("caseCreatedBy", fields: [createdById], references: [id])
@@ -177,6 +187,7 @@ model Case {
   @@index([assigneeId])
   @@index([organizationId])
   @@index([createdAt])
+  @@index([archivedAt])
   @@map("cases")
 }
 

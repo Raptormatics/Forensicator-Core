@@ -7,6 +7,7 @@ import {
   Loader2, Plus, RefreshCw, ScrollText, Shield, Trash2
 } from "lucide-react";
 import { CaseBadge } from "@/components/cases/case-badge";
+import { ArchiveButton } from "@/components/cases/archive-button";
 
 type Upload = {
   id: string;
@@ -20,7 +21,7 @@ type Upload = {
   errorMessage: string | null;
   createdAt: string;
   uploadedBy: { email: string; name: string | null } | null;
-  case: { id: string; title: string; caseSeq: number; status: string } | null;
+  case: { id: string; title: string; caseSeq: number; status: string; archivedAt: string | null } | null;
   _count: { findings: number; iocs: number };
 };
 
@@ -208,6 +209,7 @@ export default function LogAnalysisPage() {
                       {new Date(u.createdAt).toLocaleString()}
                     </td>
                     <td className="px-4 py-3 text-right">
+                      {!u.case && <ArchiveButton compact type="log" id={u.id} action="archive" onDone={load} />}
                       {u.case?.status !== "closed" && (
                         <button
                           onClick={() => deleteUpload(u.id)}

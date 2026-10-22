@@ -2,6 +2,7 @@
 
 import {
   Activity,
+  Archive,
   BookOpen,
   ChevronDown,
   ChevronRight,
@@ -70,6 +71,7 @@ const NAV: NavItem[] = [
     ],
   },
   { kind: "link",  label: "Hosts",           href: "/hosts",           icon: Monitor },
+  { kind: "link",  label: "Archive",         href: "/archive",         icon: Archive },
   {
     kind: "group",
     label: "Intelligence",

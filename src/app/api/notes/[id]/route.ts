@@ -6,7 +6,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { getUploadActor } from "@/lib/upload/actor";
-import { guardCaseOpen } from "@/lib/cases/case-lock";
+import { guardCaseOpen, guardDeletion } from "@/lib/cases/case-lock";
 
 export const runtime = "nodejs";
 
@@ -40,7 +40,7 @@ export async function DELETE(request: NextRequest, props: { params: Promise<{ id
   const note = await prisma.note.findUnique({ where: { id: params.id } });
   if (!note) return NextResponse.json({ error: "not_found" }, { status: 404 });
   if (note.authorId !== actor.id) return NextResponse.json({ error: "forbidden" }, { status: 403 });
-  const locked = await guardCaseOpen({ noteId: note.id }, "changing its notes");
+  const locked = await guardDeletion({ noteId: note.id }, "deleting notes");
   if (locked) return locked;
   await prisma.note.delete({ where: { id: params.id } });
   return NextResponse.json({ deleted: true });

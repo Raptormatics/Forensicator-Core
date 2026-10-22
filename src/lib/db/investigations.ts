@@ -1,13 +1,16 @@
 import { cache } from "react";
 import { prisma } from "./prisma";
+import { notArchived } from "@/lib/cases/archive";
 
 type InvestigationWhere = {
   organizationId?: { in: string[] } | string;
 };
 
+// Archived investigations (or ones in an archived case) are listed on the
+// Archive page instead.
 export async function getInvestigations(where: InvestigationWhere = {}) {
   return prisma.investigation.findMany({
-    where,
+    where: { AND: [where, notArchived()] },
     select: {
       id: true,
       title: true,
@@ -39,7 +42,7 @@ export const getInvestigation = cache(async (id: string) =>
         select: { email: true, name: true }
       },
       case: {
-        select: { id: true, caseSeq: true, title: true, status: true }
+        select: { id: true, caseSeq: true, title: true, status: true, archivedAt: true }
       },
       findings: {
         orderBy: { createdAt: "asc" }

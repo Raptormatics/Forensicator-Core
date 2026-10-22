@@ -10,11 +10,13 @@ import {
 } from "lucide-react";
 import { UploadEnrichButton } from "@/components/intelligence/upload-enrich-button";
 import { CaseBadge } from "@/components/cases/case-badge";
+import { ArchiveButton, ArchivedPill } from "@/components/cases/archive-button";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
 type Upload = {
-  case: { id: string; caseSeq: number; title: string; status: string } | null;
+  case: { id: string; caseSeq: number; title: string; status: string; archivedAt: string | null } | null;
+  archivedAt: string | null;
   id: string; filename: string; sourceType: string; status: string;
   eventCount: number; findingCount: number; hostname: string | null;
   assetName: string | null; errorMessage: string | null; createdAt: string;
@@ -283,6 +285,13 @@ export default function LogUploadDetailPage() {
               </div>
               <h1 className="text-2xl font-semibold text-zinc-50 break-all">{upload.filename}</h1>
               {upload.case && <div className="mt-1 text-sm"><CaseBadge kase={upload.case} showTitle /></div>}
+              {/* Only an upload with no case is archived on its own — one in a case goes with its case. */}
+              {!upload.case && (
+                <div className="mt-2 flex items-center gap-2">
+                  {upload.archivedAt && <ArchivedPill />}
+                  <ArchiveButton type="log" id={upload.id} action={upload.archivedAt ? "restore" : "archive"} onDone={() => load()} />
+                </div>
+              )}
               <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-zinc-500">
                 <span className="flex items-center gap-1">
                   {upload.status === "ready"

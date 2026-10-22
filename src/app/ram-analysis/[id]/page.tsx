@@ -11,11 +11,13 @@ import { UploadEnrichButton } from "@/components/intelligence/upload-enrich-butt
 import { FindingCard, type Finding } from "@/components/ram-analysis/finding-card";
 import { ProcessesPanel, buildProcessTree, type ProcessRow } from "@/components/ram-analysis/process-panel";
 import { CaseBadge } from "@/components/cases/case-badge";
+import { ArchiveButton, ArchivedPill } from "@/components/cases/archive-button";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
 type Upload = {
-  case: { id: string; caseSeq: number; title: string; status: string } | null;
+  case: { id: string; caseSeq: number; title: string; status: string; archivedAt: string | null } | null;
+  archivedAt: string | null;
   id: string; filename: string; status: string; errorMessage: string | null;
   fileSize: string; osType: string; osBuild: string | null; osArch: string | null;
   pluginStatus: Record<string, string> | null;
@@ -211,6 +213,13 @@ export default function RamUploadDetailPage() {
               </div>
               <h1 className="text-2xl font-semibold text-zinc-50 break-all">{upload.filename}</h1>
               {upload.case && <div className="mt-1 text-sm"><CaseBadge kase={upload.case} showTitle /></div>}
+              {/* Only an upload with no case is archived on its own — one in a case goes with its case. */}
+              {!upload.case && (
+                <div className="mt-2 flex items-center gap-2">
+                  {upload.archivedAt && <ArchivedPill />}
+                  <ArchiveButton type="ram" id={upload.id} action={upload.archivedAt ? "restore" : "archive"} onDone={() => load()} />
+                </div>
+              )}
               <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-zinc-500">
                 <span className="flex items-center gap-1">
                   {upload.status === "ready"
