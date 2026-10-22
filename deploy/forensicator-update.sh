@@ -497,7 +497,16 @@ do_install() {
   # its own statement, then read $? immediately after — at that point
   # nothing is "testing" it, so `-e` behaves normally for every command
   # inside.
-  local install_failed=0
+  #
+  # But this script itself runs under `set -e` (top of file), so a failing
+  # subshell as a bare statement aborted the WHOLE script right there — the
+  # `$?` check below, and with it the automatic rollback, never ran, and a
+  # failed update left the appliance stopped mid-install. The outer `-e` is
+  # therefore suspended around the subshell (`set +e` ... `set -e`); that
+  # doesn't disable the subshell's own `set -e`, since it still isn't the
+  # operand of `||`/`&&`/`if`.
+  local install_failed=0 install_rc
+  set +e
   (
     set -e
     set_progress "install" "Stopping services"
@@ -507,6 +516,24 @@ do_install() {
     tar -C "$APP_DIR" -xzf "${work}/release.tar.gz"
     cp "$PUBLIC_KEY" "${APP_DIR}/deploy/update-public-key.pem" 2>/dev/null || true
     chown -R "${SERVICE_USER}:${SERVICE_USER}" "$APP_DIR"
+
+    # The Core release just extracted fully replaced every file it ships,
+    # including the ones the overlay also replaces (shared-models.prisma,
+    # sidebar.tsx, ...) — if an overlay is applied, put it back NOW, before
+    # building. Building first (as this used to) fails outright: Core's
+    # plain shared-models.prisma next to the overlay's still-present
+    # enterprise.prisma is an invalid schema (missing relation fields), so
+    # every Core update on an Enterprise instance died at the build.
+    # Re-verifies the cached package's signature rather than trusting it's
+    # unmodified since it was cached.
+    if [[ -f "$DELTA_CACHE_FPK" ]]; then
+      set_progress "install" "Re-applying the Enterprise overlay (v$(installed_delta_version))"
+      local replay_work
+      replay_work="$(mktemp -d)"
+      verify_package "$DELTA_CACHE_FPK" "$replay_work" "$OVERLAY_PUBLIC_KEY"
+      apply_delta_files "${replay_work}/release.tar.gz"
+      rm -rf "$replay_work"
+    fi
 
     set_progress "install" "Installing dependencies and building"
     # NEXT_PUBLIC_DEPLOYMENT_MODE is inlined into the client bundle at
@@ -533,37 +560,9 @@ do_install() {
     set_progress "install" "Installing Windows Artifact Analysis system dependencies"
     APP_DIR="$APP_DIR" SERVICE_USER="$SERVICE_USER" bash "${APP_DIR}/deploy/install-winartifacts-deps.sh"
 
+    # Core's migrations and, on an overlaid instance, the overlay's too.
     set_progress "install" "Running database migrations"
     runuser -u "$SERVICE_USER" -- bash -lc "cd '${APP_DIR}' && npx prisma migrate deploy"
-
-    # The Core release just extracted above fully replaced every file it
-    # ships, including the handful the overlay also replaces (sidebar.tsx
-    # etc.) — if an overlay is currently applied, replay it now so those
-    # files, the merged dependency fragment, and any Pro migrations all
-    # come back, instead of silently reverting to Core's plain versions.
-    # Re-verifies the cached package's signature again rather than
-    # trusting that it's unmodified since it was cached.
-    if [[ -f "$DELTA_CACHE_FPK" ]]; then
-      set_progress "install" "Re-applying the Enterprise overlay (v$(installed_delta_version))"
-      local replay_work
-      replay_work="$(mktemp -d)"
-      verify_package "$DELTA_CACHE_FPK" "$replay_work" "$OVERLAY_PUBLIC_KEY"
-      apply_delta_files "${replay_work}/release.tar.gz"
-      rm -rf "$replay_work"
-
-      # The build above (this function's own "Installing dependencies and
-      # building" step) ran BEFORE this replay ever extracted the overlay's
-      # files back on top — it only reflects the fresh Core release. Same
-      # reasoning as do_overlay()'s own rebuild: without this, every Core
-      # update would silently revert an overlaid instance's UI/routes back
-      # to plain Core, even though delta-state still reports the overlay
-      # as applied.
-      set_progress "install" "Rebuilding with the Enterprise overlay included"
-      rebuild_app
-
-      set_progress "install" "Running Enterprise overlay migrations"
-      runuser -u "$SERVICE_USER" -- bash -lc "cd '${APP_DIR}' && npx prisma migrate deploy"
-    fi
 
     set_progress "install" "Restarting services"
     start_services
@@ -574,7 +573,9 @@ do_install() {
       exit 1
     fi
   )
-  if [[ $? -ne 0 ]]; then install_failed=1; fi
+  install_rc=$?
+  set -e
+  if [[ $install_rc -ne 0 ]]; then install_failed=1; fi
 
   if [[ "$install_failed" -eq 1 ]]; then
     set_progress "rollback" "Install failed — automatically rolling back to ${backup_id}"
@@ -639,7 +640,9 @@ do_overlay() {
 
   # Same errexit-vs-`||` pitfall as do_install() — see the comment there.
   # This subshell must never become the left operand of `||`.
-  local install_failed=0
+  # Outer `-e` suspended around the subshell — see do_install() for why.
+  local install_failed=0 install_rc
+  set +e
   (
     set -e
     set_progress "overlay" "Stopping services"
@@ -727,7 +730,9 @@ do_overlay() {
       exit 1
     fi
   )
-  if [[ $? -ne 0 ]]; then install_failed=1; fi
+  install_rc=$?
+  set -e
+  if [[ $install_rc -ne 0 ]]; then install_failed=1; fi
 
   if [[ "$install_failed" -eq 1 ]]; then
     set_progress "rollback" "Overlay apply failed — automatically rolling back to ${backup_id}"
