@@ -46,6 +46,11 @@ const latestSchema = z.object({
   requiresCoreVersion: z.string().min(1),
   releaseNotes: z.string().default(""),
   packageSha256: z.string().min(1),
+  // Deprecated, always empty now — latest.json no longer carries a download
+  // URL. Kept in the type only so an already-installed overlay whose own
+  // copy of the install route still reads it (<= 1.1.1) keeps compiling
+  // when Core updates underneath it, until the overlay itself is updated.
+  packageUrl: z.string().default(""),
   packageSize: z.number().nonnegative().optional(),
   publishedAt: z.string().optional(),
 });
