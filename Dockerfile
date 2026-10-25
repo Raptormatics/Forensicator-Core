@@ -17,6 +17,10 @@
 
 FROM node:26-slim AS deps
 WORKDIR /app
+# Refuse to build on a stale cached base image below the minimum Node.js
+# security release (deploy/ensure-node.sh's MIN_NODE_VERSION — keep both
+# in sync). `docker compose build --pull` fetches the current node:26-slim.
+RUN node -e 'const [a,b,c]=process.versions.node.split(".").map(Number);if(a!==26||b<12||(b===12&&c<1)){console.error("Node.js "+process.version+" is below 26.12.1 (CVE-2026-111497) - rebuild with --pull");process.exit(1)}'
 COPY package.json package-lock.json ./
 RUN npm ci
 

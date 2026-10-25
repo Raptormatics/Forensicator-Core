@@ -556,6 +556,10 @@ do_install() {
     # itself, at request time) stays correct regardless. See
     # provision.sh's own version of this same export for the original
     # fix this mirrors.
+    #
+    # Node.js first: the app runs on the system Node, and nothing else ever
+    # upgrades it after provisioning (see ensure-node.sh for the minimum).
+    bash "${APP_DIR}/deploy/ensure-node.sh" --warn-only
     rebuild_app
 
     # Core-owned system dependencies (python3-libscca, the winartifacts

@@ -35,6 +35,12 @@ set -euo pipefail
 APP_DIR="${APP_DIR:?Set APP_DIR to the application directory}"
 SERVICE_USER="${SERVICE_USER:-forensicator}"
 
+# Not a Windows Artifact Analysis dependency — here because this script is
+# the one part of a Core update that runs from the NEW release, so an
+# instance whose installed updater predates ensure-node.sh still gets its
+# Node.js security upgrade on the next update (see ensure-node.sh).
+bash "${APP_DIR}/deploy/ensure-node.sh" --warn-only
+
 # Debian/Ubuntu's packaged python3-libscca is a single frozen snapshot
 # (20200717 as of writing) that distros never update — libyal libraries
 # aren't security-sensitive enough to get backports. libscca didn't add

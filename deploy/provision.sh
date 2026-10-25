@@ -88,11 +88,8 @@ apt-get update -y
 # logic lives in exactly one place rather than two copies that can drift.
 apt-get install -y ca-certificates curl gnupg build-essential postgresql postgresql-contrib redis-server sudo tshark python3-venv python3-dev
 
-echo "==> Installing Node.js 26.x (current LTS)"
-if ! command -v node >/dev/null || [[ "$(node -v)" != v26.* ]]; then
-  curl -fsSL https://deb.nodesource.com/setup_26.x | bash -
-  apt-get install -y nodejs
-fi
+echo "==> Installing Node.js 26.x (current LTS, at or above the minimum security release)"
+bash "${APP_DIR}/deploy/ensure-node.sh"
 # The NodeSource package bundles whatever npm shipped with that Node
 # build at release time, which drifts behind as patch releases land —
 # pull the latest npm release compatible with the installed Node major
