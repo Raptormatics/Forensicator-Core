@@ -6,6 +6,7 @@ import { prisma }              from "@/lib/db/prisma";
 import { getActorOrThrow, AuthError } from "@/lib/auth/api-guard";
 import { compileDecoder }      from "@/lib/log-analysis/decoder-engine/engine";
 import yaml                    from "js-yaml";
+import { canAccessOrg } from "@/lib/auth/org-access";
 
 // ── POST /api/log-analysis/decoders/[id]/clone ──────────────────────────────
 export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
@@ -14,7 +15,10 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
     const actor = await getActorOrThrow(req);
 
     const source = await prisma.logDecoder.findUnique({ where: { id: params.id } });
-    if (!source) return NextResponse.json({ error: "not_found" }, { status: 404 });
+    // Built-in decoders (no organization) can be cloned by anyone; a custom one only within its organization.
+    if (!source || (source.organizationId !== null && !canAccessOrg(actor, source.organizationId))) {
+      return NextResponse.json({ error: "not_found" }, { status: 404 });
+    }
 
     // Parse the YAML to get the existing name, then rename
     let parsedYaml: Record<string, unknown>;

@@ -6,6 +6,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { getUploadActor } from "@/lib/upload/actor";
 import { guardCaseOpen } from "@/lib/cases/case-lock";
+import { actorOr401, guardOrgAccess } from "@/lib/auth/org-access";
 
 export const runtime = "nodejs";
 
@@ -15,6 +16,10 @@ const bodySchema = z.object({
 
 export async function POST(request: NextRequest, props: { params: Promise<{ id: string }> }) {
   const params = await props.params;
+  const orgActor = await actorOr401(request);
+  if (orgActor instanceof NextResponse) return orgActor;
+  const orgDenied = await guardOrgAccess(orgActor, { findingId: params.id });
+  if (orgDenied) return orgDenied;
   try {
     const { assigneeId } = bodySchema.parse(await request.json());
     const actor = await getUploadActor(request);

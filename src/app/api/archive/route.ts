@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db/prisma";
 import { getActorOrThrow, AuthError, orgWhere } from "@/lib/auth/api-guard";
 import { ARCHIVE_TYPES, ArchiveError, setArchived, type ArchiveType } from "@/lib/cases/archive";
+import { guardOrgAccess, type OrgRef } from "@/lib/auth/org-access";
 
 const USER = { select: { id: true, email: true, name: true } } as const;
 
@@ -66,6 +67,12 @@ export async function POST(req: NextRequest) {
   if (!ARCHIVE_TYPES.includes(type) || typeof body.id !== "string" || (action !== "archive" && action !== "restore")) {
     return NextResponse.json({ error: "type, id and action (archive | restore) are required" }, { status: 400 });
   }
+  // The record must belong to one of the caller's organizations.
+  const ref: OrgRef = type === "case" ? { caseId: body.id } : type === "investigation" ? { investigationId: body.id }
+    : type === "log" ? { logUploadId: body.id } : type === "pcap" ? { pcapUploadId: body.id }
+    : type === "ram" ? { ramUploadId: body.id } : { windowsArtifactUploadId: body.id };
+  const denied = await guardOrgAccess(actor, ref);
+  if (denied) return denied;
   try {
     await setArchived(type, body.id, action === "archive", actor, req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null);
   } catch (e) {

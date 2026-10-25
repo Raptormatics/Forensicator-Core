@@ -12,7 +12,8 @@ export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db/prisma";
-import { getActorOrThrow, AuthError } from "@/lib/auth/api-guard";
+import { getActorOrThrow, AuthError, isInstanceAdminActor } from "@/lib/auth/api-guard";
+import { guardOrgAccess, instanceAdminRequired } from "@/lib/auth/org-access";
 
 export async function POST(req: NextRequest) {
   let actor;
@@ -24,6 +25,13 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json().catch(() => ({})) as { investigationId?: string };
+  // One investigation: the caller must be able to access it. All investigations: instance admins only.
+  if (body.investigationId) {
+    const denied = await guardOrgAccess(actor, { investigationId: body.investigationId });
+    if (denied) return denied;
+  } else if (!isInstanceAdminActor(actor)) {
+    return instanceAdminRequired();
+  }
   const invFilter = body.investigationId ? { investigationId: body.investigationId } : {};
 
   // Find findings whose findingType indicates sigma but sourceCategory is not set.

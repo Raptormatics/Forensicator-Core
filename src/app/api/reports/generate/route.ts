@@ -8,6 +8,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { getReportQueue } from "@/lib/jobs/queues";
 import { getUploadActor } from "@/lib/upload/actor";
+import { canAccessOrg } from "@/lib/auth/org-access";
 
 export const runtime = "nodejs";
 
@@ -22,8 +23,8 @@ export async function POST(request: NextRequest) {
     const body = bodySchema.parse(await request.json());
     const actor = await getUploadActor(request);
 
-    const kase = await prisma.case.findUnique({ where: { id: body.caseId }, select: { id: true } });
-    if (!kase) return NextResponse.json({ error: "not_found" }, { status: 404 });
+    const kase = await prisma.case.findUnique({ where: { id: body.caseId }, select: { id: true, organizationId: true } });
+    if (!kase || !canAccessOrg(actor, kase.organizationId)) return NextResponse.json({ error: "not_found" }, { status: 404 });
 
     const report = await prisma.report.create({
       data: {

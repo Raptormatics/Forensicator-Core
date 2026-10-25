@@ -11,6 +11,7 @@ import { getRamDir } from "@/lib/settings/system";
 import { getRamQueue } from "@/lib/jobs/queues";
 import { ALLOWED_EXTENSIONS_BY_OS, ALLOWED_OS_TYPES, getMaxBytes, matchedExtension } from "@/lib/ram-analysis/upload-shared";
 import { notArchived } from "@/lib/cases/archive";
+import { canAccessOrg } from "@/lib/auth/org-access";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -186,8 +187,9 @@ export async function POST(req: NextRequest) {
     }
 
     const caseId = result.fields.caseId;
-    const kase = await prisma.case.findUnique({ where: { id: caseId }, select: { id: true, status: true } });
-    if (!kase) {
+    const kase = await prisma.case.findUnique({ where: { id: caseId }, select: { id: true, status: true, organizationId: true } });
+    // Another organization's case is treated as nonexistent.
+    if (!kase || !canAccessOrg(actor, kase.organizationId)) {
       fs.unlink(result.storagePath, () => {});
       return NextResponse.json({ error: "invalid_case", message: "The specified case does not exist." }, { status: 400 });
     }
@@ -210,7 +212,7 @@ export async function POST(req: NextRequest) {
         ipAddress: result.fields.ipAddress || null,
         notes: result.fields.notes || null,
         uploadedById: actor.id,
-        organizationId: result.fields.organizationId || (actor.organizationIds[0] ?? null),
+        organizationId: kase.organizationId,
         caseId,
       },
     });

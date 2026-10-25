@@ -6,6 +6,7 @@ import { prisma } from "@/lib/db/prisma";
 import { getActorOrThrow, AuthError } from "@/lib/auth/api-guard";
 import { getEnrichmentQueue } from "@/lib/jobs/queues";
 import { guardCaseOpen } from "@/lib/cases/case-lock";
+import { guardOrgAccess } from "@/lib/auth/org-access";
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024; // 5MB
 const MAX_LINES = 20_000;
@@ -55,6 +56,8 @@ export async function POST(req: NextRequest) {
   if (typeof caseId !== "string" || !caseId) {
     return NextResponse.json({ error: "missing_case", message: "caseId is required." }, { status: 400 });
   }
+  const denied = await guardOrgAccess(actor, { caseId });
+  if (denied) return denied;
   const locked = await guardCaseOpen({ caseId }, "importing IOCs into it");
   if (locked) return locked;
   const queueEnrichment = formData.get("queueEnrichment") === "true";

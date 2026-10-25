@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
+import { actorOr401, investigationOrgWhere } from "@/lib/auth/org-access";
 
 const querySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(25),
@@ -12,6 +13,8 @@ export async function GET(
   props: { params: Promise<{ value: string }> }
 ) {
   const params = await props.params;
+  const actor = await actorOr401(request);
+  if (actor instanceof NextResponse) return actor;
   const ioc = decodeURIComponent(params.value).trim();
   if (!ioc) {
     return NextResponse.json({ error: "invalid_ioc" }, { status: 400 });
@@ -46,9 +49,9 @@ export async function GET(
       ];
 
   const [total, rows, stats] = await Promise.all([
-    prisma.evidence.count({ where: { OR: iocWhere } }),
+    prisma.evidence.count({ where: { OR: iocWhere, ...investigationOrgWhere(actor) } }),
     prisma.evidence.findMany({
-      where: { OR: iocWhere },
+      where: { OR: iocWhere, ...investigationOrgWhere(actor) },
       select: {
         id: true,
         type: true,
@@ -70,7 +73,7 @@ export async function GET(
       take: limit,
     }),
     prisma.evidence.aggregate({
-      where: { OR: iocWhere },
+      where: { OR: iocWhere, ...investigationOrgWhere(actor) },
       _min: { timestamp: true },
       _max: { timestamp: true },
       _count: { id: true },

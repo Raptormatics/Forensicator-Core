@@ -17,6 +17,8 @@ import { prisma } from "@/lib/db/prisma";
 import { SeverityBadge } from "@/components/findings/severity-badge";
 import { CopyButton } from "@/components/ui/copy-button";
 import { formatDateTime } from "@/lib/utils";
+import { getPageActor, orgWhere } from "@/lib/auth/api-guard";
+import { canAccessOrg, investigationOrgWhere } from "@/lib/auth/org-access";
 
 export const dynamic = "force-dynamic";
 
@@ -27,7 +29,7 @@ export default async function EvidencePage(props: Props) {
   const ev = await prisma.evidence.findUnique({
     where: { id: params.id },
     include: {
-      investigation: { select: { id: true, title: true, hostname: true } },
+      investigation: { select: { id: true, title: true, hostname: true, organizationId: true } },
       finding: {
         select: {
           id: true,
@@ -42,7 +44,8 @@ export default async function EvidencePage(props: Props) {
     },
   });
 
-  if (!ev) notFound();
+  const viewer = await getPageActor();
+  if (!ev || !viewer || !canAccessOrg(viewer, ev.investigation.organizationId)) notFound();
 
   // Prev / next within the same finding (by timestamp).
   const [prev, next] = await Promise.all([

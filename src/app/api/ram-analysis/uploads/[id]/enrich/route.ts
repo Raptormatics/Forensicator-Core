@@ -8,11 +8,16 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db/prisma";
 import { requireAuth } from "@/lib/auth/api-guard";
 import { enrichUploadIocs, type EnrichableIoc } from "@/lib/intelligence/upload-ioc-enrich";
+import { actorOr401, guardOrgAccess } from "@/lib/auth/org-access";
 
 type Params = { params: Promise<{ id: string }> };
 
 export async function POST(req: NextRequest, props: Params) {
   const params = await props.params;
+  const orgActor = await actorOr401(req);
+  if (orgActor instanceof NextResponse) return orgActor;
+  const orgDenied = await guardOrgAccess(orgActor, { ramUploadId: params.id });
+  if (orgDenied) return orgDenied;
   try {
     const actor = await requireAuth(req);
 

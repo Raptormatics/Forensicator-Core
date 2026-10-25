@@ -12,6 +12,7 @@ import { prisma } from "@/lib/db/prisma";
 import { getUploadActor } from "@/lib/upload/actor";
 import { getAiQueue } from "@/lib/jobs/queues";
 import { guardCaseOpen } from "@/lib/cases/case-lock";
+import { actorOr401, guardOrgAccess } from "@/lib/auth/org-access";
 
 export const runtime = "nodejs";
 
@@ -21,6 +22,10 @@ const bodySchema = z.object({
 
 export async function POST(request: NextRequest, props: { params: Promise<{ id: string }> }) {
   const params = await props.params;
+  const orgActor = await actorOr401(request);
+  if (orgActor instanceof NextResponse) return orgActor;
+  const orgDenied = await guardOrgAccess(orgActor, { findingId: params.id });
+  if (orgDenied) return orgDenied;
   try {
     const { force } = bodySchema.parse(await request.json().catch(() => ({})));
     const actor = await getUploadActor(request);
@@ -65,8 +70,12 @@ export async function POST(request: NextRequest, props: { params: Promise<{ id: 
 }
 
 // GET — lightweight status poll for the finding-detail panel while a job runs.
-export async function GET(_request: NextRequest, props: { params: Promise<{ id: string }> }) {
+export async function GET(request: NextRequest, props: { params: Promise<{ id: string }> }) {
   const params = await props.params;
+  const orgActor = await actorOr401(request);
+  if (orgActor instanceof NextResponse) return orgActor;
+  const orgDenied = await guardOrgAccess(orgActor, { findingId: params.id });
+  if (orgDenied) return orgDenied;
   const finding = await prisma.finding.findUnique({
     where: { id: params.id },
     select: { aiStatus: true, aiSummary: true, aiConfidence: true, aiModel: true, aiEnrichedAt: true, data: true },

@@ -4,11 +4,16 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db/prisma";
 import { getActor } from "@/lib/auth/actor";
 import { guardCaseOpen } from "@/lib/cases/case-lock";
+import { actorOr401, guardOrgAccess } from "@/lib/auth/org-access";
 
 type Params = { params: Promise<{ id: string }> };
 
 export async function POST(req: NextRequest, props: Params) {
   const params = await props.params;
+  const orgActor = await actorOr401(req);
+  if (orgActor instanceof NextResponse) return orgActor;
+  const orgDenied = await guardOrgAccess(orgActor, { caseId: params.id });
+  if (orgDenied) return orgDenied;
   const actor = await getActor(req);
   const locked = await guardCaseOpen({ caseId: params.id }, "adding notes");
   if (locked) return locked;

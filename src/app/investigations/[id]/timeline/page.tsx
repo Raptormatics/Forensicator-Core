@@ -5,6 +5,8 @@ import { Suspense } from "react";
 import { TimelineExplorer } from "@/components/investigation/timeline-explorer";
 import { BackfillButton } from "@/components/artifacts/backfill-button";
 import { prisma } from "@/lib/db/prisma";
+import { getPageActor, orgWhere } from "@/lib/auth/api-guard";
+import { canAccessOrg, investigationOrgWhere } from "@/lib/auth/org-access";
 
 export const dynamic = "force-dynamic";
 
@@ -14,10 +16,11 @@ export default async function TimelinePage(props: Props) {
   const params = await props.params;
   const investigation = await prisma.investigation.findUnique({
     where: { id: params.id },
-    select: { id: true, title: true, hostname: true },
+    select: { id: true, title: true, hostname: true, organizationId: true },
   });
 
-  if (!investigation) notFound();
+  const viewer = await getPageActor();
+  if (!investigation || !viewer || !canAccessOrg(viewer, investigation.organizationId)) notFound();
 
   const eventCount = await prisma.timelineEvent.count({
     where: { investigationId: params.id },

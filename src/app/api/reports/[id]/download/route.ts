@@ -6,6 +6,7 @@ import fs from "fs";
 import path from "path";
 import { prisma } from "@/lib/db/prisma";
 import { formatCaseNumber } from "@/lib/cases/case-number";
+import { actorOr401, guardOrgAccess } from "@/lib/auth/org-access";
 
 export const runtime = "nodejs";
 
@@ -16,8 +17,12 @@ const MIME: Record<string, string> = {
   zip:  "application/zip",
 };
 
-export async function GET(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
+export async function GET(req: NextRequest, props: { params: Promise<{ id: string }> }) {
   const params = await props.params;
+  const orgActor = await actorOr401(req);
+  if (orgActor instanceof NextResponse) return orgActor;
+  const orgDenied = await guardOrgAccess(orgActor, { reportId: params.id });
+  if (orgDenied) return orgDenied;
   const report = await prisma.report.findUnique({
     where: { id: params.id },
     include: { case: { select: { caseSeq: true } } },

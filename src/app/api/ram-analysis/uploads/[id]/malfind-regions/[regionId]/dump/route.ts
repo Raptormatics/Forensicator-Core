@@ -20,11 +20,16 @@ import { prisma } from "@/lib/db/prisma";
 import { requireAuth } from "@/lib/auth/api-guard";
 import { getVolatilityPath, getVolatilitySymbolsDir, getRamDir } from "@/lib/settings/system";
 import { runVolatilityPlugin } from "@/lib/ram-analysis/volatility";
+import { actorOr401, guardOrgAccess } from "@/lib/auth/org-access";
 
 type Params = { params: Promise<{ id: string; regionId: string }> };
 
 export async function GET(req: NextRequest, props: Params) {
   const params = await props.params;
+  const orgActor = await actorOr401(req);
+  if (orgActor instanceof NextResponse) return orgActor;
+  const orgDenied = await guardOrgAccess(orgActor, { ramMalfindRegionId: params.regionId });
+  if (orgDenied) return orgDenied;
   let tmpDir: string | null = null;
   try {
     await requireAuth(req);

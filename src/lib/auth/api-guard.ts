@@ -21,6 +21,7 @@ import { NextResponse } from "next/server";
 import { getToken } from "next-auth/jwt";
 import { prisma } from "@/lib/db/prisma";
 import bcrypt from "bcryptjs";
+import { getServerSession } from "@/lib/auth/session";
 
 export type AuthActor = {
   id:              string;
@@ -58,6 +59,38 @@ export class AuthError extends Error {
  */
 export function orgWhere(_actor: AuthActor): { organizationId?: { in: string[] } } {
   return {};
+}
+
+/**
+ * The organizations an actor may access, or null for unrestricted.
+ * orgWhere() (lists) and guardOrgAccess() in org-access.ts (single
+ * records by id) both follow it. Core is single-org, so always
+ * unrestricted; the Enterprise overlay has its own version.
+ */
+export function orgAccessScope(_actor: AuthActor): string[] | null {
+  return null;
+}
+
+/**
+ * Instance-wide administration — system settings, AI configuration,
+ * updates, license, built-in content seeding. Core's sole user always
+ * qualifies; the Enterprise overlay limits it by role.
+ */
+export function isInstanceAdminActor(_actor: AuthActor): boolean {
+  return true;
+}
+
+/** The signed-in user for a server-rendered page, or null if signed out. */
+export async function getPageActor(): Promise<AuthActor | null> {
+  const session = await getServerSession();
+  const id = (session?.user as { id?: string } | undefined)?.id;
+  if (!id) return null;
+  const user = await prisma.user.findUnique({
+    where: { id },
+    include: { orgMemberships: { select: { organizationId: true } } },
+  });
+  if (!user || !user.isActive) return null;
+  return { id: user.id, email: user.email, name: user.name, organizationIds: user.orgMemberships.map((m) => m.organizationId) };
 }
 
 /**

@@ -3,7 +3,8 @@ import Link from "next/link";
 import { prisma } from "@/lib/db/prisma";
 import { SeverityBadge } from "@/components/findings/severity-badge";
 import { formatDateTime } from "@/lib/utils";
-import { notArchived, investigationNotArchived } from "@/lib/cases/archive";
+import { notArchived } from "@/lib/cases/archive";
+import { getPageActor, orgWhere } from "@/lib/auth/api-guard";
 
 export const dynamic = "force-dynamic";
 
@@ -33,8 +34,11 @@ export default async function SearchPage(props: SearchPageProps) {
   // Archived cases/investigations are left out unless asked for — but old
   // incidents are exactly where a known IOC is worth looking, so it's one click.
   const includeArchived = searchParams.archived === "include";
-  const invScope = includeArchived ? {} : { AND: [notArchived()] };
-  const childScope = includeArchived ? {} : investigationNotArchived();
+  // Only the viewer's organizations.
+  const viewer = await getPageActor();
+  const org = viewer ? orgWhere(viewer) : { organizationId: { in: [] as string[] } };
+  const invScope = { AND: [org, ...(includeArchived ? [] : [notArchived()])] };
+  const childScope = { investigation: { ...org, ...(includeArchived ? {} : notArchived()) } };
 
   const [investigations, findings, evidenceRows] = await Promise.all([
     prisma.investigation.findMany({

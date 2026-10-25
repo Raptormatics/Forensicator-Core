@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
-import { notArchived, investigationNotArchived } from "@/lib/cases/archive";
+import { notArchived } from "@/lib/cases/archive";
+import { orgWhere } from "@/lib/auth/api-guard";
+import { actorOr401 } from "@/lib/auth/org-access";
 
 const querySchema = z.object({
   q: z.string().min(1).max(500),
@@ -10,6 +12,8 @@ const querySchema = z.object({
 });
 
 export async function GET(request: NextRequest) {
+  const actor = await actorOr401(request);
+  if (actor instanceof NextResponse) return actor;
   const params = Object.fromEntries(request.nextUrl.searchParams);
   const result = querySchema.safeParse(params);
 
@@ -22,8 +26,10 @@ export async function GET(request: NextRequest) {
 
   const { q, limit, archived } = result.data;
   // Archived investigations are left out unless ?archived=include.
-  const invScope = archived === "include" ? {} : { AND: [notArchived()] };
-  const childScope = archived === "include" ? {} : investigationNotArchived();
+  // Only the caller's organizations; archived investigations unless asked for.
+  const org = orgWhere(actor);
+  const invScope = { AND: [org, ...(archived === "include" ? [] : [notArchived()])] };
+  const childScope = { investigation: { ...org, ...(archived === "include" ? {} : notArchived()) } };
   const pattern = `%${q}%`;
 
   const [investigations, findings, evidenceRows] = await Promise.all([

@@ -8,6 +8,7 @@ import {
   type ClosureDisposition,
 } from "@/lib/cases/case-lock";
 import { legalHoldForCase } from "@/lib/cases/legal-hold";
+import { actorOr401, guardOrgAccess } from "@/lib/auth/org-access";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -15,8 +16,12 @@ const VALID_STATUSES = ["open", "active", "monitoring", "resolved", "closed"];
 const MIN_REOPEN_REASON = 10;
 
 // GET /api/cases/[id]
-export async function GET(_req: NextRequest, props: Params) {
+export async function GET(req: NextRequest, props: Params) {
   const params = await props.params;
+  const orgActor = await actorOr401(req);
+  if (orgActor instanceof NextResponse) return orgActor;
+  const orgDenied = await guardOrgAccess(orgActor, { caseId: params.id });
+  if (orgDenied) return orgDenied;
   const c = await prisma.case.findUnique({
     where: { id: params.id },
     include: {
@@ -59,6 +64,10 @@ export async function GET(_req: NextRequest, props: Params) {
 // reopen: { status: <any non-closed status>, reopenReason }.
 export async function PATCH(req: NextRequest, props: Params) {
   const params = await props.params;
+  const orgActor = await actorOr401(req);
+  if (orgActor instanceof NextResponse) return orgActor;
+  const orgDenied = await guardOrgAccess(orgActor, { caseId: params.id });
+  if (orgDenied) return orgDenied;
   const actor = await getActor(req);
   const body = await req.json();
   const { title, description, status, severity, tags, assigneeId, incidentType } = body;
@@ -157,6 +166,10 @@ export async function PATCH(req: NextRequest, props: Params) {
 // unlinks its investigations and uploads; they're kept, not deleted.
 export async function DELETE(req: NextRequest, props: Params) {
   const params = await props.params;
+  const orgActor = await actorOr401(req);
+  if (orgActor instanceof NextResponse) return orgActor;
+  const orgDenied = await guardOrgAccess(orgActor, { caseId: params.id });
+  if (orgDenied) return orgDenied;
   const actor = await getActor(req);
   const kase = await prisma.case.findUnique({
     where: { id: params.id },

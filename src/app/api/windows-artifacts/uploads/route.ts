@@ -10,6 +10,7 @@ import type { WinArtifactFileRole } from "@/lib/windows-artifacts/types";
 import { classifyForUpload } from "@/lib/windows-artifacts/collector-layout";
 import { parseCollectionManifest, verifyAgainstManifest, type ParsedCollectionManifest } from "@/lib/windows-artifacts/collection-manifest";
 import { notArchived } from "@/lib/cases/archive";
+import { canAccessOrg } from "@/lib/auth/org-access";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -106,15 +107,15 @@ export async function POST(req: NextRequest) {
 
     const hostname = String(formData.get("hostname") ?? "").trim() || null;
     const notes = String(formData.get("notes") ?? "").trim() || null;
-    const orgId = String(formData.get("organizationId") ?? "").trim() || null;
     const caseId = String(formData.get("caseId") ?? "").trim() || null;
 
     if (!caseId) {
       return NextResponse.json({ error: "missing_case", message: "Every artifact upload must be linked to a case. Select or create one before uploading." }, { status: 400 });
     }
 
-    const kase = await prisma.case.findUnique({ where: { id: caseId }, select: { id: true, status: true } });
-    if (!kase) {
+    const kase = await prisma.case.findUnique({ where: { id: caseId }, select: { id: true, status: true, organizationId: true } });
+    // Another organization's case is treated as nonexistent.
+    if (!kase || !canAccessOrg(actor, kase.organizationId)) {
       return NextResponse.json({ error: "invalid_case", message: "The specified case does not exist." }, { status: 400 });
     }
     if (kase.status === "closed") {
@@ -344,7 +345,7 @@ export async function POST(req: NextRequest) {
         hostname, notes,
         collectionManifest: manifest ? (manifest.stored as unknown as object) : undefined,
         uploadedById: actor.id,
-        organizationId: orgId ?? (actor.organizationIds[0] ?? null),
+        organizationId: kase.organizationId,
         caseId,
       },
     });

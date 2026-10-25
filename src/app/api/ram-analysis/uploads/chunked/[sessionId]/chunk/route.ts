@@ -9,6 +9,7 @@ import { prisma } from "@/lib/db/prisma";
 import { requireAuth } from "@/lib/auth/api-guard";
 import { getRamChunkSize } from "@/lib/settings/system";
 import { withSessionLock, getOrRebuildHash } from "@/lib/shared/chunked-upload-state";
+import { actorOr401, guardOrgAccess } from "@/lib/auth/org-access";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,6 +23,10 @@ type Params = { params: Promise<{ sessionId: string }> };
 
 export async function PUT(req: NextRequest, props: Params) {
   const params = await props.params;
+  const orgActor = await actorOr401(req);
+  if (orgActor instanceof NextResponse) return orgActor;
+  const orgDenied = await guardOrgAccess(orgActor, { ramSessionId: params.sessionId });
+  if (orgDenied) return orgDenied;
   try {
     const actor = await requireAuth(req);
     const { sessionId } = params;

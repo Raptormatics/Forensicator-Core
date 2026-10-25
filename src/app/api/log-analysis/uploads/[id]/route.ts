@@ -2,12 +2,17 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma }       from "@/lib/db/prisma";
 import { requireAuth }  from "@/lib/auth/api-guard";
 import { guardDeletion } from "@/lib/cases/case-lock";
+import { actorOr401, guardOrgAccess } from "@/lib/auth/org-access";
 
 type Params = { params: Promise<{ id: string }> };
 
 // ── GET /api/log-analysis/uploads/[id] ─────────────────────────────────────
 export async function GET(req: NextRequest, props: Params) {
   const params = await props.params;
+  const orgActor = await actorOr401(req);
+  if (orgActor instanceof NextResponse) return orgActor;
+  const orgDenied = await guardOrgAccess(orgActor, { logUploadId: params.id });
+  if (orgDenied) return orgDenied;
   try {
     await requireAuth(req);
     const { id } = params;
@@ -95,6 +100,10 @@ export async function GET(req: NextRequest, props: Params) {
 // ── DELETE /api/log-analysis/uploads/[id] ──────────────────────────────────
 export async function DELETE(req: NextRequest, props: Params) {
   const params = await props.params;
+  const orgActor = await actorOr401(req);
+  if (orgActor instanceof NextResponse) return orgActor;
+  const orgDenied = await guardOrgAccess(orgActor, { logUploadId: params.id });
+  if (orgDenied) return orgDenied;
   try {
     await requireAuth(req);
     const locked = await guardDeletion({ logUploadId: params.id }, "deleting this upload");

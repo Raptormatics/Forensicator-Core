@@ -1,8 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db/prisma";
+import { actorOr401, guardOrgAccess } from "@/lib/auth/org-access";
 
-export async function GET(_: NextRequest, props: { params: Promise<{ id: string }> }) {
+export async function GET(req: NextRequest, props: { params: Promise<{ id: string }> }) {
   const params = await props.params;
+  const actor = await actorOr401(req);
+  if (actor instanceof NextResponse) return actor;
+  const denied = await guardOrgAccess(actor, { evidenceId: params.id });
+  if (denied) return denied;
   const evidence = await prisma.evidence.findUnique({
     where: { id: params.id },
     include: {

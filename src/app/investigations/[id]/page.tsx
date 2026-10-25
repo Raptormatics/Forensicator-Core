@@ -16,6 +16,8 @@ import { getInvestigation } from "@/lib/db/investigations";
 import { coerceFindingJson } from "@/lib/schemas/finding";
 import { normalizeSeverity, severityRank } from "@/lib/severity";
 import { prisma } from "@/lib/db/prisma";
+import { getPageActor, orgWhere } from "@/lib/auth/api-guard";
+import { canAccessOrg, investigationOrgWhere } from "@/lib/auth/org-access";
 
 export const dynamic = "force-dynamic";
 
@@ -48,7 +50,9 @@ export default async function InvestigationPage(props: InvestigationPageProps) {
     );
   }
 
-  if (!investigation) {
+  // Another organization's investigation is treated as nonexistent.
+  const viewer = await getPageActor();
+  if (!investigation || !viewer || !canAccessOrg(viewer, investigation.organizationId)) {
     notFound();
   }
 

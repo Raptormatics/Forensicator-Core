@@ -5,6 +5,7 @@ import { processLogUpload }  from "@/lib/log-analysis/processor";
 import { convertEvtx, decodeLogBuffer, isEvtx } from "@/lib/log-analysis/content";
 import { getWinArtifactsPythonPath } from "@/lib/settings/system";
 import { notArchived } from "@/lib/cases/archive";
+import { canAccessOrg } from "@/lib/auth/org-access";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -54,7 +55,6 @@ export async function POST(req: NextRequest) {
     const assetName  = String(formData.get("assetName") ?? "").trim() || null;
     const ipAddress  = String(formData.get("ipAddress") ?? "").trim() || null;
     const notes      = String(formData.get("notes") ?? "").trim() || null;
-    const orgId      = String(formData.get("organizationId") ?? "").trim() || null;
     const caseId     = String(formData.get("caseId") ?? "").trim() || null;
 
     if (!file || typeof file === "string" || !("arrayBuffer" in file)) {
@@ -71,8 +71,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "file_too_large", message: looksEvtx ? "Maximum .evtx file size is 256 MB." : "Maximum log file size is 50 MB." }, { status: 413 });
     }
 
-    const kase = await prisma.case.findUnique({ where: { id: caseId }, select: { id: true, status: true } });
-    if (!kase) {
+    const kase = await prisma.case.findUnique({ where: { id: caseId }, select: { id: true, status: true, organizationId: true } });
+    // Another organization's case is treated as nonexistent.
+    if (!kase || !canAccessOrg(actor, kase.organizationId)) {
       return NextResponse.json({ error: "invalid_case", message: "The specified case does not exist." }, { status: 400 });
     }
     if (kase.status === "closed") {
@@ -107,7 +108,7 @@ export async function POST(req: NextRequest) {
         ipAddress,
         notes:         conversionNote ? [notes, conversionNote].filter(Boolean).join("\n") : notes,
         uploadedById:  actor.id,
-        organizationId: orgId ?? (actor.organizationIds[0] ?? null),
+        organizationId: kase.organizationId,
         caseId,
       },
     });

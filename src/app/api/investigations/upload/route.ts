@@ -19,6 +19,7 @@ import { extractEvidence, extractTimelineEvents } from "@/lib/upload/evidence-ex
 import { extractAndUpsertIocs, type NewIocRecord } from "@/lib/intelligence/investigation-ioc-extract";
 import { autoEnrichNewIocs } from "@/lib/intelligence/auto-enrich";
 import { notifyCriticalFindings } from "@/lib/notifications/critical-finding-alert";
+import { canAccessOrg } from "@/lib/auth/org-access";
 
 // dispatchSiemExport lives in the Enterprise overlay (@/lib/siem), not in
 // Forensicator Core — loaded via dynamic import below so this route works
@@ -60,6 +61,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Validate case (mandatory — every upload must belong to a case).
+    const caller = await getUploadActor(request);
     const caseId = stringFormValue(formData.get("caseId"));
     if (!caseId) {
       return NextResponse.json(
@@ -67,8 +69,9 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
-    const kase = await prisma.case.findUnique({ where: { id: caseId }, select: { id: true, status: true } });
-    if (!kase) {
+    const kase = await prisma.case.findUnique({ where: { id: caseId }, select: { id: true, status: true, organizationId: true } });
+    // Another organization's case is treated as nonexistent.
+    if (!kase || !canAccessOrg(caller, kase.organizationId)) {
       return NextResponse.json(
         { error: "invalid_case", message: "The specified case does not exist." },
         { status: 400 }
@@ -138,7 +141,7 @@ export async function POST(request: NextRequest) {
         findingCount: parsed.findings.length,
         uploadedById: actor.id,
         // Tag investigation with actor's primary org for isolation
-        organizationId: actor.organizationIds[0] ?? null,
+        organizationId: kase.organizationId,
         investigationSourceId: invMeta.investigation_id ?? null,
         username: invMeta.username ?? null,
         osInfo: invMeta.os ? (invMeta.os as Prisma.InputJsonValue) : Prisma.DbNull,

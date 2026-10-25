@@ -9,6 +9,8 @@ import { SeverityOverrideBadge } from "@/components/findings/severity-override-b
 import { summarizeVendorVerdict, VERDICT_STYLE, PROVIDER_LABEL } from "@/lib/intelligence/verdict";
 import { extractForensicContext } from "@/lib/intelligence/forensic-context";
 import { formatDateTime } from "@/lib/utils";
+import { getPageActor, orgWhere } from "@/lib/auth/api-guard";
+import { notFound } from "next/navigation";
 
 export const dynamic = "force-dynamic";
 
@@ -54,7 +56,10 @@ export default async function IocPage(props: Props) {
         { searchableText: { contains: ioc, mode: "insensitive" as const } },
       ];
 
-  const evidenceWhere = { OR: iocWhere, ...(caseId ? { investigation: { caseId } } : {}) };
+  // Only evidence from the viewer's organizations.
+  const viewer = await getPageActor();
+  if (!viewer) notFound();
+  const evidenceWhere = { OR: iocWhere, investigation: { ...orgWhere(viewer), ...(caseId ? { caseId } : {}) } };
 
   const [total, rows, stats] = await Promise.all([
     prisma.evidence.count({ where: evidenceWhere }),
@@ -97,7 +102,7 @@ export default async function IocPage(props: Props) {
   // single, nullable Case link) — used so the action bar can attach a
   // remediation task to the right case.
   const investigationsWithCase = await prisma.investigation.findMany({
-    where: { id: { in: uniqueInvestigationIds } },
+    where: { id: { in: uniqueInvestigationIds }, ...orgWhere(viewer) },
     select: { case: { select: { id: true, title: true, caseSeq: true } } },
   });
   const linkedCases = [...new Map(
