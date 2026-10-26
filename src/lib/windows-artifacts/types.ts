@@ -43,7 +43,33 @@ export type WinArtifactFileRole =
   | "logfile"
   | "recycle_payload"
   | "memory_file"
-  | "collector_extra";
+  | "collector_extra"
+  // Linux collector (-A) — every one parsed by linux-parse.py into
+  // ArtifactRecordEntry rows (see collector-layout.ts's classifyLinuxPath).
+  | "linux_accounts"
+  | "linux_sudoers"
+  | "linux_login_records"
+  | "linux_shell_history"
+  | "linux_authorized_keys"
+  | "linux_known_hosts"
+  | "linux_cron"
+  | "linux_systemd_unit"
+  | "linux_config_file"
+  | "linux_command_output"
+  | "linux_processes"
+  | "linux_recovered_exe"
+  | "linux_bodyfile";
+
+export const LINUX_ROLES: readonly WinArtifactFileRole[] = [
+  "linux_accounts", "linux_sudoers", "linux_login_records", "linux_shell_history", "linux_authorized_keys",
+  "linux_known_hosts", "linux_cron", "linux_systemd_unit", "linux_config_file", "linux_command_output",
+  "linux_processes", "linux_recovered_exe", "linux_bodyfile",
+];
+
+/** A host-artifact upload holds one collector's output: Windows or Linux. */
+export function uploadPlatform(roles: readonly string[]): "linux" | "windows" {
+  return roles.some((r) => r.startsWith("linux_")) ? "linux" : "windows";
+}
 
 /** All normalized field names Windows Artifact rules can operate against —
  * mirrors RamField/PcapField's role, rooted in the heterogeneous

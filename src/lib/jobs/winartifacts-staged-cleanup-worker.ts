@@ -2,7 +2,7 @@
  * Sweeps abandoned chunked Windows Artifact file uploads
  * (src/prisma/schema's WindowsArtifactStagedFile) — a tab closed mid-upload,
  * a crashed browser, or a file that finished staging but whose final
- * /api/windows-artifacts/uploads POST never arrived. Runs on a repeatable
+ * /api/host-artifacts/uploads POST never arrived. Runs on a repeatable
  * schedule; also a lazy check in the chunk/complete routes rejects requests
  * against an already-expired row before this sweep ever runs, so this is a
  * backstop for cleanup, not the only enforcement of the expiry boundary —

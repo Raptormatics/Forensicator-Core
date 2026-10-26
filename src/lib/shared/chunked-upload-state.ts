@@ -1,7 +1,7 @@
 /**
  * Per-process, in-memory state for chunked uploads — shared by RAM Analysis
  * (src/app/api/ram-analysis/uploads/chunked/**) and Windows Artifact
- * Analysis (src/app/api/windows-artifacts/uploads/staged/**). Safe because
+ * Analysis (src/app/api/host-artifacts/uploads/staged/**). Safe because
  * this app runs as a single long-running `next start` process (not
  * serverless/multi-instance) — see deploy/systemd/forensicator.service.
  * Contains no RAM- or Windows-Artifacts-specific logic — every function is

@@ -48,18 +48,41 @@ function toIntField(v: unknown): number | null {
   return Number.isInteger(n) && n >= 0 && n <= 2147483647 ? n : null;
 }
 
+const SYSLOG_TS = /^([A-Z][a-z]{2})\s+(\d{1,2}) (\d{2}):(\d{2}):(\d{2})$/;
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/**
+ * A decoder's timestamp string -> Date. RFC 3164 syslog ("Oct 25 10:00:01")
+ * has no year — `new Date()` reads it as 2001, in the server's local time —
+ * so it gets the current year, or the previous one when that would put it
+ * more than a day in the future (a December log read in January). Like
+ * every zone-less log timestamp it is taken as UTC.
+ */
+export function parseLogTimestamp(raw: string, now: Date = new Date()): Date | null {
+  const m = raw.trim().match(SYSLOG_TS);
+  if (m) {
+    const month = MONTHS.indexOf(m[1]);
+    if (month < 0) return null;
+    const at = (year: number) => new Date(Date.UTC(year, month, Number(m[2]), Number(m[3]), Number(m[4]), Number(m[5])));
+    let d = at(now.getUTCFullYear());
+    if (d.getTime() > now.getTime() + 86_400_000) d = at(now.getUTCFullYear() - 1);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  // "2026-04-20 18:05:27" / "2026-04-20  18:05:27" (dpkg, apt, IIS):
+  // no zone, so UTC rather than the server's local time.
+  const plain = raw.trim().match(/^(\d{4}-\d{2}-\d{2})[ T]+(\d{2}:\d{2}:\d{2}(?:[.,]\d+)?)$/);
+  const d = new Date(plain ? `${plain[1]}T${plain[2].replace(",", ".")}Z` : raw);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
 function decoderOutputToParsedEvent(
   entry: NormalizedLogEntry,
   raw: string,
   lineNumber: number,
   sourceApp: string
 ): ParsedEvent {
-  const tsRaw = entry["@timestamp"] as string | undefined;
-  let timestamp: Date | null = null;
-  if (tsRaw) {
-    const d = new Date(tsRaw);
-    if (!isNaN(d.getTime())) timestamp = d;
-  }
+  const tsRaw = (entry["@timestamp"] ?? entry["event.start"]) as string | undefined;
+  const timestamp = tsRaw ? parseLogTimestamp(String(tsRaw)) : null;
 
   return {
     lineNumber,
@@ -151,6 +174,9 @@ async function parseContent(content: string, sourceType: string): Promise<Parsed
 }
 
 export async function processLogUpload(uploadId: string, content: string): Promise<void> {
+  // Postgres TEXT rejects U+0000 (see decodeLogBuffer) — whatever the source.
+  content = content.replace(/\u0000+/g, "");
+
   // 1. Load upload record
   const upload = await prisma.logUpload.findUnique({ where: { id: uploadId } });
   if (!upload) throw new Error(`LogUpload ${uploadId} not found`);

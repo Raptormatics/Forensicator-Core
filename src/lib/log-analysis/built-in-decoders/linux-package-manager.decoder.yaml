@@ -1,0 +1,62 @@
+name: decoder/linux-package-manager/0
+enabled: true
+
+metadata:
+  title: 'Linux Package Manager Log Decoder (dpkg, apt history)'
+  author: 'Forensicator'
+  date: '2026-10-25'
+  description: >-
+    Decoder for /var/log/dpkg.log and /var/log/apt/history.log — when each
+    package was installed, upgraded or removed, and the apt command line
+    that did it. The timeline of attacker tooling installed on a host
+    (compilers, netcat, tunnelling tools) is usually here.
+    Example: 2026-04-20 18:05:27 install base-passwd:amd64 <none> 3.6.8
+    Example: Commandline: apt-get install -y ncat
+  references:
+    - 'https://man7.org/linux/man-pages/man1/dpkg.1.html'
+
+source_type: package-manager
+# Checked before the IIS decoder, whose check also accepts a line that
+# starts with "YYYY-MM-DD HH:MM:SS ".
+priority: 50
+
+check: >-
+  regex_match($event.original, '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} (startup|status|install|upgrade|remove|purge|configure|trigproc|conffile) ')
+  OR regex_match($event.original, '^(Start-Date|End-Date|Commandline|Requested-By|Install|Upgrade|Remove|Purge|Reinstall|Downgrade|Error): ')
+
+normalize:
+  - map:
+      - event.kind: event
+      - event.category: array_append(package)
+      - event.dataset: linux.package
+      - observer.vendor: Linux
+      - observer.type: host
+
+  # dpkg.log: "<date> <time> <action> <package>:<arch> <old> <new>"
+  - check: regex_match($event.original, '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} ')
+    map:
+      - '@timestamp': regex_extract($event.original, '^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})')
+      - event.action: regex_extract($event.original, '^\S+ \S+ (\S+)')
+      - package.name: regex_extract($event.original, '^\S+ \S+ (?:install|upgrade|remove|purge|configure|trigproc|status \S+) ([^\s:]+)')
+      - package.version: regex_extract($event.original, ' (\S+)$')
+      - message: regex_extract($event.original, '^\S+ \S+ (.+)$')
+
+  # apt/history.log: one transaction per block, timestamped by Start-Date/End-Date
+  - check: regex_match($event.original, '^(Start|End)-Date:\s')
+    map:
+      - '@timestamp': regex_extract($event.original, '^(?:Start|End)-Date:\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})')
+      - event.action: regex_extract($event.original, '^(Start|End)-Date')
+      - message: $event.original
+  - check: regex_match($event.original, '^Commandline:\s')
+    map:
+      - event.action: apt-command
+      - process.command_line: regex_extract($event.original, '^Commandline:\s(.+)$')
+      - message: $event.original
+  - check: regex_match($event.original, '^Requested-By:\s')
+    map:
+      - user.name: regex_extract($event.original, '^Requested-By:\s(\S+)')
+      - message: $event.original
+  - check: regex_match($event.original, '^(Install|Upgrade|Remove|Purge|Reinstall|Downgrade):\s')
+    map:
+      - event.action: regex_extract($event.original, '^(\w+):')
+      - message: $event.original

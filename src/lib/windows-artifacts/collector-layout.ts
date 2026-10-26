@@ -36,6 +36,16 @@
  *
  * Every path handled here is relative to the host's `artifacts` folder:
  * "WindowsArtifacts/Registry/SYSTEM", "LOG4J/log4j.txt", ...
+ *
+ * The Linux collector's -A mode writes artifacts\LinuxArtifacts\ instead
+ * (collector/live-forensicator/Linux/Forensicator-Share/linux_artifacts.sh):
+ *   Files/<absolute path>  raw copies mirrored at their real path
+ *   Commands/*.txt         command output (sockets, packages, symlinks, ...)
+ *   Processes/processes.tsv, Processes/recovered/*.bin
+ *   Timeline/bodyfile.txt, Logs/journal.log
+ *   CollectionManifest/artifact-collection-manifest.json (same format)
+ * Its logs are classified as `log` — the upload page sends those to Log
+ * Analysis rather than parsing them here (see classifyLinuxPath).
  */
 import type { WinArtifactFileRole } from "./types";
 
@@ -54,6 +64,8 @@ export type CollectorClassification =
   | { kind: "sidecar"; sidecar: "log1" | "log2" | "usn_metadata"; attachTo: string }
   /** The collector's own CollectionManifest JSON — verified against, not parsed as an artifact. */
   | { kind: "manifest" }
+  /** A Linux log — sent to Log Analysis (same case), not a host artifact. */
+  | { kind: "log"; label: string; gzip: boolean }
   /** Recognized collector output that Core doesn't parse (yet) — listed, not uploaded. */
   | { kind: "unsupported"; label: string }
   /** Not collector output Core cares about (CSV copy of the manifest, WER attachments, ...). */
@@ -68,7 +80,12 @@ export const SUPPORTED_COLLECTOR_ROLES: ReadonlySet<WinArtifactFileRole> = new S
   "quarantine_entry", "quarantine_resource", "bits_queue", "timeline_db",
   "search_sqlite", "bits_ese", "wmi_subscriptions", "wbem_repository", "defender_detection_history",
   "defender_support_log", "app_artifact", "logfile", "recycle_payload", "memory_file", "collector_extra",
+  "linux_accounts", "linux_sudoers", "linux_login_records", "linux_shell_history", "linux_authorized_keys",
+  "linux_known_hosts", "linux_cron", "linux_systemd_unit", "linux_config_file", "linux_command_output",
+  "linux_processes", "linux_recovered_exe", "linux_bodyfile",
 ]);
+
+const ARTIFACT_ROOTS = ["windowsartifacts", "linuxartifacts"];
 
 const MACHINE_HIVES: Record<string, WinArtifactFileRole> = {
   system: "system_hive",
@@ -85,11 +102,12 @@ const PROFILE_HIVES: Record<string, WinArtifactFileRole> = {
 };
 
 /** Normalizes a browser webkitRelativePath / zip entry / Windows path to
- * forward-slash segments starting just below `WindowsArtifacts`. Returns
- * null when the path isn't inside a WindowsArtifacts folder at all. */
+ * forward-slash segments starting just below `WindowsArtifacts` (or the
+ * Linux collector's `LinuxArtifacts`) — the key the CollectionManifest is
+ * matched on. Returns null when the path isn't inside either folder. */
 export function windowsArtifactsRelativePath(rawPath: string): string | null {
   const parts = rawPath.replace(/\\/g, "/").split("/").filter(Boolean);
-  const idx = parts.findIndex((p) => p.toLowerCase() === "windowsartifacts");
+  const idx = parts.findIndex((p) => ARTIFACT_ROOTS.includes(p.toLowerCase()));
   if (idx < 0 || idx === parts.length - 1) return null;
   return parts.slice(idx + 1).join("/");
 }
@@ -101,7 +119,7 @@ export function windowsArtifactsRelativePath(rawPath: string): string | null {
 export function collectorRelativePath(rawPath: string): string | null {
   const parts = rawPath.replace(/\\/g, "/").split("/").filter(Boolean);
   const lower = parts.map((p) => p.toLowerCase());
-  const wa = lower.indexOf("windowsartifacts");
+  const wa = lower.findIndex((p) => ARTIFACT_ROOTS.includes(p));
   const art = lower.indexOf("artifacts");
   if (art >= 0 && art < parts.length - 2 && (wa < 0 || wa === art + 1)) return parts.slice(art + 1).join("/");
   if (wa >= 0 && wa < parts.length - 1) return parts.slice(wa).join("/");
@@ -113,7 +131,7 @@ export function collectorRelativePath(rawPath: string): string | null {
  * <host>/artifacts/WindowsArtifacts/... */
 export function hostnameFromCollectorPath(rawPath: string): string | null {
   const parts = rawPath.replace(/\\/g, "/").split("/").filter(Boolean);
-  const idx = parts.findIndex((p) => p.toLowerCase() === "windowsartifacts");
+  const idx = parts.findIndex((p) => ARTIFACT_ROOTS.includes(p.toLowerCase()));
   if (idx >= 2 && parts[idx - 1].toLowerCase() === "artifacts") return parts[idx - 2];
   return null;
 }
@@ -132,6 +150,7 @@ function hive(role: WinArtifactFileRole, groupKey: string, log: "log1" | "log2" 
 /** `relPath` is relative to the host's `artifacts` folder (see collectorRelativePath). */
 export function classifyCollectorPath(relPath: string): CollectorClassification {
   const all = relPath.replace(/\\/g, "/").split("/").filter(Boolean);
+  if ((all[0] ?? "").toLowerCase() === "linuxartifacts") return classifyLinuxPath(all.slice(1));
   if ((all[0] ?? "").toLowerCase() !== "windowsartifacts") return classifyHostExtra(all);
   const parts = all.slice(1);
   const lower = parts.map((p) => p.toLowerCase());
@@ -273,6 +292,71 @@ export function classifyCollectorPath(relPath: string): CollectorClassification 
     default:
       return { kind: "ignored", reason: "not a recognized collector artifact folder" };
   }
+}
+
+const HISTORY_FILES = new Set([
+  ".bash_history", ".zsh_history", ".sh_history", ".ksh_history", ".history", "fish_history",
+  ".python_history", ".mysql_history", ".psql_history", ".sqlite_history", ".node_repl_history",
+  ".rediscli_history", ".lesshst", ".viminfo", ".wget-hsts",
+]);
+const SYSTEMD_UNIT = /\.(service|timer|socket|path|mount|automount|target|conf)$/;
+
+/** Which Log Analysis decoder family a Linux log belongs to — a label for
+ * the upload (decoders are still matched line by line). */
+function linuxLogLabel(abs: string): string {
+  const name = abs.split("/").pop() ?? "";
+  if (/^(auth\.log|secure)/.test(name)) return "linux-auth";
+  if (abs.includes("/audit/")) return "auditd";
+  if (/\/(nginx|apache2|httpd)\//.test(abs)) return /error/.test(name) ? "web-error" : "web-access";
+  if (/^(dpkg\.log|history\.log|yum\.log|dnf)/.test(name)) return "package-manager";
+  return "syslog";
+}
+
+/** Paths below the Linux collector's LinuxArtifacts folder. */
+function classifyLinuxPath(parts: string[]): CollectorClassification {
+  const relPath = ["LinuxArtifacts", ...parts].join("/");
+  const top = (parts[0] ?? "").toLowerCase();
+  const name = parts[parts.length - 1] ?? "";
+  const artifact = (role: WinArtifactFileRole, profileName: string | null = null): CollectorClassification =>
+    ({ kind: "artifact", role, groupKey: relPath, profileName, provenance: "live" });
+
+  switch (top) {
+    case "collectionmanifest":
+      return name.toLowerCase() === "artifact-collection-manifest.json" ? { kind: "manifest" } : { kind: "ignored", reason: "manifest companion file" };
+    case "commands":
+      return name.endsWith(".txt") ? artifact("linux_command_output") : { kind: "ignored", reason: "not a command output file" };
+    case "processes":
+      if (name === "processes.tsv") return artifact("linux_processes");
+      if ((parts[1] ?? "").toLowerCase() === "recovered") return artifact("linux_recovered_exe");
+      return { kind: "ignored", reason: "unrecognized Processes file" };
+    case "timeline":
+      return name === "bodyfile.txt" ? artifact("linux_bodyfile") : { kind: "ignored", reason: "unrecognized Timeline file" };
+    case "logs":
+      return { kind: "log", label: name === "journal.log" ? "systemd-journal" : "syslog", gzip: name.endsWith(".gz") };
+    case "files":
+      break;
+    default:
+      return { kind: "ignored", reason: "not a recognized Linux collector folder" };
+  }
+
+  // Files/<absolute path>
+  const abs = "/" + parts.slice(1).join("/");
+  const home = abs.match(/^\/home\/([^/]+)\//);
+  const user = home ? home[1] : abs.startsWith("/root/") ? "root" : null;
+
+  if (/^\/etc\/(passwd|group|shadow|gshadow)$/.test(abs)) return artifact("linux_accounts");
+  if (abs === "/etc/sudoers" || abs.startsWith("/etc/sudoers.d/")) return artifact("linux_sudoers");
+  if (/^\/(var\/log\/(wtmp|btmp)(\.[0-9]+)?|(var\/)?run\/utmp)$/.test(abs)) return artifact("linux_login_records");
+  if (/^\/var\/log\/lastlog$|\/(wtmpdb\/wtmp|lastlog\/lastlog2)\.db$/.test(abs)) return { kind: "unsupported", label: "lastlog / wtmpdb database (not parsed yet)" };
+  if (abs.startsWith("/var/log/")) return { kind: "log", label: linuxLogLabel(abs), gzip: name.endsWith(".gz") };
+  if (abs.startsWith("/boot/System.map")) return { kind: "unsupported", label: "Kernel symbol map — keep with the memory image for RAM Analysis" };
+  if (abs.startsWith("/proc/")) return artifact("linux_command_output");
+  if (HISTORY_FILES.has(name)) return artifact("linux_shell_history", user);
+  if (/\/\.ssh\/authorized_keys2?$/.test(abs)) return artifact("linux_authorized_keys", user);
+  if (/\/\.ssh\/known_hosts$/.test(abs)) return artifact("linux_known_hosts", user);
+  if (/^\/etc\/(crontab|anacrontab)$|^\/etc\/cron\.[a-z]+\/|^\/var\/spool\/(cron|at|anacron)\//.test(abs)) return artifact("linux_cron", user);
+  if ((/\/systemd\//.test(abs) && SYSTEMD_UNIT.test(name)) || /\/systemd\/[a-z-]*generators\//.test(abs)) return artifact("linux_systemd_unit", user);
+  return artifact("linux_config_file", user);
 }
 
 /** The collector's artifacts\<folder> outputs other than WindowsArtifacts. */

@@ -79,7 +79,7 @@ model WindowsArtifactFile {
   filename String
   // BigInt, not Int — a busy workstation's $MFT alone can exceed Int's
   // ~2.1GB ceiling; confirmed necessary once chunked uploads (see
-  // src/app/api/windows-artifacts/uploads/staged/**) made multi-GB files
+  // src/app/api/host-artifacts/uploads/staged/**) made multi-GB files
   // actually reach this far instead of failing earlier in the pipeline.
   fileSize BigInt @map("file_size")
   sha256   String
@@ -171,7 +171,7 @@ model WindowsArtifactFile {
 // A large single file (chiefly $MFT, sometimes SRUDB.dat/Windows.edb/a
 // pathological hive) uploaded via chunked PUT before the rest of a
 // collection's multipart POST — see
-// src/app/api/windows-artifacts/uploads/staged/**. Not yet tied to a role,
+// src/app/api/host-artifacts/uploads/staged/**. Not yet tied to a role,
 // upload, or case: that association only happens once the main upload
 // route consumes it by stagedId. Same shape as RamUploadSession, minus the
 // RAM-specific osType/case/hostname fields this doesn't need.

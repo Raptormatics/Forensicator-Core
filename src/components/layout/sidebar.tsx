@@ -112,11 +112,11 @@ const NAV: NavItem[] = [
   },
   {
     kind: "group",
-    label: "Windows Artifacts",
+    label: "Host Artifacts",
     icon: FileSearch,
     children: [
-      { label: "Uploads", href: "/windows-artifacts" },
-      { label: "Rules",   href: "/windows-artifacts/rules" },
+      { label: "Uploads", href: "/host-artifacts" },
+      { label: "Rules",   href: "/host-artifacts/rules" },
     ],
   },
   { kind: "link",  label: "Reports",         href: "/reports",         icon: FileText },

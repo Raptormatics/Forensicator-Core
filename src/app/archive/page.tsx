@@ -29,7 +29,7 @@ const UPLOAD_META: Record<UploadType, { label: string; href: (id: string) => str
   log:                 { label: "Log Analysis",   href: (id) => `/log-analysis/${id}` },
   pcap:                { label: "PCAP Analysis",  href: (id) => `/pcap-analysis/${id}` },
   ram:                 { label: "RAM Analysis",   href: (id) => `/ram-analysis/${id}` },
-  "windows-artifacts": { label: "Windows Artifacts", href: (id) => `/windows-artifacts/${id}` },
+  "windows-artifacts": { label: "Host Artifacts", href: (id) => `/host-artifacts/${id}` },
 };
 
 const TABS = ["cases", "investigations", "uploads"] as const;

@@ -10,7 +10,7 @@ metadata:
     Example: 192.168.1.1 - - [24/Jun/2026:10:00:00 +0000] "GET / HTTP/1.1" 200 612 "-" "Mozilla/5.0 ..."
 
 check: >-
-  regex_match($event.original, '^[0-9]')
+  regex_match($event.original, '^[0-9a-fA-F.:]+ \S+ \S+ \[[^\]]+\] "')
 
 parse|event.original:
   - '<source.ip> <~> <user.name> [<~>] "<http.request.method> <url.original> HTTP/<http.version>" <http.response.status_code/long> <http.response.bytes/long> "<http.request.referrer>" "<user_agent>"'

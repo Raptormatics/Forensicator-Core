@@ -17,6 +17,10 @@ export async function register() {
     startReportWorker();
     startAiWorker();
 
+    // Bundled decoders/rules changed by this release -> database copies.
+    const { syncBuiltinsIfChanged } = await import("./lib/seed/builtin-sync");
+    void syncBuiltinsIfChanged();
+
     console.log("[instrumentation] Report + AI workers started.");
   }
 }

@@ -24,7 +24,7 @@ const ITEM_LABEL: Record<ArchiveType, string> = {
   log: "log upload",
   pcap: "PCAP upload",
   ram: "RAM upload",
-  "windows-artifacts": "Windows artifact collection",
+  "windows-artifacts": "Host artifact collection",
 };
 
 /**

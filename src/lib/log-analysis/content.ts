@@ -24,10 +24,18 @@ export function isEvtx(buffer: Buffer, filename: string): boolean {
 }
 
 export function decodeLogBuffer(buffer: Buffer): string {
+  // Postgres TEXT can't hold U+0000, and a log open during an unclean
+  // shutdown commonly ends a block with a run of zero bytes — one NUL failed
+  // the whole upload's insert. The zero-filled block sits between complete
+  // lines, so dropping the NULs loses nothing.
+  return decodeLogText(buffer).replace(/\u0000+/g, "");
+}
+
+function decodeLogText(buffer: Buffer): string {
   // .gz uploads (offered by the upload page) were previously read as raw
   // compressed bytes — decompress first, then detect the text encoding.
   if (buffer.length >= 2 && buffer[0] === 0x1f && buffer[1] === 0x8b) {
-    return decodeLogBuffer(gunzipSync(buffer));
+    return decodeLogText(gunzipSync(buffer));
   }
   if (buffer.length >= 2 && buffer[0] === 0xff && buffer[1] === 0xfe) return buffer.subarray(2).toString("utf16le");
   if (buffer.length >= 2 && buffer[0] === 0xfe && buffer[1] === 0xff) {

@@ -108,7 +108,7 @@ function tokenToFragment(
   // <field/ISO8601>
   if (typeHint === "iso8601") {
     return {
-      fragment: `(?<${groupName}>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:[.][0-9]+)?(?:Z|[+-][0-9]{2}:[0-9]{2})?)`,
+      fragment: `(?<${groupName}>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:[.][0-9]+)?(?:Z|[+-][0-9]{2}:?[0-9]{2})?)`,
       field: { path, groupName, type: "ISO8601" },
     };
   }
@@ -164,8 +164,18 @@ export function compilePattern(pattern: string): CompiledPattern {
     lastIndex = TOKEN_RE.lastIndex;
   }
 
+  // A plain field that ends the pattern takes the rest of the line —
+  // "<host> <message>" means the whole message, not just its first word
+  // (as `[^ ]+` before the `$` anchor, a multi-word message never matched).
+  const trailing = pattern.slice(lastIndex);
+  const last = fields[fields.length - 1];
+  const plainTail = last && last.type === "string" ? `(?<${last.groupName}>[^ ]+)` : null;
+  if (trailing === "" && plainTail && regexSource.endsWith(plainTail)) {
+    regexSource = regexSource.slice(0, -plainTail.length) + `(?<${last.groupName}>.+)`;
+  }
+
   // Escape any trailing literal
-  regexSource += escapeLiteral(pattern.slice(lastIndex));
+  regexSource += escapeLiteral(trailing);
 
   return {
     // 'd' (hasIndices) only adds match.indices — never changes what matches,

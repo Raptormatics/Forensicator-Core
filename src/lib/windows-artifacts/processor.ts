@@ -84,7 +84,31 @@ const RECORD_ROLES: Record<string, RecordRoleSpec> = {
   recycle_payload:            { script: "payload-parse.py", python: "venv", timeoutSeconds: 15 * 60, label: "Recycle Bin payload", args: (f, p) => [p, "recycle_payload", f.filename] },
   memory_file:                { script: "payload-parse.py", python: "venv", timeoutSeconds: 3 * 60 * 60, label: "memory-backed file", args: (f, p) => [p, "memory_file", f.filename] },
   collector_extra:            { script: "extras-parse.py", python: "venv", timeoutSeconds: 15 * 60, label: "collector extra", args: (f, p) => [p, f.filename] },
+  ...linuxRoles(),
 };
+
+// Linux collector artifacts — one parser, the role and the file's
+// LinuxArtifacts-relative path (Files/<absolute path>, Commands/x.txt, ...)
+// tell it what it's reading.
+function linuxRoles(): Record<string, RecordRoleSpec> {
+  const spec = (role: string, label: string, timeoutSeconds = 10 * 60): [string, RecordRoleSpec] =>
+    [role, { script: "linux-parse.py", python: "venv", timeoutSeconds, label, args: (f, p) => [p, role, f.filename] }];
+  return Object.fromEntries([
+    spec("linux_accounts", "Linux accounts file"),
+    spec("linux_sudoers", "sudoers file"),
+    spec("linux_login_records", "utmp/wtmp/btmp login records"),
+    spec("linux_shell_history", "shell history"),
+    spec("linux_authorized_keys", "SSH authorized_keys"),
+    spec("linux_known_hosts", "SSH known_hosts"),
+    spec("linux_cron", "cron/at job"),
+    spec("linux_systemd_unit", "systemd unit"),
+    spec("linux_config_file", "Linux configuration file"),
+    spec("linux_command_output", "collector command output"),
+    spec("linux_processes", "process table"),
+    spec("linux_recovered_exe", "recovered executable"),
+    spec("linux_bodyfile", "filesystem timeline (bodyfile)", 60 * 60),
+  ]);
+}
 
 // Prisma/Postgres have a practical parameter-count limit per query that
 // the existing small-row-count artifact types never had to think about —
@@ -1133,7 +1157,7 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
       // 5b. Recycle Bin payloads are actual file content — scan them with
       // the RAM Analysis YARA ruleset (file-oriented malware signatures),
       // same shared engine and same "missing yara-python just skips" posture.
-      if (file.role === "recycle_payload") {
+      if (file.role === "recycle_payload" || file.role === "linux_recovered_exe") {
         const yaraRules = await prisma.ramYaraRule.findMany({
           where: { enabled: true, OR: [...(file.upload.organizationId ? [{ organizationId: file.upload.organizationId }] : []), { organizationId: null }] },
         });
@@ -1165,7 +1189,7 @@ export async function processWindowsArtifactFile(fileId: string, filePath: strin
     const rules = await loadRules();
 
     const criticalCandidates: { title: string; severity: string; sourceLabel: string; detailPath: string }[] = [];
-    const detailPath = `/windows-artifacts/${file.uploadId}`;
+    const detailPath = `/host-artifacts/${file.uploadId}`;
 
     if (rules.length > 0) {
       const subjects = buildSubjects({

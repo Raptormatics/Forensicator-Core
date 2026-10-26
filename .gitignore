@@ -17,3 +17,4 @@ __pycache__
 /backups/
 /data/
 /.update-channel
+.builtin-seed-fingerprint
