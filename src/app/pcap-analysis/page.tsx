@@ -44,12 +44,17 @@ function formatBytes(bytes: string): string {
   return `${v.toFixed(v >= 10 || i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
+// An upload in any other state is still uploading or being analysed.
+const FINAL_STATUSES = new Set(["ready", "failed", "error", "cancelled", "canceled"]);
+
 export default function PcapAnalysisPage() {
   const [uploads, setUploads] = useState<Upload[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // `loading` starts true and only the first fetch clears it — later
+  // refreshes update the table in place instead of swapping it for
+  // "Loading…" (which made the page visibly blink every 10 seconds).
   async function load() {
-    setLoading(true);
     try {
       const res = await fetch("/api/pcap-analysis/uploads");
       const data = await res.json();
@@ -59,11 +64,14 @@ export default function PcapAnalysisPage() {
     }
   }
 
+  // Poll only while something is still being processed.
+  const busy = uploads.some((u) => !FINAL_STATUSES.has(u.status));
+  useEffect(() => { load(); }, []);
   useEffect(() => {
-    load();
+    if (!busy) return;
     const interval = setInterval(load, 10_000);
     return () => clearInterval(interval);
-  }, []);
+  }, [busy]);
 
   async function deleteUpload(id: string) {
     if (!confirm("Delete this PCAP upload and all its conversations, DNS queries, IOCs and findings?")) return;
