@@ -68,6 +68,14 @@ export function parseLogTimestamp(raw: string, now: Date = new Date()): Date | n
     if (d.getTime() > now.getTime() + 86_400_000) d = at(now.getUTCFullYear() - 1);
     return Number.isNaN(d.getTime()) ? null : d;
   }
+  // "2026-10-26 10:00:00-05" (macOS install.log), "2026-10-26T10:15:21.473552-0500"
+  // (the macOS collector's unified log export): a zone without the colon,
+  // or hours only.
+  const offset = raw.trim().match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2}(?:[.,]\d+)?)\s*([+-]\d{2}):?(\d{2})?$/);
+  if (offset) {
+    const d = new Date(`${offset[1]}T${offset[2].replace(",", ".")}${offset[3]}:${offset[4] ?? "00"}`);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
   // "2026-04-20 18:05:27" / "2026-04-20  18:05:27" (dpkg, apt, IIS):
   // no zone, so UTC rather than the server's local time.
   const plain = raw.trim().match(/^(\d{4}-\d{2}-\d{2})[ T]+(\d{2}:\d{2}:\d{2}(?:[.,]\d+)?)$/);

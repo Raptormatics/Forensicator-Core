@@ -85,6 +85,7 @@ const RECORD_ROLES: Record<string, RecordRoleSpec> = {
   memory_file:                { script: "payload-parse.py", python: "venv", timeoutSeconds: 3 * 60 * 60, label: "memory-backed file", args: (f, p) => [p, "memory_file", f.filename] },
   collector_extra:            { script: "extras-parse.py", python: "venv", timeoutSeconds: 15 * 60, label: "collector extra", args: (f, p) => [p, f.filename] },
   ...linuxRoles(),
+  ...macRoles(),
 };
 
 // Linux collector artifacts — one parser, the role and the file's
@@ -107,6 +108,33 @@ function linuxRoles(): Record<string, RecordRoleSpec> {
     spec("linux_processes", "process table"),
     spec("linux_recovered_exe", "recovered executable"),
     spec("linux_bodyfile", "filesystem timeline (bodyfile)", 60 * 60),
+  ]);
+}
+
+// macOS collector artifacts — mac-parse.py, with the file's
+// MacArtifacts-relative path and (for SQLite databases) its -wal/-shm
+// companions from the log1/log2 slots.
+function macRoles(): Record<string, RecordRoleSpec> {
+  const spec = (role: string, label: string, timeoutSeconds = 10 * 60): [string, RecordRoleSpec] =>
+    [role, { script: "mac-parse.py", python: "venv", timeoutSeconds, label, args: (f, p) => [p, role, f.filename, f.log1StoragePath ?? "", f.log2StoragePath ?? ""] }];
+  return Object.fromEntries([
+    spec("mac_accounts", "macOS account record"),
+    spec("mac_sudoers", "sudoers file"),
+    spec("mac_shell_history", "shell history"),
+    spec("mac_authorized_keys", "SSH authorized_keys"),
+    spec("mac_known_hosts", "SSH known_hosts"),
+    spec("mac_cron", "cron/at job"),
+    spec("mac_launch_item", "LaunchAgent/LaunchDaemon"),
+    spec("mac_plist", "property list"),
+    spec("mac_config_file", "macOS configuration file"),
+    spec("mac_command_output", "collector command output"),
+    spec("mac_processes", "process table"),
+    spec("mac_bodyfile", "filesystem timeline (bodyfile)", 60 * 60),
+    spec("mac_tcc", "TCC privacy database"),
+    spec("mac_quarantine", "quarantine events database"),
+    spec("mac_knowledgec", "KnowledgeC database", 30 * 60),
+    spec("mac_xprotect", "XProtect detections database"),
+    spec("mac_fsevents", "FSEvents page"),
   ]);
 }
 

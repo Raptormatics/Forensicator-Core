@@ -24,9 +24,25 @@ import socket
 import sys
 from datetime import datetime, timezone
 
-from forensicator_records import emit_error, emit_record, extract_iocs, first, read_text
+from forensicator_records import emit_error, emit_record as _emit_record, extract_iocs, first, read_text
 
 ROW_CAP = 250000
+
+# ── Platform settings ────────────────────────────────────────────────────
+# mac-parse.py reuses these parsers for the formats macOS shares with Linux
+# (sudoers, shell histories, SSH files, cron, startup files, bodyfile) and
+# sets these before calling one.
+KIND_PREFIX = "linux_"          # record kinds are emitted as <prefix><rest>
+EXTRA_TRAITS = []               # (name, regex) pairs checked after COMMAND_TRAITS
+EXTRA_CONFIG_FLAGS = None       # callable(path, line) -> [flags] for parse_config_file
+HOME_PREFIXES = ("/home/", "/root/")
+
+
+def emit_record(kind, *args, **kwargs):
+    if KIND_PREFIX != "linux_" and kind.startswith("linux_"):
+        kind = KIND_PREFIX + kind[len("linux_"):]
+    _emit_record(kind, *args, **kwargs)
+
 
 # ── Suspicious command-line traits (shell history, cron, systemd, startup files)
 COMMAND_TRAITS = [
@@ -34,7 +50,7 @@ COMMAND_TRAITS = [
     ("download_exec", re.compile(r"(curl|wget|fetch)\b[^|;&]*\|\s*(ba|z|da|k)?sh\b|(curl|wget)\b[^;&]*(-o|-O|--output)\s*\S*(/tmp|/dev/shm|/var/tmp)[^;&]*[;&]+\s*(chmod|\./|/tmp|/dev/shm|/var/tmp|sh\b|bash\b)", re.I)),
     ("download", re.compile(r"\b(curl|wget|fetch|tftp)\b[^|;&\n]*(://|\b\d{1,3}(\.\d{1,3}){3}\b)", re.I)),
     ("encoded_exec", re.compile(r"base64\s+(-d|--decode)[^|;&]*\|\s*(ba|z)?sh\b|echo\s+[A-Za-z0-9+/=]{40,}\s*\|\s*base64|eval\s*\(?\s*\$\(.*base64", re.I)),
-    ("log_clearing", re.compile(r"(^|[;&|\s])(rm|shred|truncate)(\s+(-\S+|[0-9]+[KMG]?))*\s+\S*(/var/log/|_history(\s|$))|(?<![>0-9&])>(?!>)\s*/var/log/|journalctl\b[^;|]*--vacuum|\bhistory\s+-c\b|\bunset\s+HISTFILE\b|HISTFILE=/dev/null|HISTSIZE=0", re.I)),
+    ("log_clearing", re.compile(r"(^|[;&|\s])(rm|shred|truncate)\b[^;&|\n]*\s\S*(/var/log/|_history(\s|$)|\.zsh_sessions\b)|(?<![>0-9&])>(?!>)\s*/var/log/|journalctl\b[^;|]*--vacuum|\bhistory\s+-c\b|\bunset\s+HISTFILE\b|HISTFILE=/dev/null|HISTSIZE=0", re.I)),
     ("mentions_temp_path", re.compile(r"(^|[\s;&|'\"=])(/tmp|/var/tmp|/dev/shm)/\S+", re.I)),
     ("persistence_change", re.compile(r"\bcrontab\s+(-e|-r|\S+\.\S+)|systemctl\s+(enable|daemon-reload)|>>?\s*\S*(authorized_keys|/etc/cron|\.bashrc|\.profile|/etc/profile|/etc/rc\.local|ld\.so\.preload)|\buseradd\b|\busermod\s+.*-aG\s*(sudo|wheel|root)\b|chattr\s+\+i", re.I)),
     ("recon", re.compile(r"\b(linpeas|linenum|les\.sh|pspy|lse\.sh|unix-privesc-check)\b|find\s+/\s+.*-perm\s+-?[0-9]*[46]000|cat\s+/etc/shadow|getcap\s+-r\s+/", re.I)),
@@ -53,7 +69,10 @@ STANDARD_TEMP_ENTRIES = {".X11-unix", ".ICE-unix", ".XIM-unix", ".font-unix", ".
 def traits(text):
     if not text:
         return []
-    found = [name for name, rx in COMMAND_TRAITS if rx.search(text)]
+    found = []
+    for name, rx in COMMAND_TRAITS + EXTRA_TRAITS:
+        if name not in found and rx.search(text):
+            found.append(name)
     # A plain download is only worth naming when nothing stronger matched.
     if "download" in found and ("download_exec" in found or len(found) > 1):
         found.remove("download")
@@ -82,12 +101,12 @@ def original_path(rel):
 
 
 def owner_from_path(path):
-    m = re.match(r"^/home/([^/]+)/", path)
+    m = re.match(r"^/(?:home|Users)/([^/]+)/", path)
     if m:
         return m.group(1)
-    if path.startswith("/root/"):
+    if path.startswith(("/root/", "/var/root/", "/private/var/root/")):
         return "root"
-    m = re.match(r"^/var/spool/cron/(?:crontabs/)?([^/]+)$", path)
+    m = re.match(r"^/(?:var/spool/cron/(?:crontabs/)?|(?:private/)?var/at/tabs/|usr/lib/cron/tabs/)([^/]+)$", path)
     return m.group(1) if m else None
 
 
@@ -259,7 +278,7 @@ def parse_authorized_keys(path, rel):
             found.append("environment_option")
         if options and "from=" not in options and not found:
             found.append("key_options")
-        if not orig.startswith(("/home/", "/root/")):
+        if not orig.startswith(HOME_PREFIXES):
             found.append("unusual_location")
         comment = (m.group(3) or "").strip() if m else ""
         emit_record("linux_ssh_authorized_key", f"{m.group(1) if m else 'unparsed'} {comment}".strip(), path=orig, user=user,
@@ -293,7 +312,7 @@ def parse_cron(path, rel):
     orig = original_path(rel)
     owner = owner_from_path(orig)
     is_script = re.match(r"^/etc/cron\.(hourly|daily|weekly|monthly)/", orig) is not None
-    is_at = "/at" in orig and "/cron" not in orig
+    is_at = re.search(r"/spool/at/|/atjobs/|/var/at/jobs/", orig) is not None
     for n, line in enumerate(text_lines(path), 1):
         s = line.strip()
         if not s or s.startswith("#"):
@@ -390,6 +409,8 @@ def parse_config_file(path, rel):
         if name in ("sysctl.conf",) or orig.startswith("/etc/sysctl.d/"):
             if re.match(r"^kernel\.core_pattern\s*=\s*\|", s):
                 found.append("core_pattern_pipe")
+        if EXTRA_CONFIG_FLAGS:
+            found += [f for f in EXTRA_CONFIG_FLAGS(orig, s) if f not in found]
         iocs = extract_iocs(s)
         emit_record("linux_config_line", f"{orig}: {s}"[:300], path=orig, user=owner, process=s[:4000],
                     url=first(iocs, "urls"), ip=first(iocs, "ips"),
@@ -573,7 +594,7 @@ def parse_bodyfile(path, rel):
             atime, mtime, ctime = f[7], f[8], f[9]
             found = []
             if mode[:1] == "-" and ("s" in mode[1:4].lower() or "s" in mode[4:7].lower()):
-                if any(name.startswith(t) for t in TEMP_DIRS) or name.startswith(("/home/", "/root/")):
+                if any(name.startswith(t) for t in TEMP_DIRS) or name.startswith(HOME_PREFIXES):
                     found.append("suid_in_user_or_temp_dir")
                 else:
                     found.append("suid")
@@ -586,7 +607,7 @@ def parse_bodyfile(path, rel):
                 found.append("deceptive_name")
             emit_record("linux_fs_entry", name[:300], timestamp=iso_epoch(mtime), path=name,
                         details=details(found, mode=mode, uid=uid, gid=gid, size=size,
-                                        accessed=iso_epoch(atime), changed=iso_epoch(ctime)))
+                                        accessed=iso_epoch(atime), changed=iso_epoch(ctime), born=iso_epoch(f[10])))
             n += 1
             if n >= ROW_CAP:
                 break

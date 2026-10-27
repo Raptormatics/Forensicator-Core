@@ -46,6 +46,13 @@
  *   CollectionManifest/artifact-collection-manifest.json (same format)
  * Its logs are classified as `log` — the upload page sends those to Log
  * Analysis rather than parsing them here (see classifyLinuxPath).
+ *
+ * The macOS collector's -A mode writes artifacts/MacArtifacts/
+ * (collector/live-forensicator/MacOS/Forensicator-Share/macos_artifacts.sh)
+ * in the same shape — Files/, Commands/ (plus codesign.tsv and
+ * applications.json), Processes/processes.tsv, Timeline/bodyfile.txt,
+ * Logs/unifiedlog-*.log, CollectionManifest/ — with SQLite -wal/-shm files
+ * riding along on their database's row (see classifyMacPath).
  */
 import type { WinArtifactFileRole } from "./types";
 
@@ -83,9 +90,12 @@ export const SUPPORTED_COLLECTOR_ROLES: ReadonlySet<WinArtifactFileRole> = new S
   "linux_accounts", "linux_sudoers", "linux_login_records", "linux_shell_history", "linux_authorized_keys",
   "linux_known_hosts", "linux_cron", "linux_systemd_unit", "linux_config_file", "linux_command_output",
   "linux_processes", "linux_recovered_exe", "linux_bodyfile",
+  "mac_accounts", "mac_sudoers", "mac_shell_history", "mac_authorized_keys", "mac_known_hosts", "mac_cron",
+  "mac_launch_item", "mac_plist", "mac_config_file", "mac_command_output", "mac_processes", "mac_bodyfile",
+  "mac_tcc", "mac_quarantine", "mac_knowledgec", "mac_xprotect", "mac_fsevents",
 ]);
 
-const ARTIFACT_ROOTS = ["windowsartifacts", "linuxartifacts"];
+const ARTIFACT_ROOTS = ["windowsartifacts", "linuxartifacts", "macartifacts"];
 
 const MACHINE_HIVES: Record<string, WinArtifactFileRole> = {
   system: "system_hive",
@@ -103,7 +113,7 @@ const PROFILE_HIVES: Record<string, WinArtifactFileRole> = {
 
 /** Normalizes a browser webkitRelativePath / zip entry / Windows path to
  * forward-slash segments starting just below `WindowsArtifacts` (or the
- * Linux collector's `LinuxArtifacts`) — the key the CollectionManifest is
+ * Linux and macOS collectors' `LinuxArtifacts`/`MacArtifacts`) — the key the CollectionManifest is
  * matched on. Returns null when the path isn't inside either folder. */
 export function windowsArtifactsRelativePath(rawPath: string): string | null {
   const parts = rawPath.replace(/\\/g, "/").split("/").filter(Boolean);
@@ -151,6 +161,7 @@ function hive(role: WinArtifactFileRole, groupKey: string, log: "log1" | "log2" 
 export function classifyCollectorPath(relPath: string): CollectorClassification {
   const all = relPath.replace(/\\/g, "/").split("/").filter(Boolean);
   if ((all[0] ?? "").toLowerCase() === "linuxartifacts") return classifyLinuxPath(all.slice(1));
+  if ((all[0] ?? "").toLowerCase() === "macartifacts") return classifyMacPath(all.slice(1));
   if ((all[0] ?? "").toLowerCase() !== "windowsartifacts") return classifyHostExtra(all);
   const parts = all.slice(1);
   const lower = parts.map((p) => p.toLowerCase());
@@ -357,6 +368,72 @@ function classifyLinuxPath(parts: string[]): CollectorClassification {
   if (/^\/etc\/(crontab|anacrontab)$|^\/etc\/cron\.[a-z]+\/|^\/var\/spool\/(cron|at|anacron)\//.test(abs)) return artifact("linux_cron", user);
   if ((/\/systemd\//.test(abs) && SYSTEMD_UNIT.test(name)) || /\/systemd\/[a-z-]*generators\//.test(abs)) return artifact("linux_systemd_unit", user);
   return artifact("linux_config_file", user);
+}
+
+// SQLite databases whose -wal/-shm companions ride along on their row.
+const MAC_DATABASES: Record<string, WinArtifactFileRole> = {
+  "tcc.db": "mac_tcc",
+  "com.apple.launchservices.quarantineeventsv2": "mac_quarantine",
+  "knowledgec.db": "mac_knowledgec",
+  "xpdb": "mac_xprotect",
+};
+
+function macLogLabel(abs: string): string {
+  const name = abs.split("/").pop() ?? "";
+  if (/^install\.log/.test(name)) return "macos-install";
+  if (/\/(nginx|apache2|httpd)\//.test(abs)) return /error/.test(name) ? "web-error" : "web-access";
+  return "syslog";
+}
+
+/** Paths below the macOS collector's MacArtifacts folder. */
+function classifyMacPath(parts: string[]): CollectorClassification {
+  const relPath = ["MacArtifacts", ...parts].join("/");
+  const top = (parts[0] ?? "").toLowerCase();
+  const name = parts[parts.length - 1] ?? "";
+  const lname = name.toLowerCase();
+  const artifact = (role: WinArtifactFileRole, profileName: string | null = null, groupKey = relPath): CollectorClassification =>
+    ({ kind: "artifact", role, groupKey, profileName, provenance: "live" });
+
+  switch (top) {
+    case "collectionmanifest":
+      return lname === "artifact-collection-manifest.json" ? { kind: "manifest" } : { kind: "ignored", reason: "manifest companion file" };
+    case "commands":
+      return /\.(txt|tsv|json)$/.test(lname) ? artifact("mac_command_output") : { kind: "ignored", reason: "not a command output file" };
+    case "processes":
+      return lname === "processes.tsv" ? artifact("mac_processes") : { kind: "ignored", reason: "unrecognized Processes file" };
+    case "timeline":
+      return lname === "bodyfile.txt" ? artifact("mac_bodyfile") : { kind: "ignored", reason: "unrecognized Timeline file" };
+    case "logs":
+      if ((parts[1] ?? "").toLowerCase().endsWith(".logarchive")) return { kind: "unsupported", label: "Unified log archive — open with log show --archive on a Mac" };
+      return { kind: "log", label: lname.startsWith("unifiedlog-") ? "macos-unifiedlog" : "syslog", gzip: lname.endsWith(".gz") };
+    case "files":
+      break;
+    default:
+      return { kind: "ignored", reason: "not a recognized macOS collector folder" };
+  }
+
+  // Files/<absolute path>; /private/{etc,var,tmp} are what /etc, /var and /tmp point to.
+  const abs = ("/" + parts.slice(1).join("/")).replace(/^\/private\/(etc|var|tmp)\//, "/$1/");
+  const home = abs.match(/^\/Users\/([^/]+)\//);
+  const user = home ? home[1] : abs.startsWith("/var/root/") ? "root" : null;
+
+  for (const [db, role] of Object.entries(MAC_DATABASES)) {
+    if (lname === db) return artifact(role, user);
+    if (lname === `${db}-wal`) return { kind: "sidecar", sidecar: "log1", attachTo: relPath.slice(0, -4) };
+    if (lname === `${db}-shm`) return { kind: "sidecar", sidecar: "log2", attachTo: relPath.slice(0, -4) };
+  }
+  if (/^\/var\/db\/dslocal\/nodes\/[^/]+\/(users|groups)\/[^/]+\.plist$/.test(abs)) return artifact("mac_accounts");
+  if (abs === "/etc/sudoers" || abs.startsWith("/etc/sudoers.d/")) return artifact("mac_sudoers");
+  if (/^(\/System\/Volumes\/Data)?\/\.fseventsd\/[0-9a-f]{16}$/.test(abs)) return artifact("mac_fsevents");
+  if (abs.startsWith("/var/log/") || /\/var\/log\/(nginx|httpd|apache2)\//.test(abs)) return { kind: "log", label: macLogLabel(abs), gzip: lname.endsWith(".gz") };
+  if (lname.endsWith(".btm")) return { kind: "unsupported", label: "Background Task Management database (Core reads the collector's sfltool dumpbtm output instead)" };
+  if (/\/Library\/Launch(Agents|Daemons)\/[^/]+\.plist$/.test(abs)) return artifact("mac_launch_item", user);
+  if (HISTORY_FILES.has(name) || /\/\.(zsh|bash)_sessions\/[^/]+\.history(new)?$/.test(abs)) return artifact("mac_shell_history", user);
+  if (/\/\.ssh\/authorized_keys2?$/.test(abs)) return artifact("mac_authorized_keys", user);
+  if (/\/\.ssh\/known_hosts$/.test(abs)) return artifact("mac_known_hosts", user);
+  if (abs === "/etc/crontab" || /^\/var\/at\/(tabs|jobs)\/[^/.][^/]*$/.test(abs)) return artifact("mac_cron", user);
+  if (lname.endsWith(".plist")) return artifact("mac_plist", user);
+  return artifact("mac_config_file", user);
 }
 
 /** The collector's artifacts\<folder> outputs other than WindowsArtifacts. */

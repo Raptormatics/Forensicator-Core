@@ -68,6 +68,13 @@ const ROLE_LABELS: Record<string, string> = {
   linux_cron: "Cron / at jobs", linux_systemd_unit: "systemd units", linux_config_file: "Startup, PAM, loader & other config",
   linux_command_output: "System state (sockets, packages, mounts, ...)", linux_processes: "Process table",
   linux_recovered_exe: "Recovered deleted executables", linux_bodyfile: "Filesystem timeline (bodyfile)",
+  mac_accounts: "Account and group records (dslocal)", mac_sudoers: "sudoers", mac_shell_history: "Shell & Terminal session histories",
+  mac_authorized_keys: "SSH authorized_keys", mac_known_hosts: "SSH known_hosts", mac_cron: "Cron / at jobs",
+  mac_launch_item: "LaunchAgents & LaunchDaemons", mac_plist: "Property lists (login window, install history, ...)",
+  mac_config_file: "Startup, PAM, SSH & other config", mac_command_output: "System state (sockets, background items, signing, ...)",
+  mac_processes: "Process table", mac_bodyfile: "Filesystem timeline (bodyfile)", mac_tcc: "TCC privacy databases",
+  mac_quarantine: "Quarantine events (downloads)", mac_knowledgec: "KnowledgeC (app usage)", mac_xprotect: "XProtect detections (XPdb)",
+  mac_fsevents: "FSEvents",
 };
 
 // Log Analysis takes one file per request, up to 50 MB.
@@ -93,7 +100,7 @@ async function splitAtLines(blob: Blob, max: number): Promise<Blob[]> {
 
 /** "Files/var/log/apache2/access.log.2.gz" -> "apache2/access.log.2" */
 function logDisplayName(relPath: string): string {
-  const p = relPath.replace(/^LinuxArtifacts\//i, "").replace(/^Files\/var\/log\//, "").replace(/^Files\//, "").replace(/^Logs\//, "");
+  const p = relPath.replace(/^(Linux|Mac)Artifacts\//i, "").replace(/^Files\/(private\/)?var\/log\//, "").replace(/^Files\//, "").replace(/^Logs\//, "");
   return p.replace(/\.gz$/, "");
 }
 
@@ -624,7 +631,7 @@ export default function UploadWindowsArtifactsPage() {
           form.append("sourceType", log.label);
           form.append("caseId", caseId);
           if (hostname.trim()) form.append("hostname", hostname.trim());
-          form.append("notes", `From the Linux collector folder: ${log.relPath}`);
+          form.append("notes", `From the ${/^MacArtifacts\//i.test(log.relPath) ? "macOS" : "Linux"} collector folder: ${log.relPath}`);
           const res = await fetch("/api/log-analysis/uploads", { method: "POST", body: form });
           if (res.ok) sent++;
           else failed.push({ name: partName, reason: ((await res.json().catch(() => ({}))) as { message?: string }).message ?? `HTTP ${res.status}` });
@@ -717,7 +724,7 @@ export default function UploadWindowsArtifactsPage() {
           </div>
           <h1 className="text-3xl font-semibold text-zinc-50">Upload Host Artifacts</h1>
           <p className="mt-2 text-sm text-zinc-400 max-w-xl">
-            Upload whichever artifacts you collected from one host — a Windows or Linux collector folder, or individual
+            Upload whichever artifacts you collected from one host — a Windows, Linux or macOS collector folder, or individual
             registry hives, Prefetch, LNK files, Jump Lists and more. Each file is parsed independently; you don&apos;t need all of them to get value from the ones you have.
           </p>
         </div>
@@ -1043,9 +1050,9 @@ function CollectorFolderPicker({
         <div>
           <h2 className="text-sm font-semibold text-zinc-200 flex items-center gap-2"><Folder className="h-4 w-4 text-teal-400" /> Collector folder</h2>
           <p className="mt-1 text-xs text-zinc-400 max-w-xl">
-            Pick the Live Forensicator host folder (or its <span className="font-mono">artifacts</span>, <span className="font-mono">artifacts\WindowsArtifacts</span> or <span className="font-mono">artifacts/LinuxArtifacts</span> folder). Every artifact is routed by its path —
+            Pick the Live Forensicator host folder (or its <span className="font-mono">artifacts</span>, <span className="font-mono">artifacts\WindowsArtifacts</span>, <span className="font-mono">artifacts/LinuxArtifacts</span> or <span className="font-mono">artifacts/MacArtifacts</span> folder). Every artifact is routed by its path —
             historical hives, extra volumes and per-profile files included — and hashes are checked against the collector&apos;s CollectionManifest.
-            A Linux collection&apos;s logs (auth, syslog, audit, journal, web server) are also sent to Log Analysis in the same case.
+            A Linux or macOS collection&apos;s logs (auth, syslog, audit, journal, unified log exports, install log, web server) are also sent to Log Analysis in the same case.
           </p>
         </div>
         <div className="flex shrink-0 gap-2">

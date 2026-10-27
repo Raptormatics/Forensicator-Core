@@ -9,7 +9,7 @@ import {
 import { CaseBadge } from "@/components/cases/case-badge";
 import { ArchiveButton, ArchivedPill } from "@/components/cases/archive-button";
 import { formatDateTime } from "@/lib/utils";
-import { uploadPlatform } from "@/lib/windows-artifacts/types";
+import { PLATFORM_LABEL, uploadPlatform } from "@/lib/windows-artifacts/types";
 
 type FileRow = {
   id: string; role: string; filename: string; status: string; errorMessage: string | null; findingCount: number; profileName: string | null;
@@ -90,20 +90,32 @@ type Detail = {
 type Tab = "overview" | "shimcache" | "amcache" | "userassist" | "bam" | "autoruns" | "prefetch" | "lnk" | "jumplist" | "shellbags" | "mft" | "usnjrnl" | "srum"
   | "wer" | "werdump" | "recyclebin" | "notifications" | "search" | "quarantine" | "quarantinepayloads" | "bits" | "timeline"
   | "accounts" | "registryplugins" | "rec_wmi" | "rec_defender" | "rec_apps" | "rec_other" | "integrity" | "findings"
-  | "lx_accounts" | "lx_logins" | "lx_history" | "lx_ssh" | "lx_persistence" | "lx_processes" | "lx_timeline" | "lx_system";
+  | "lx_accounts" | "lx_logins" | "lx_history" | "lx_ssh" | "lx_persistence" | "lx_processes" | "lx_timeline" | "lx_system"
+  | "mc_accounts" | "mc_persistence" | "mc_history" | "mc_ssh" | "mc_processes" | "mc_signing" | "mc_privacy" | "mc_activity" | "mc_timeline" | "mc_system";
 
 // Stage-2 record kinds grouped into tabs (see forensicator_records.py),
-// and every Linux collector kind (linux-parse.py) — `linux: true` tabs are
-// the only ones a Linux collection shows besides Overview/Integrity/Findings.
-const RECORD_TABS: { key: Tab; label: string; match: (kind: string) => boolean; empty: string; linux?: boolean }[] = [
-  { key: "lx_accounts", linux: true, label: "Accounts & Privilege", match: (k) => /^linux_(account|shadow|group|sudoers)$/.test(k), empty: "No passwd/shadow/group/sudoers in this collection." },
-  { key: "lx_logins", linux: true, label: "Logins", match: (k) => /^linux_(login|failed_login|login_event)$/.test(k), empty: "No wtmp/btmp/utmp records — the authentication log went to Log Analysis." },
-  { key: "lx_history", linux: true, label: "Shell History", match: (k) => k === "linux_shell_history", empty: "No shell or application history files." },
-  { key: "lx_ssh", linux: true, label: "SSH", match: (k) => k.startsWith("linux_ssh_"), empty: "No authorized_keys or known_hosts files." },
-  { key: "lx_persistence", linux: true, label: "Persistence", match: (k) => /^linux_(cron_job|cron_script|systemd_unit|systemd_generator|config_line|immutable_file|symlink)$/.test(k), empty: "No cron, systemd, startup or other persistence files." },
-  { key: "lx_processes", linux: true, label: "Processes & Network", match: (k) => /^linux_(process|recovered_executable|socket|container|bpf_program)$/.test(k), empty: "No process table or socket list." },
-  { key: "lx_timeline", linux: true, label: "Filesystem Timeline", match: (k) => k === "linux_fs_entry", empty: "No bodyfile in this collection." },
-  { key: "lx_system", linux: true, label: "System State", match: (k) => /^linux_(package|kernel_|cmd_)/.test(k), empty: "No system state output." },
+// and every Linux (linux-parse.py) and macOS (mac-parse.py) collector kind —
+// a tab with a `platform` is the only kind a collection from that platform
+// shows besides Overview/Integrity/Findings.
+const RECORD_TABS: { key: Tab; label: string; match: (kind: string) => boolean; empty: string; platform?: "linux" | "macos" }[] = [
+  { key: "lx_accounts", platform: "linux", label: "Accounts & Privilege", match: (k) => /^linux_(account|shadow|group|sudoers)$/.test(k), empty: "No passwd/shadow/group/sudoers in this collection." },
+  { key: "lx_logins", platform: "linux", label: "Logins", match: (k) => /^linux_(login|failed_login|login_event)$/.test(k), empty: "No wtmp/btmp/utmp records — the authentication log went to Log Analysis." },
+  { key: "lx_history", platform: "linux", label: "Shell History", match: (k) => k === "linux_shell_history", empty: "No shell or application history files." },
+  { key: "lx_ssh", platform: "linux", label: "SSH", match: (k) => k.startsWith("linux_ssh_"), empty: "No authorized_keys or known_hosts files." },
+  { key: "lx_persistence", platform: "linux", label: "Persistence", match: (k) => /^linux_(cron_job|cron_script|systemd_unit|systemd_generator|config_line|immutable_file|symlink)$/.test(k), empty: "No cron, systemd, startup or other persistence files." },
+  { key: "lx_processes", platform: "linux", label: "Processes & Network", match: (k) => /^linux_(process|recovered_executable|socket|container|bpf_program)$/.test(k), empty: "No process table or socket list." },
+  { key: "lx_timeline", platform: "linux", label: "Filesystem Timeline", match: (k) => k === "linux_fs_entry", empty: "No bodyfile in this collection." },
+  { key: "lx_system", platform: "linux", label: "System State", match: (k) => /^linux_(package|kernel_|cmd_)/.test(k), empty: "No system state output." },
+  { key: "mc_accounts", platform: "macos", label: "Accounts & Privilege", match: (k) => /^mac_(account|group|sudoers|auth_mechanism)$/.test(k), empty: "No account records, sudoers or login authorization rule — run the collector as root." },
+  { key: "mc_persistence", platform: "macos", label: "Persistence", match: (k) => /^mac_(launch_item|background_item|cron_job|cron_script|config_line|plist_entry)$/.test(k), empty: "No launch items, login items, cron, startup or other persistence files." },
+  { key: "mc_history", platform: "macos", label: "Shell History", match: (k) => k === "mac_shell_history", empty: "No shell or Terminal session history files." },
+  { key: "mc_ssh", platform: "macos", label: "SSH", match: (k) => k.startsWith("mac_ssh_"), empty: "No authorized_keys or known_hosts files." },
+  { key: "mc_processes", platform: "macos", label: "Processes & Network", match: (k) => /^mac_(process|socket|proxy)$/.test(k), empty: "No process table or socket list." },
+  { key: "mc_signing", platform: "macos", label: "Code Signing & Apps", match: (k) => /^mac_(code_signature|application)$/.test(k), empty: "No code signature or application list." },
+  { key: "mc_privacy", platform: "macos", label: "Privacy & Downloads", match: (k) => /^mac_(tcc_grant|quarantine_event)$/.test(k), empty: "No TCC or quarantine databases — the collector needs a terminal with Full Disk Access." },
+  { key: "mc_activity", platform: "macos", label: "App Usage & Installs", match: (k) => /^mac_(app_usage|install)$/.test(k), empty: "No KnowledgeC or install history in this collection." },
+  { key: "mc_timeline", platform: "macos", label: "Filesystem Timeline", match: (k) => /^mac_(fs_entry|fsevent)$/.test(k), empty: "No bodyfile or FSEvents in this collection." },
+  { key: "mc_system", platform: "macos", label: "System State", match: (k) => /^mac_(security_setting|kext|xprotect_event|os_version|cmd_)/.test(k), empty: "No system state output." },
   { key: "rec_wmi", label: "WMI Persistence", match: (k) => k.startsWith("wmi_"), empty: "No WMI subscription data — upload WMI\\PermanentSubscriptions.json (and optionally WMI\\Repository\\OBJECTS.DATA)." },
   { key: "rec_defender", label: "Defender History", match: (k) => k.startsWith("defender_"), empty: "No Defender history — upload Defender\\DetectionHistory and Defender\\Support logs." },
   { key: "rec_apps", label: "Application Artifacts", match: (k) => /^(remote_access|notepad|cloud_sync|security_product|custom)_/.test(k), empty: "No application artifacts — upload the collector's ApplicationArtifacts folder." },
@@ -246,10 +258,10 @@ export default function WindowsArtifactDetailPage() {
     { key: "integrity", label: mismatchCount > 0 ? "Collection Integrity ⚠" : "Collection Integrity", count: upload.collectionManifest?.issues.length ?? 0 },
     { key: "findings", label: "Findings", count: findings.length },
   ];
-  // A Linux collection has none of the Windows artifact types (and vice versa).
+  // Each platform's collection has only its own artifact types.
   const ALWAYS_SHOWN: Tab[] = ["overview", "integrity", "findings"];
-  const LINUX_TABS = new Set<Tab>(RECORD_TABS.filter((t) => t.linux).map((t) => t.key));
-  const visibleTabs = TABS.filter((t) => ALWAYS_SHOWN.includes(t.key) || (platform === "linux" ? LINUX_TABS.has(t.key) : !LINUX_TABS.has(t.key)));
+  const tabPlatform = new Map<Tab, string>(RECORD_TABS.filter((t) => t.platform).map((t) => [t.key, t.platform!]));
+  const visibleTabs = TABS.filter((t) => ALWAYS_SHOWN.includes(t.key) || (tabPlatform.get(t.key) ?? "windows") === platform);
 
   return (
     <div className="min-h-screen">
@@ -265,7 +277,7 @@ export default function WindowsArtifactDetailPage() {
               </div>
               <h1 className="text-2xl font-semibold text-zinc-50 flex items-center gap-2">
                 {upload.hostname ?? "(unnamed host)"}
-                <span className="rounded-full border border-zinc-700 bg-zinc-800 px-2 py-0.5 text-xs font-medium text-zinc-300">{platform === "linux" ? "Linux" : "Windows"}</span>
+                <span className="rounded-full border border-zinc-700 bg-zinc-800 px-2 py-0.5 text-xs font-medium text-zinc-300">{PLATFORM_LABEL[platform]}</span>
               </h1>
               {upload.case && <div className="mt-1 text-sm"><CaseBadge kase={upload.case} showTitle /></div>}
               {/* Only an upload with no case is archived on its own — one in a case goes with its case. */}
@@ -767,7 +779,7 @@ export default function WindowsArtifactDetailPage() {
             filter={{ label: "Types", getValue: (r) => r.kind }}
             columns={[
               { header: "Type", csv: (r) => r.kind, render: (r) => <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-xs text-zinc-400">{r.kind}</span> },
-              ...(t.linux ? [{
+              ...(t.platform ? [{
                 header: "Flags", wrap: true, csv: (r: ArtifactRecord) => String(r.details?.findings ?? ""),
                 render: (r: ArtifactRecord) => {
                   const flags = String(r.details?.findings ?? "").split(",").filter(Boolean);

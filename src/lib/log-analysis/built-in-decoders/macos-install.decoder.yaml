@@ -1,0 +1,49 @@
+name: decoder/macos-install/0
+enabled: true
+
+metadata:
+  title: 'macOS Install Log Decoder'
+  author: 'Forensicator'
+  date: '2026-10-27'
+  description: >-
+    Decoder for macOS /var/log/install.log — every package, app and
+    software-update install (installd, system_installd, softwareupdated,
+    Installer) with the package and the process that asked for it. Its
+    timestamps carry an hours-only UTC offset.
+    Example: 2026-10-26 10:00:00-05 MacBook-Pro installd[123]: PackageKit: Installed "Evil" ()
+    Example: 2026-10-26 10:00:01-05 MacBook-Pro Installer[456]: Opened from: /Users/alice/Downloads/payload.pkg
+  references:
+    - 'https://support.apple.com/guide/deployment/welcome/web'
+
+source_type: macos-install
+# Checked before the generic syslog-style decoders.
+priority: 50
+
+check: >-
+  regex_match($event.original, '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}[+-]\d{2}(:?\d{2})? \S+ [^\[\s]+(\[\d+\])?: ')
+
+normalize:
+  - map:
+      - event.kind: event
+      - event.category: array_append(package)
+      - event.dataset: macos.install
+      - observer.vendor: Apple
+      - observer.product: macOS
+      - observer.type: host
+      - '@timestamp': regex_extract($event.original, '^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}[+-]\d{2,4})')
+      - host.hostname: regex_extract($event.original, '^\S+ \S+ (\S+) ')
+      - process.name: regex_extract($event.original, '^\S+ \S+ \S+ ([^\[\s:]+)')
+      - process.pid: regex_extract($event.original, '^\S+ \S+ \S+ [^\[\s]+\[(\d+)\]')
+      - message: regex_extract($event.original, '^\S+ \S+ \S+ [^:]+:\s(.*)$')
+
+  - check: regex_match($event.original, 'Installed "') OR regex_match($event.original, 'Install(ation)? (succeeded|completed)')
+    map:
+      - event.type: array_append(installation)
+      - event.outcome: success
+  - check: regex_match($event.original, 'Opened from:\s')
+    map:
+      - event.action: package-opened
+      - file.path: regex_extract($event.original, 'Opened from:\s(.+)$')
+  - check: regex_match($event.original, '(?i)install(ation)? failed')
+    map:
+      - event.outcome: failure

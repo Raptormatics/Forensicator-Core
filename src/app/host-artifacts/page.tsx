@@ -8,7 +8,7 @@ import {
 } from "lucide-react";
 import { CaseBadge } from "@/components/cases/case-badge";
 import { ArchiveButton } from "@/components/cases/archive-button";
-import { uploadPlatform } from "@/lib/windows-artifacts/types";
+import { PLATFORM_LABEL, uploadPlatform } from "@/lib/windows-artifacts/types";
 
 type FileRow = { id: string; role: string; filename: string; status: string; findingCount: number };
 type Upload = {
@@ -34,6 +34,10 @@ const ROLE_LABEL: Record<string, string> = {
   linux_authorized_keys: "authorized_keys", linux_known_hosts: "known_hosts", linux_cron: "Cron/at", linux_systemd_unit: "systemd",
   linux_config_file: "Config files", linux_command_output: "System state", linux_processes: "Processes",
   linux_recovered_exe: "Recovered executables", linux_bodyfile: "FS timeline",
+  mac_accounts: "Accounts", mac_sudoers: "sudoers", mac_shell_history: "Histories", mac_authorized_keys: "authorized_keys",
+  mac_known_hosts: "known_hosts", mac_cron: "Cron/at", mac_launch_item: "Launch items", mac_plist: "Property lists",
+  mac_config_file: "Config files", mac_command_output: "System state", mac_processes: "Processes", mac_bodyfile: "FS timeline",
+  mac_tcc: "TCC", mac_quarantine: "Quarantine events", mac_knowledgec: "KnowledgeC", mac_xprotect: "XProtect", mac_fsevents: "FSEvents",
   system_hive: "SYSTEM",
   software_hive: "SOFTWARE",
   security_hive: "SECURITY",
@@ -97,8 +101,9 @@ export default function WindowsArtifactsPage() {
                 Host Artifacts
               </h1>
               <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">
-                Upload a Windows or Linux collection from a host — registry hives, Prefetch, $MFT and more from
-                Windows; accounts, shell histories, SSH keys, cron, systemd, processes and a filesystem timeline from Linux.
+                Upload a Windows, Linux or macOS collection from a host — registry hives, Prefetch, $MFT and more from
+                Windows; accounts, shell histories, SSH keys, cron, systemd, processes and a filesystem timeline from Linux;
+                launch items, code signatures, TCC, downloads, FSEvents and more from macOS.
               </p>
             </div>
             <div className="flex items-center gap-3">
@@ -172,7 +177,7 @@ export default function WindowsArtifactsPage() {
                         {u.hostname ?? "(unnamed host)"}
                       </Link>
                       <span className="ml-2 rounded-full border border-zinc-700 bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-400">
-                        {uploadPlatform(u.files.map((f) => f.role)) === "linux" ? "Linux" : "Windows"}
+                        {PLATFORM_LABEL[uploadPlatform(u.files.map((f) => f.role))]}
                       </span>
                     </td>
                     <td className="px-4 py-3">

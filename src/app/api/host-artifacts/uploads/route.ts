@@ -183,8 +183,8 @@ export async function POST(req: NextRequest) {
           byGroup.set(c.groupKey, {
             role: c.role, profileName: c.profileName, provenance: c.provenance,
             relativePath: entry.relPath,
-            // The manifest covers WindowsArtifacts (or LinuxArtifacts), keyed relative to it.
-            manifestPath: /^(windows|linux)artifacts\//i.test(entry.relPath) ? entry.relPath.replace(/^[^/]+\//, "") : null,
+            // The manifest covers WindowsArtifacts (or LinuxArtifacts/MacArtifacts), keyed relative to it.
+            manifestPath: /^(windows|linux|mac)artifacts\//i.test(entry.relPath) ? entry.relPath.replace(/^[^/]+\//, "") : null,
             file: entry.file, stagedFile: entry.staged,
           });
         } else if (c.kind === "sidecar") {

@@ -58,7 +58,33 @@ export type WinArtifactFileRole =
   | "linux_command_output"
   | "linux_processes"
   | "linux_recovered_exe"
-  | "linux_bodyfile";
+  | "linux_bodyfile"
+  // macOS collector (-A) — every one parsed by mac-parse.py (which reuses
+  // linux-parse.py where the format is the same) into ArtifactRecordEntry
+  // rows (see collector-layout.ts's classifyMacPath).
+  | "mac_accounts"
+  | "mac_sudoers"
+  | "mac_shell_history"
+  | "mac_authorized_keys"
+  | "mac_known_hosts"
+  | "mac_cron"
+  | "mac_launch_item"
+  | "mac_plist"
+  | "mac_config_file"
+  | "mac_command_output"
+  | "mac_processes"
+  | "mac_bodyfile"
+  | "mac_tcc"
+  | "mac_quarantine"
+  | "mac_knowledgec"
+  | "mac_xprotect"
+  | "mac_fsevents";
+
+export const MAC_ROLES: readonly WinArtifactFileRole[] = [
+  "mac_accounts", "mac_sudoers", "mac_shell_history", "mac_authorized_keys", "mac_known_hosts", "mac_cron",
+  "mac_launch_item", "mac_plist", "mac_config_file", "mac_command_output", "mac_processes", "mac_bodyfile",
+  "mac_tcc", "mac_quarantine", "mac_knowledgec", "mac_xprotect", "mac_fsevents",
+];
 
 export const LINUX_ROLES: readonly WinArtifactFileRole[] = [
   "linux_accounts", "linux_sudoers", "linux_login_records", "linux_shell_history", "linux_authorized_keys",
@@ -66,8 +92,13 @@ export const LINUX_ROLES: readonly WinArtifactFileRole[] = [
   "linux_processes", "linux_recovered_exe", "linux_bodyfile",
 ];
 
-/** A host-artifact upload holds one collector's output: Windows or Linux. */
-export function uploadPlatform(roles: readonly string[]): "linux" | "windows" {
+export type HostPlatform = "windows" | "linux" | "macos";
+
+export const PLATFORM_LABEL: Record<HostPlatform, string> = { windows: "Windows", linux: "Linux", macos: "macOS" };
+
+/** A host-artifact upload holds one collector's output: Windows, Linux or macOS. */
+export function uploadPlatform(roles: readonly string[]): HostPlatform {
+  if (roles.some((r) => r.startsWith("mac_"))) return "macos";
   return roles.some((r) => r.startsWith("linux_")) ? "linux" : "windows";
 }
 
