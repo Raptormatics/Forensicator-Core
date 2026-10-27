@@ -21,6 +21,7 @@ import type { NormalizedLogEntry }     from "./decoder-engine/types";
 import type { IocLookupMap } from "@/lib/rule-engine/ioc-lookup";
 import { autoEnrichNewIocs, type NewIocRecord } from "@/lib/intelligence/auto-enrich";
 import { notifyCriticalFindings } from "@/lib/notifications/critical-finding-alert";
+import { loadSigmaIndex, saveSigmaFindings, SigmaScanner } from "@/lib/sigma/scan";
 
 const BATCH = 500; // rows per Prisma createMany
 
@@ -343,6 +344,22 @@ export async function processLogUpload(uploadId: string, content: string): Promi
       criticalCandidates.push({ title: rule.name, severity: rule.severity, sourceLabel: "Log Analysis", detailPath: `/log-analysis/${uploadId}` });
     }
 
+    // 7b. Core's Sigma rule library (Settings → Threat Intelligence) — a
+    // failure here never fails the upload.
+    let sigmaFindings = 0;
+    try {
+      const sigma = await loadSigmaIndex();
+      if (sigma) {
+        const scanner = new SigmaScanner(sigma.index);
+        for (const ev of events) scanner.add(ev);
+        const created = await saveSigmaFindings(uploadId, scanner, sigma.rules);
+        sigmaFindings = created.length;
+        for (const c of created) criticalCandidates.push({ ...c, sourceLabel: "Log Analysis (Sigma)", detailPath: `/log-analysis/${uploadId}` });
+      }
+    } catch (err) {
+      console.warn("[log-analysis] Sigma scan skipped:", err instanceof Error ? err.message : err);
+    }
+
     await notifyCriticalFindings(criticalCandidates).catch((err) =>
       console.warn("[log-analysis] Critical finding alert failed:", err instanceof Error ? err.message : err)
     );
@@ -353,7 +370,7 @@ export async function processLogUpload(uploadId: string, content: string): Promi
       data: {
         status:       "ready",
         eventCount:   events.length,
-        findingCount: byRule.size,
+        findingCount: byRule.size + sigmaFindings,
       },
     });
   } catch (err) {

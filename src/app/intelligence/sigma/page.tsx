@@ -1,14 +1,20 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
+import { SigmaRuleLibrary } from "./rule-library";
 import { RefreshCw, ShieldAlert, ChevronDown, ChevronUp, Zap } from "lucide-react";
 import { normalizeSeverity, severityRank, severityClassName, SEVERITY_LABELS } from "@/lib/severity";
 import { formatCaseNumber } from "@/lib/cases/case-number";
 
 type SigmaHit = {
+  source:                "core" | "collector";
+  logUploadId:           string | null;
+  logUploadName:         string | null;
+  eventCount:            number;
   findingDbId:           string;
-  investigationId:       string;
+  investigationId:       string | null;
   investigationTitle:    string;
   investigationHostname: string | null;
   hostname:              string | null;
@@ -38,6 +44,52 @@ function LevelBadge({ level }: { level: string }) {
 type CaseOption = { id: string; caseSeq: number; title: string };
 
 export default function SigmaIntelligencePage() {
+  return (
+    <Suspense>
+      <SigmaPage />
+    </Suspense>
+  );
+}
+
+function SigmaPage() {
+  const params = useSearchParams();
+  const router = useRouter();
+  const tab = params.get("tab") === "rules" ? "rules" : "detections";
+  return (
+    <div className="p-6 max-w-7xl mx-auto">
+      <div className="mb-5 flex gap-1 border-b border-zinc-800">
+        {([["detections", "Detections"], ["rules", "Rule Library"]] as const).map(([id, label]) => (
+          <button
+            key={id}
+            onClick={() => router.replace(id === "rules" ? "/intelligence/sigma?tab=rules" : "/intelligence/sigma")}
+            className={`-mb-px border-b-2 px-4 py-2 text-sm ${tab === id ? "border-teal-400 text-zinc-100" : "border-transparent text-zinc-500 hover:text-zinc-300"}`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      {tab === "rules" ? (
+        <>
+          <div className="mb-5">
+            <h1 className="text-2xl font-bold text-zinc-100 flex items-center gap-2">
+              <ShieldAlert className="h-6 w-6 text-orange-400" />
+              Sigma Rule Library
+            </h1>
+            <p className="text-sm text-zinc-500 mt-0.5">
+              Core&apos;s SigmaHQ rules, run on every Log Analysis upload. Update them in{" "}
+              <Link href="/settings/threat-intel" className="text-teal-400 hover:text-teal-300">Settings → Threat Intelligence</Link>.
+            </p>
+          </div>
+          <SigmaRuleLibrary />
+        </>
+      ) : (
+        <SigmaDetections />
+      )}
+    </div>
+  );
+}
+
+function SigmaDetections() {
   const [hits, setHits]       = useState<SigmaHit[]>([]);
   const [total, setTotal]     = useState(0);
   const [loading, setLoading] = useState(true);
@@ -50,13 +102,15 @@ export default function SigmaIntelligencePage() {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
+  const [source, setSource]   = useState("");
 
-  async function load(search = q, lvl = level, cId = caseId) {
+  async function load(search = q, lvl = level, cId = caseId, src = source) {
     setLoading(true);
     const params = new URLSearchParams({ limit: "500" });
     if (search) params.set("q", search);
     if (lvl) params.set("level", lvl);
     if (cId) params.set("caseId", cId);
+    if (src) params.set("source", src);
     const res = await fetch(`/api/sigma?${params}`);
     if (res.ok) {
       const data = await res.json();
@@ -120,7 +174,7 @@ export default function SigmaIntelligencePage() {
   }
 
   return (
-    <div className="p-6 max-w-7xl mx-auto">
+    <div>
       {/* ── Header ── */}
       <div className="flex items-start justify-between mb-6">
         <div>
@@ -129,14 +183,14 @@ export default function SigmaIntelligencePage() {
             Sigma Detections
           </h1>
           <p className="text-sm text-zinc-500 mt-0.5">
-            Sigma rule matches collected across all investigations
+            Matches from Core&apos;s Sigma rule library on Log Analysis uploads, and the Sigma detections the collectors ran on hosts
           </p>
         </div>
         <div className="flex items-center gap-2">
           <button
             onClick={handleSync}
             disabled={syncing}
-            title="Backfill sigma tags on existing findings"
+            title="Backfill Sigma tags on findings from older collector uploads"
             className="flex items-center gap-1.5 rounded-md border border-zinc-800 px-3 py-2 text-xs text-zinc-400 hover:text-zinc-200 disabled:opacity-50"
           >
             <Zap className="h-3.5 w-3.5" />
@@ -201,6 +255,15 @@ export default function SigmaIntelligencePage() {
           ))}
         </select>
         <select
+          value={source}
+          onChange={(e) => { setSource(e.target.value); load(q, level, caseId, e.target.value); }}
+          className="rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-300 outline-none focus:border-teal-500"
+        >
+          <option value="">All sources</option>
+          <option value="core">Core (Log Analysis)</option>
+          <option value="collector">Collector</option>
+        </select>
+        <select
           value={caseId}
           onChange={(e) => { setCaseId(e.target.value); load(q, level, e.target.value); }}
           className="rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-300 outline-none focus:border-teal-500"
@@ -218,8 +281,12 @@ export default function SigmaIntelligencePage() {
       ) : sorted.length === 0 ? (
         <div className="text-center py-16 text-zinc-600">
           <ShieldAlert className="h-12 w-12 mx-auto mb-3 opacity-30" />
-          <p>No sigma rule matches found.</p>
-          <p className="text-xs mt-1 text-zinc-700">Upload an investigation containing a <code>sigma/</code> folder to populate this page.</p>
+          <p>No Sigma rule matches found.</p>
+          <p className="text-xs mt-1 text-zinc-700">
+            Core runs its Sigma rules on every Log Analysis upload (download them in{" "}
+            <Link href="/settings/threat-intel" className="text-teal-400 hover:text-teal-300">Settings → Threat Intelligence</Link>);
+            collector uploads add the Sigma detections the collector ran on the host.
+          </p>
         </div>
       ) : (
         <div className="rounded-xl border border-zinc-800 overflow-hidden">
@@ -248,7 +315,7 @@ export default function SigmaIntelligencePage() {
                 >
                   <span className="flex items-center">Time <SortIcon col="time" /></span>
                 </th>
-                <th className="px-4 py-3 font-medium text-zinc-400">Investigation</th>
+                <th className="px-4 py-3 font-medium text-zinc-400">Source</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-800/60">
@@ -269,6 +336,9 @@ export default function SigmaIntelligencePage() {
                         <div className="flex items-center gap-1.5">
                           <span className="text-zinc-500 text-xs">{isExpanded ? "▾" : "▸"}</span>
                           {hit.ruleTitle}
+                          {hit.source === "core" && hit.eventCount > 1 && (
+                            <span className="rounded bg-zinc-800 px-1.5 text-[10px] text-zinc-400">{hit.eventCount.toLocaleString()} events</span>
+                          )}
                         </div>
                       </td>
                       <td className="px-4 py-3">
@@ -290,8 +360,11 @@ export default function SigmaIntelligencePage() {
                         {hit.time ?? "—"}
                       </td>
                       <td className="px-4 py-3 text-xs">
+                        <span className="mb-0.5 block text-[10px] uppercase tracking-wide text-zinc-600">
+                          {hit.source === "core" ? "Core · Log Analysis" : "Collector"}
+                        </span>
                         <Link
-                          href={`/investigations/${hit.investigationId}`}
+                          href={hitHref(hit)}
                           className="text-teal-400 hover:text-teal-300"
                           onClick={(e) => e.stopPropagation()}
                         >
@@ -309,7 +382,7 @@ export default function SigmaIntelligencePage() {
                         <td colSpan={8} className="px-8 py-4">
                           <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-xs sm:grid-cols-3 lg:grid-cols-4">
                             {hit.commandLine && (
-                              <Detail label="Command Line" value={hit.commandLine} mono className="col-span-4" />
+                              <Detail label={hit.source === "core" ? "First matching event" : "Command Line"} value={hit.commandLine} mono className="col-span-4" />
                             )}
                             {hit.ruleTags && (
                               <Detail label="ATT&CK Tags" value={hit.ruleTags} className="col-span-2" />
@@ -334,10 +407,10 @@ export default function SigmaIntelligencePage() {
                           </div>
                           <div className="mt-3">
                             <Link
-                              href={`/investigations/${hit.investigationId}`}
+                              href={hitHref(hit)}
                               className="text-xs text-teal-400 hover:text-teal-300 underline underline-offset-2"
                             >
-                              View finding in investigation →
+                              {hit.source === "core" ? "View finding in Log Analysis →" : "View finding in investigation →"}
                             </Link>
                           </div>
                         </td>
@@ -352,6 +425,10 @@ export default function SigmaIntelligencePage() {
       )}
     </div>
   );
+}
+
+function hitHref(hit: SigmaHit): string {
+  return hit.source === "core" && hit.logUploadId ? `/log-analysis/${hit.logUploadId}` : `/investigations/${hit.investigationId}`;
 }
 
 function Detail({

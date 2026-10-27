@@ -1,0 +1,57 @@
+// Sigma detection — Core's own SigmaHQ rule library (src/lib/sigma/),
+// separate from the Sigma hits the collectors report in their findings.
+// Rules are downloaded from a SigmaHQ release package in Settings (Threat
+// Intelligence) and run against Log Analysis events; a hit is a LogFinding
+// with sigmaRuleId set.
+
+model SigmaRule {
+  id                String   @id @default(uuid()) @db.Uuid
+  sigmaId           String   @unique @map("sigma_id") // the rule's own UUID
+  title             String
+  description       String?  @db.Text
+  status            String?  // stable | test | experimental | ...
+  level             String   // informational | low | medium | high | critical
+  author            String?  @db.Text
+  tags              String[] @default([])
+  references        String[] @default([])
+  falsePositives    String[] @default([]) @map("false_positives")
+  product           String?
+  category          String?
+  service           String?
+  path              String?  // where the rule sits in the package (rules/windows/...)
+  yaml              String   @db.Text
+  compiled          Json?    @db.JsonB // src/lib/sigma/compile.ts output
+  // supported: the engine can evaluate it. covered: Core receives events for
+  // its logsource. A rule runs only when both are true and it's enabled.
+  supported         Boolean  @default(true)
+  covered           Boolean  @default(true)
+  unsupportedReason String?  @map("unsupported_reason") @db.Text
+  enabled           Boolean  @default(true)
+  source            String   @default("sigmahq")
+  hitCount          Int      @default(0) @map("hit_count")
+
+  findings LogFinding[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([level])
+  @@index([enabled])
+  @@index([product, category, service])
+  @@map("sigma_rules")
+}
+
+// One row ("sigmahq"): which package is in use and when it was last synced.
+model SigmaLibraryState {
+  id             String    @id @default("sigmahq")
+  package        String    @default("core+") // core | core+ | core++ | all_rules
+  releaseTag     String?   @map("release_tag")
+  syncedAt       DateTime? @map("synced_at")
+  ruleCount      Int       @default(0) @map("rule_count")
+  supportedCount Int       @default(0) @map("supported_count")
+  coveredCount   Int       @default(0) @map("covered_count")
+  lastError      String?   @map("last_error") @db.Text
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  @@map("sigma_library_state")
+}

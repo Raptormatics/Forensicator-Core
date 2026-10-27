@@ -3,6 +3,7 @@ import { useEffect, useState, useRef, Suspense } from "react";
 import { useSession } from "next-auth/react";
 import { useSearchParams } from "next/navigation";
 import { KeyRound, Radio, RefreshCw, ShieldOff, Trash2 } from "lucide-react";
+import { SigmaRulesCard } from "@/components/settings/sigma-rules-card";
 
 interface ProviderStatus {
   provider: string;
@@ -328,6 +329,11 @@ function ThreatIntelSettings() {
                 </div>
               </div>
             ))}
+          </section>
+
+          <section className="space-y-4">
+            <h2 className="text-sm font-semibold text-zinc-300">Detection rules</h2>
+            <SigmaRulesCard canManage={isAdmin} />
           </section>
         </>
       )}

@@ -97,6 +97,11 @@ model LogFinding {
   upload   LogUpload @relation(fields: [uploadId], references: [id], onDelete: Cascade)
   ruleId   String?   @map("rule_id") @db.Uuid
   rule     LogAnalysisRule? @relation(fields: [ruleId], references: [id], onDelete: SetNull)
+  // Set when the finding is a Sigma rule hit (src/lib/sigma/scan.ts);
+  // details then holds the rule's metadata and the matching lines.
+  sigmaRuleId String?    @map("sigma_rule_id") @db.Uuid
+  sigmaRule   SigmaRule? @relation(fields: [sigmaRuleId], references: [id], onDelete: SetNull)
+  details     Json?      @db.JsonB
 
   title        String
   description  String?  @db.Text
@@ -111,6 +116,7 @@ model LogFinding {
 
   @@index([uploadId])
   @@index([ruleId])
+  @@index([sigmaRuleId])
   @@index([severity])
   @@map("log_findings")
 }

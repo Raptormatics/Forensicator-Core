@@ -28,6 +28,13 @@ type Finding = {
   eventCount: number; firstSeen: string | null; lastSeen: string | null;
   matchedField: string | null; matchedValue: string | null;
   rule: { id: string; name: string; tags: string[] } | null;
+  // Set for a hit of Core's Sigma rule library (src/lib/sigma/scan.ts).
+  sigmaRuleId: string | null;
+  details: {
+    source?: string; sigmaId?: string; level?: string; tags?: string[]; references?: string[]; falsePositives?: string[];
+    logsource?: { product: string | null; category: string | null; service: string | null };
+    samples?: { line: number; time: string | null; text: string }[];
+  } | null;
 };
 
 type Ioc = { id: string; type: string; value: string; count: number };
@@ -214,6 +221,26 @@ export default function LogUploadDetailPage() {
   const [expandedEvent, setExpandedEvent] = useState<string | null>(null);
   const [expandTab, setExpandTab]         = useState<"json" | "raw" | "table">("json");
   const [iocFilter, setIocFilter] = useState<string>("all");
+  const [sigmaBusy, setSigmaBusy] = useState(false);
+  const [sigmaMsg, setSigmaMsg]   = useState<string | null>(null);
+  const [openSamples, setOpenSamples] = useState<Record<string, boolean>>({});
+
+  async function runSigma() {
+    setSigmaBusy(true);
+    setSigmaMsg(null);
+    try {
+      const res = await fetch(`/api/log-analysis/uploads/${id}/sigma`, { method: "POST" });
+      const d = await res.json();
+      setSigmaMsg(res.ok
+        ? d.message ?? `Sigma: ${d.rules.toLocaleString()} rules over ${d.scanned.toLocaleString()} events — ${d.findings} rule${d.findings === 1 ? "" : "s"} matched.`
+        : d.message ?? "Sigma scan failed.");
+      if (res.ok) load();
+    } catch {
+      setSigmaMsg("Sigma scan failed.");
+    } finally {
+      setSigmaBusy(false);
+    }
+  }
 
   const load = useCallback(async (q = search, p = page) => {
     setLoading(true);
@@ -311,6 +338,14 @@ export default function LogUploadDetailPage() {
             </div>
             <div className="flex shrink-0 items-center gap-2">
               <UploadEnrichButton endpoint={`/api/log-analysis/uploads/${id}/enrich`} />
+              <button
+                onClick={runSigma}
+                disabled={sigmaBusy || upload.status !== "ready"}
+                title="Run Core's Sigma rule library over this upload again (after a rule update, or for an upload made before Sigma rules were downloaded)"
+                className="flex items-center gap-1.5 rounded border border-zinc-800 px-3 py-2 text-xs text-zinc-400 hover:text-zinc-200 hover:border-zinc-600 disabled:opacity-50"
+              >
+                <Zap className={`h-3.5 w-3.5 ${sigmaBusy ? "animate-pulse" : ""}`} /> {sigmaBusy ? "Running Sigma…" : "Run Sigma rules"}
+              </button>
               <a
                 href={`/api/log-analysis/uploads/${id}/export`}
                 className="flex items-center gap-1.5 rounded border border-zinc-800 px-3 py-2 text-xs text-zinc-400 hover:text-zinc-200 hover:border-zinc-600"
@@ -322,6 +357,8 @@ export default function LogUploadDetailPage() {
               </button>
             </div>
           </div>
+
+          {sigmaMsg && <p className="mt-3 text-xs text-zinc-400">{sigmaMsg}</p>}
 
           {/* Summary bar */}
           <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -383,7 +420,7 @@ export default function LogUploadDetailPage() {
             <div className="flex flex-col items-center justify-center py-20 text-center">
               <Shield className="h-10 w-10 text-zinc-600 mb-3" />
               <p className="text-sm text-zinc-400 font-medium">No findings</p>
-              <p className="text-xs text-zinc-600 mt-1">No rules matched events in this log file</p>
+              <p className="text-xs text-zinc-600 mt-1">No detection or Sigma rules matched events in this log file</p>
               <Link href="/log-analysis/rules" className="mt-4 text-sm text-teal-400 hover:text-teal-300">
                 Manage Detection Rules →
               </Link>
@@ -397,13 +434,20 @@ export default function LogUploadDetailPage() {
                       {f.severity}
                     </span>
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-zinc-100">{f.title}</p>
+                      <p className="text-sm font-medium text-zinc-100 flex items-center gap-2">
+                        {f.title}
+                        {f.sigmaRuleId && (
+                          <Link href="/intelligence/sigma?tab=rules" className="rounded border border-orange-800/60 bg-orange-900/20 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-orange-300">
+                            Sigma
+                          </Link>
+                        )}
+                      </p>
                       {f.description && <p className="text-xs text-zinc-500 mt-0.5">{f.description}</p>}
                       <div className="mt-2 flex flex-wrap gap-3 text-xs text-zinc-500">
                         <span className="flex items-center gap-1">
                           <Zap className="h-3 w-3" /> {f.eventCount.toLocaleString()} match{f.eventCount !== 1 ? "es" : ""}
                         </span>
-                        {f.matchedField && (
+                        {f.matchedField && !f.sigmaRuleId && (
                           <span className="font-mono text-zinc-400">
                             {f.matchedField}: <span className="text-teal-400">{f.matchedValue}</span>
                           </span>
@@ -413,14 +457,36 @@ export default function LogUploadDetailPage() {
                         )}
                       </div>
                     </div>
-                    {f.rule && (
-                      <div className="shrink-0 flex flex-wrap gap-1">
-                        {f.rule.tags.slice(0, 3).map((t) => (
+                    {(f.rule || f.details?.tags) && (
+                      <div className="shrink-0 flex flex-wrap gap-1 max-w-[40%] justify-end">
+                        {(f.rule?.tags ?? f.details?.tags ?? []).slice(0, 4).map((t) => (
                           <span key={t} className="rounded bg-zinc-800 px-1.5 py-0.5 text-xs text-zinc-500">{t}</span>
                         ))}
                       </div>
                     )}
                   </div>
+                  {f.sigmaRuleId && f.details?.samples && f.details.samples.length > 0 && (
+                    <div className="mt-3 border-t border-zinc-800 pt-2">
+                      <button
+                        onClick={() => setOpenSamples((o) => ({ ...o, [f.id]: !o[f.id] }))}
+                        className="text-xs text-zinc-400 hover:text-zinc-200"
+                      >
+                        {openSamples[f.id] ? "▾" : "▸"} Matching events{f.eventCount > f.details.samples.length ? ` (first ${f.details.samples.length})` : ""}
+                      </button>
+                      {openSamples[f.id] && (
+                        <div className="mt-2 space-y-1.5">
+                          {f.details.samples.map((sm) => (
+                            <div key={sm.line} className="rounded bg-zinc-950 px-2 py-1.5 font-mono text-[11px] text-zinc-400 break-all">
+                              <span className="text-zinc-600">line {sm.line}{sm.time ? ` · ${new Date(sm.time).toLocaleString()}` : ""} · </span>{sm.text}
+                            </div>
+                          ))}
+                          {f.details.falsePositives && f.details.falsePositives.length > 0 && (
+                            <p className="text-[11px] text-zinc-500">Known false positives: {f.details.falsePositives.join("; ")}</p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
