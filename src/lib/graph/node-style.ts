@@ -20,3 +20,20 @@ export function miniMapColor(type: string | undefined): string {
   if (type === "correlation") return "#6366f1";
   return "#52525b";
 }
+
+/** Display label and accent colour per correlationType (matches the
+ * Correlations list's TYPE_META palette). */
+export const CORRELATION_TYPE_STYLE: Record<string, { label: string; color: string }> = {
+  shared_hash:         { label: "Hash",         color: "#c084fc" },
+  shared_ip:           { label: "IP",           color: "#fb923c" },
+  shared_domain:       { label: "Domain",       color: "#60a5fa" },
+  shared_url:          { label: "URL",          color: "#818cf8" },
+  shared_process:      { label: "Process",      color: "#f472b6" },
+  shared_account:      { label: "Account",      color: "#22d3ee" },
+  shared_finding_type: { label: "Finding type", color: "#f87171" },
+  shared_category:     { label: "Category",     color: "#d4d4d8" },
+};
+
+export function correlationTypeStyle(t: string): { label: string; color: string } {
+  return CORRELATION_TYPE_STYLE[t] ?? { label: t.replace(/^shared_/, ""), color: "#a1a1aa" };
+}
