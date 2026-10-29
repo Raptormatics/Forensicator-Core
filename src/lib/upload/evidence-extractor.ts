@@ -128,10 +128,15 @@ function buildEvidenceRow(
     str(host?.hostname) ??
     null;
 
+  // Only an account the row itself names. finding.host.username is the
+  // account the collector ran under (the responder, on a remote collection),
+  // so falling back to it attributed every user-less row — firewall rules,
+  // DNS entries, services — to that account and made it correlate across
+  // every host in a case.
   const username =
     str(row.username) ??
     str(row.user) ??
-    str(host?.username) ??
+    str(row.logon_user) ??
     null;
 
   // ── IOC field extraction by finding type ───────────────────────────────────
@@ -288,13 +293,24 @@ function extractDomain(row: JsonObject, findingType: string, url: string | null)
   return null;
 }
 
+// Finding types whose rows are programs — running processes, services,
+// scheduled tasks, startup/persistence entries, executables — across the
+// Windows, Linux and macOS collectors. Only these rows' generic `name` field
+// is a process/program name; on every other type it is something else
+// (a firewall rule, an environment variable, an account, a DNS-cache entry,
+// an adapter), and treating it as a process name made those values the bulk
+// of all cross-host "shared process" correlations.
+const PROGRAM_LISTING_RE =
+  /\b(process(es)?|programs?|services?|tasks?|startup|autoruns?|executables?|binar(y|ies)|launch|login items|cron|systemd|timers?|persistence|units?|kernel (modules|extensions)|containers?)\b/i;
+
 function extractProcessName(row: JsonObject, findingType: string): string | null {
   // For sigma findings, the rule title is the most descriptive name
   if (findingType.toLowerCase().includes("sigma")) {
     return str(row.rule_title) ?? str(row.name) ?? str(row.process) ?? null;
   }
+  const isProgramListing = PROGRAM_LISTING_RE.test(findingType) && !/principal/i.test(findingType);
   return (
-    str(row.name) ??
+    (isProgramListing ? str(row.name) : null) ??
     str(row.process) ??
     str(row.process_name) ??
     str(row.service_name) ??

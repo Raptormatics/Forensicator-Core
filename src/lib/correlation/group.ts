@@ -23,6 +23,33 @@ export async function fetchRawRows(where: Record<string, unknown>) {
 
 export type RawRow = Awaited<ReturnType<typeof fetchRawRows>>[number];
 
+/** correlationType values whose `value` is itself a raw threat-intel-enrichable indicator. */
+export const IOC_CORRELATION_TYPES = new Set(["shared_ip", "shared_domain", "shared_hash", "shared_url"]);
+
+export type KnownIoc = { reputation: number | null; threatType: string | null; malwareFamily: string | null };
+
+/**
+ * Threat-intel records for correlation values, keyed by lower-cased value.
+ * Correlation values are stored canonical (lower-case hashes/domains), while
+ * IocRecord keeps each indicator as its source spelled it — feeds use lower
+ * case, Windows' Get-FileHash upper case — so both spellings are looked up.
+ * Only records carrying an actual verdict are returned.
+ */
+export async function lookupKnownIocs(values: string[]): Promise<Map<string, KnownIoc>> {
+  if (values.length === 0) return new Map();
+  const variants = Array.from(new Set(values.flatMap((v) => [v, v.toLowerCase(), v.toUpperCase()])));
+  const records = await prisma.iocRecord.findMany({
+    where: { value: { in: variants } },
+    select: { value: true, reputation: true, threatType: true, malwareFamily: true },
+  });
+  const out = new Map<string, KnownIoc>();
+  for (const r of records) {
+    if (r.reputation === null && r.threatType === null) continue;
+    out.set(r.value.toLowerCase(), { reputation: r.reputation, threatType: r.threatType, malwareFamily: r.malwareFamily });
+  }
+  return out;
+}
+
 export type CorrelationGroup = {
   correlationType: string;
   value: string;

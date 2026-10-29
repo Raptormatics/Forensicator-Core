@@ -1,15 +1,12 @@
 export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/db/prisma";
 import { getActorOrThrow, AuthError, orgWhere } from "@/lib/auth/api-guard";
-import { fetchRawRows, groupRows } from "@/lib/correlation/group";
+import { fetchRawRows, groupRows, lookupKnownIocs, IOC_CORRELATION_TYPES } from "@/lib/correlation/group";
 import {
   buildDeterministicFacts, renderFactsNarrative, generateAiInterpretation,
   type GroupedCorrelationInput,
 } from "@/lib/correlation/explain";
-
-const IOC_CORRELATION_TYPES = new Set(["shared_ip", "shared_domain", "shared_hash", "shared_url"]);
 
 /**
  * POST /api/correlations/explain — on-demand AI interpretation for one
@@ -36,13 +33,9 @@ export async function POST(req: NextRequest) {
   const g = groups.get(`${correlationType}::${value}`);
   if (!g) return NextResponse.json({ error: "not_found" }, { status: 404 });
 
-  let knownIoc = null;
-  if (IOC_CORRELATION_TYPES.has(correlationType)) {
-    const rec = await prisma.iocRecord.findUnique({
-      where: { value }, select: { reputation: true, threatType: true, malwareFamily: true },
-    });
-    if (rec && (rec.reputation !== null || rec.threatType !== null)) knownIoc = rec;
-  }
+  const knownIoc = IOC_CORRELATION_TYPES.has(correlationType)
+    ? (await lookupKnownIocs([value])).get(value.toLowerCase()) ?? null
+    : null;
 
   const groupInput: GroupedCorrelationInput = {
     correlationType, value,

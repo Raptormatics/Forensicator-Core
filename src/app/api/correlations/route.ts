@@ -8,10 +8,7 @@ import {
   buildDeterministicFacts, renderFactsNarrative, isSignificant,
   type GroupedCorrelationInput,
 } from "@/lib/correlation/explain";
-import { fetchRawRows, groupRows } from "@/lib/correlation/group";
-
-/** correlationType values whose `value` is itself a raw threat-intel-enrichable indicator. */
-const IOC_CORRELATION_TYPES = new Set(["shared_ip", "shared_domain", "shared_hash", "shared_url"]);
+import { fetchRawRows, groupRows, lookupKnownIocs, IOC_CORRELATION_TYPES } from "@/lib/correlation/group";
 
 const SORTABLE = new Set(["confidence", "createdAt", "investigationCount"]);
 
@@ -64,22 +61,17 @@ export async function GET(req: NextRequest) {
     where: orgIds ? { organizationId: { in: orgIds } } : {},
     select: { correlationType: true, value: true, note: true },
   });
-  const whitelistSet = new Set(whitelist.map((w) => `${w.correlationType}::${w.value}`));
+  const whitelistSet = new Set(whitelist.map((w) => `${w.correlationType}::${w.value.toLowerCase()}`));
 
   let groupList = Array.from(groups.values());
-  if (hideWhitelisted) groupList = groupList.filter((g) => !whitelistSet.has(`${g.correlationType}::${g.value}`));
+  if (hideWhitelisted) groupList = groupList.filter((g) => !whitelistSet.has(`${g.correlationType}::${g.value.toLowerCase()}`));
 
   // IOC enrichment for known-indicator-type groups
   const iocValues = Array.from(new Set(groupList.filter((g) => IOC_CORRELATION_TYPES.has(g.correlationType)).map((g) => g.value)));
-  const iocRecords = iocValues.length > 0
-    ? await prisma.iocRecord.findMany({ where: { value: { in: iocValues } }, select: { value: true, reputation: true, threatType: true, malwareFamily: true } })
-    : [];
-  const iocByValue = new Map(iocRecords.map((r) => [r.value, r]));
+  const iocByValue = await lookupKnownIocs(iocValues);
   function knownIocFor(value: string, correlationType: string): IocLookupInfo | null {
     if (!IOC_CORRELATION_TYPES.has(correlationType)) return null;
-    const rec = iocByValue.get(value);
-    if (!rec || (rec.reputation === null && rec.threatType === null)) return null;
-    return { reputation: rec.reputation, threatType: rec.threatType, malwareFamily: rec.malwareFamily };
+    return iocByValue.get(value.toLowerCase()) ?? null;
   }
 
   // Sort grouped entities
@@ -129,7 +121,7 @@ export async function GET(req: NextRequest) {
       createdAt: g.createdAt.toISOString(),
       knownIoc,
       label,
-      isWhitelisted: whitelistSet.has(`${g.correlationType}::${g.value}`),
+      isWhitelisted: whitelistSet.has(`${g.correlationType}::${g.value.toLowerCase()}`),
       significant,
       whyThisMatters,
       rowCount: g.rows.length,
