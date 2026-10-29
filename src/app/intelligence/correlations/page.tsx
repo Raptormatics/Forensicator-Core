@@ -68,13 +68,13 @@ function typeMeta(t: string): TypeMeta {
 
 function confidenceBadgeClass(conf: number): string {
   if (conf > 85) return "border-green-600 bg-green-500/10 text-green-400";
-  if (conf >= 70) return "border-amber-600 bg-amber-500/10 text-amber-400";
+  if (conf >= 60) return "border-amber-600 bg-amber-500/10 text-amber-400";
   return "border-zinc-700 bg-zinc-500/10 text-zinc-400";
 }
 
 const CONF_PRESETS = [
   { label: "All", value: 0 },
-  { label: "70+", value: 70 },
+  { label: "60+", value: 60 },
   { label: "85+", value: 85 },
 ];
 
