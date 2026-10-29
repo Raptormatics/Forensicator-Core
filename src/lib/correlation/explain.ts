@@ -24,7 +24,11 @@ export type GroupedCorrelationInput = {
   distinctCaseCount: number;
   confidence: number;
   knownIoc: { reputation: number | null; threatType: string | null; malwareFamily: string | null } | null;
-  prevalence: Prevalence | null;
+  // Optional: the Enterprise overlay ships its own copy of the list route,
+  // and a Core update rebuilds with the previously installed overlay's
+  // files — a required field here breaks that build until the overlay
+  // catches up.
+  prevalence?: Prevalence | null;
 };
 
 export type DeterministicFacts = {
@@ -69,7 +73,7 @@ export async function buildDeterministicFacts(g: GroupedCorrelationInput): Promi
     caseCount: g.distinctCaseCount,
     confidence: g.confidence,
     knownIoc: g.knownIoc,
-    prevalence: g.prevalence,
+    prevalence: g.prevalence ?? null,
     firstSeen: null,
     lastSeen: null,
     spanMinutes: null,
