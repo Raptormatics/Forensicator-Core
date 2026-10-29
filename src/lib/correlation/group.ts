@@ -4,6 +4,7 @@
  * same entity from the same underlying rows.
  */
 import { prisma } from "@/lib/db/prisma";
+import type { Prevalence } from "@/lib/correlation/engine";
 
 // Safety cap on raw rows pulled into a grouping pass — well beyond any
 // realistic single-tenant correlation volume, just a backstop.
@@ -14,7 +15,7 @@ export async function fetchRawRows(where: Record<string, unknown>) {
     where,
     select: {
       id: true, caseId: true, correlationType: true, value: true, confidence: true,
-      hosts: true, investigationIds: true, evidenceIds: true, createdAt: true,
+      hosts: true, investigationIds: true, evidenceIds: true, metadata: true, createdAt: true, updatedAt: true,
       case: { select: { id: true, title: true, caseSeq: true, severity: true, status: true } },
     },
     take: MAX_GROUPING_ROWS,
@@ -59,8 +60,15 @@ export type CorrelationGroup = {
   evidenceIds: Set<string>;
   cases: Map<string, { id: string; title: string; caseSeq: number; severity: string; status: string }>;
   createdAt: Date;
+  /** From the most recently run row; null when it was scored without rarity. */
+  prevalence: Prevalence | null;
   rows: RawRow[];
 };
+
+function prevalenceOf(r: RawRow): Prevalence | null {
+  const m = r.metadata as { prevalence?: Prevalence | null } | null;
+  return m && typeof m === "object" && m.prevalence ? m.prevalence : null;
+}
 
 export function groupRows(rows: RawRow[]): Map<string, CorrelationGroup> {
   const groups = new Map<string, CorrelationGroup>();
@@ -71,7 +79,7 @@ export function groupRows(rows: RawRow[]): Map<string, CorrelationGroup> {
       g = {
         correlationType: r.correlationType, value: r.value, confidence: 0,
         hosts: new Set(), investigationIds: new Set(), evidenceIds: new Set(),
-        cases: new Map(), createdAt: r.createdAt, rows: [],
+        cases: new Map(), createdAt: r.createdAt, prevalence: null, rows: [],
       };
       groups.set(key, g);
     }
@@ -81,6 +89,7 @@ export function groupRows(rows: RawRow[]): Map<string, CorrelationGroup> {
     for (const e of r.evidenceIds) g.evidenceIds.add(e);
     if (r.case) g.cases.set(r.case.id, r.case);
     if (r.createdAt > g.createdAt) g.createdAt = r.createdAt;
+    if (g.rows.every((o) => r.updatedAt >= o.updatedAt)) g.prevalence = prevalenceOf(r);
     g.rows.push(r);
   }
   return groups;

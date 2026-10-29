@@ -100,7 +100,7 @@ export async function GET(req: NextRequest) {
     const groupInput: GroupedCorrelationInput = {
       correlationType: g.correlationType, value: g.value,
       hosts: Array.from(g.hosts), investigationIds: Array.from(g.investigationIds), evidenceIds: Array.from(g.evidenceIds),
-      distinctCaseCount: cases.length, confidence: g.confidence, knownIoc,
+      distinctCaseCount: cases.length, confidence: g.confidence, knownIoc, prevalence: g.prevalence,
     };
     const significant = isSignificant(groupInput);
     let whyThisMatters: string | null = null;
@@ -120,6 +120,7 @@ export async function GET(req: NextRequest) {
       cases,
       createdAt: g.createdAt.toISOString(),
       knownIoc,
+      prevalence: g.prevalence,
       label,
       isWhitelisted: whitelistSet.has(`${g.correlationType}::${g.value.toLowerCase()}`),
       significant,

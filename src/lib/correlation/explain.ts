@@ -13,6 +13,7 @@
 import { prisma } from "@/lib/db/prisma";
 import { generateAiCompletion, AiProviderError } from "@/lib/ai/provider";
 import { getAiConfig } from "@/lib/settings/system";
+import type { Prevalence } from "@/lib/correlation/engine";
 
 export type GroupedCorrelationInput = {
   correlationType: string;
@@ -23,6 +24,7 @@ export type GroupedCorrelationInput = {
   distinctCaseCount: number;
   confidence: number;
   knownIoc: { reputation: number | null; threatType: string | null; malwareFamily: string | null } | null;
+  prevalence: Prevalence | null;
 };
 
 export type DeterministicFacts = {
@@ -33,6 +35,7 @@ export type DeterministicFacts = {
   caseCount: number;
   confidence: number;
   knownIoc: GroupedCorrelationInput["knownIoc"];
+  prevalence: Prevalence | null;
   // Only populated when the underlying correlation carries evidenceIds
   // (IOC-value correlations: hash/ip/domain/url/process/account) — hostname/
   // username/finding-type correlations have no linked Evidence rows.
@@ -46,8 +49,14 @@ export type DeterministicFacts = {
 
 const SEVERITY_RANK: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1, info: 0 };
 
-/** Whether a grouped entity is worth surfacing a "Why This Matters" section for at all. */
+/**
+ * Whether a grouped entity is worth surfacing a "Why This Matters" section
+ * for at all. A rarity-weighted score already accounts for how many hosts
+ * share the value, so it alone (or a threat-intel match) decides; rows
+ * scored without rarity keep the per-host rules.
+ */
 export function isSignificant(g: GroupedCorrelationInput): boolean {
+  if (g.prevalence) return g.confidence >= 60 || !!g.knownIoc;
   return g.confidence >= 70 || !!g.knownIoc || g.distinctCaseCount > 1 || g.hosts.length >= 3;
 }
 
@@ -60,6 +69,7 @@ export async function buildDeterministicFacts(g: GroupedCorrelationInput): Promi
     caseCount: g.distinctCaseCount,
     confidence: g.confidence,
     knownIoc: g.knownIoc,
+    prevalence: g.prevalence,
     firstSeen: null,
     lastSeen: null,
     spanMinutes: null,
@@ -171,6 +181,12 @@ function buildExplainPrompt(f: DeterministicFacts): string {
     `Distinct cases: ${f.caseCount}`,
     `Confidence score (deterministic, 0-100): ${f.confidence}`,
   ];
+  if (f.prevalence) {
+    factLines.push(
+      `Prevalence: on ${f.prevalence.hosts} of ${f.prevalence.of} hosts on record ` +
+      "(a value on most hosts is usually normal for the environment; rarity alone does not make a value malicious)"
+    );
+  }
   if (f.spanMinutes !== null) factLines.push(`Time span across observed evidence: ${formatSpan(f.spanMinutes)}`);
   if (f.processNames.length > 0) factLines.push(`Associated process names: ${f.processNames.join(", ")}`);
   if (f.findingCategories.length > 0) factLines.push(`Linked finding categories: ${f.findingCategories.map((c) => `${c.category} (${c.count})`).join(", ")}`);

@@ -40,7 +40,7 @@ export async function POST(req: NextRequest) {
   const groupInput: GroupedCorrelationInput = {
     correlationType, value,
     hosts: Array.from(g.hosts), investigationIds: Array.from(g.investigationIds), evidenceIds: Array.from(g.evidenceIds),
-    distinctCaseCount: g.cases.size, confidence: g.confidence, knownIoc,
+    distinctCaseCount: g.cases.size, confidence: g.confidence, knownIoc, prevalence: g.prevalence,
   };
 
   const facts = await buildDeterministicFacts(groupInput);

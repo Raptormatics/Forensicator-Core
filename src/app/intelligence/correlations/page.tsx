@@ -26,6 +26,7 @@ type Correlation = {
   cases: CaseRef[];
   createdAt: string;
   knownIoc: KnownIoc;
+  prevalence: { hosts: number; of: number } | null;
   label: "Multi-Host Pivot" | "Cross-Case Persistence" | null;
   isWhitelisted: boolean;
   significant: boolean;
@@ -245,6 +246,7 @@ export default function CorrelationsPage() {
       `Correlation flagged for review: ${meta.label} — ${corr.value}\n` +
       `- Confidence: ${corr.confidence}%\n` +
       `- Hosts: ${corr.hosts.join(", ") || "—"}\n` +
+      (corr.prevalence ? `- Seen on ${corr.prevalence.hosts} of ${corr.prevalence.of} hosts on record\n` : "") +
       `- Investigations involved: ${corr.investigationIds.length}\n` +
       (corr.cases.length > 0 ? `- Cases involved: ${corr.cases.map((c) => formatCaseNumber(c.caseSeq)).join(", ")}\n` : "") +
       (corr.knownIoc ? `- Known threat-intel match (reputation ${corr.knownIoc.reputation ?? "?"}/100)\n` : "");
@@ -575,6 +577,11 @@ export default function CorrelationsPage() {
                     <p className="font-mono text-sm text-zinc-200 truncate">{corr.value}</p>
                     <p className="text-xs text-zinc-600 mt-1">
                       Hosts: {hostsShown.join(", ")}{hostsExtra > 0 ? ` +${hostsExtra} more` : ""} · {corr.investigationIds.length} investigation{corr.investigationIds.length !== 1 ? "s" : ""}
+                      {corr.prevalence && (
+                        <span title="Hosts on record where this value occurs. The rarer it is, the higher the confidence.">
+                          {" "}· seen on {corr.prevalence.hosts} of {corr.prevalence.of} hosts on record
+                        </span>
+                      )}
                       {corr.cases.length > 0 && (
                         <>
                           {" "}· Cases:{" "}
