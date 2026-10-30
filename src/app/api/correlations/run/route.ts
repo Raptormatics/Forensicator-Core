@@ -3,15 +3,16 @@ export const runtime = "nodejs";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db/prisma";
 import { getActorOrThrow, AuthError, orgWhere } from "@/lib/auth/api-guard";
-import { runCorrelation } from "@/lib/correlation/engine";
+import { correlateCases } from "@/lib/correlation/engine";
+import { analysisSources } from "@/lib/correlation/sources";
 import { guardCaseOpen } from "@/lib/cases/case-lock";
 
 /**
  * POST /api/correlations/run
  * Body: { caseId: string } — analysts pick a case, not individual
- * investigations; every investigation linked to that case is fetched
- * automatically and correlated. Safe to call repeatedly on the same case —
- * see runCorrelation()'s union-merge behavior.
+ * investigations; every investigation, PCAP, RAM and log analysis
+ * linked to that case is fetched automatically and correlated. Safe to call
+ * repeatedly on the same case — see the engine's union-merge behavior.
  */
 export async function POST(req: NextRequest) {
   let actor;
@@ -29,16 +30,19 @@ export async function POST(req: NextRequest) {
   const locked = await guardCaseOpen({ caseId }, "re-running correlation");
   if (locked) return locked;
 
-  const links = await prisma.investigation.findMany({
-    where: { caseId },
-    select: { id: true },
-  });
-  if (links.length < 2) {
-    return NextResponse.json({ error: "This case needs at least 2 linked investigations to run correlation" }, { status: 400 });
+  const ready = { caseId, status: "ready" };
+  const [investigations, pcaps, rams, logs] = await Promise.all([
+    prisma.investigation.count({ where: { caseId } }),
+    prisma.pcapUpload.count({ where: ready }),
+    prisma.ramUpload.count({ where: ready }),
+    prisma.logUpload.count({ where: ready }),
+  ]);
+  if (investigations + pcaps + rams + logs < 2) {
+    return NextResponse.json({ error: "This case needs at least 2 investigations or PCAP/RAM/log analyses to run correlation" }, { status: 400 });
   }
 
   try {
-    const result = await runCorrelation(links.map((l) => l.id), caseId);
+    const result = await correlateCases([caseId], analysisSources);
     return NextResponse.json(result);
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : "Correlation failed" }, { status: 400 });

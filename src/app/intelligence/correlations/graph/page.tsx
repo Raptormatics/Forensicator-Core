@@ -29,7 +29,7 @@ type Prevalence = { hosts: number; of: number };
 type KnownIoc = { reputation: number | null; threatType: string | null; malwareFamily: string | null };
 
 type CaseData = { label: string; caseId: string; caseSeq: number; severity: string; status: string };
-type HostData = { label: string; caseIds: string[] };
+type HostData = { label: string; caseIds: string[]; kinds?: string[] };
 type CorrData = {
   label: string; correlationType: string; confidence: number; prevalence: Prevalence | null;
   knownIoc: KnownIoc | null; significant: boolean; hostCount: number; caseIds: string[];
@@ -84,6 +84,9 @@ function HostNode({ data }: NodeProps<Node<HostData & ViewFlags>>) {
       <Handle type="target" position={Position.Left} className="!opacity-0" />
       <Server className="h-3.5 w-3.5 shrink-0 text-teal-300" />
       <span className="truncate text-xs" title={data.label}>{data.label}</span>
+      {data.kinds?.filter((k) => k !== "investigation").map((k) => (
+        <span key={k} className="shrink-0 rounded bg-teal-950 px-1 text-[9px] uppercase text-teal-400" title={`Includes a ${k === "log" ? "log" : k.toUpperCase()} analysis`}>{k}</span>
+      ))}
       {data.caseIds.length > 1 && (
         <span className="ml-auto shrink-0 rounded bg-teal-900 px-1 text-[10px] text-teal-300" title={`In ${data.caseIds.length} cases`}>
           {data.caseIds.length}

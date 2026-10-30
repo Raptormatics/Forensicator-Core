@@ -9,11 +9,19 @@ import {
   MoreVertical, Copy, ShieldOff, ShieldCheck, FolderPlus, Sparkles, Bot, Layers, Boxes,
 } from "lucide-react";
 import { formatCaseNumber } from "@/lib/cases/case-number";
+import { CorrelationEnterprisePanel } from "@/components/enterprise-slots/correlation-panel";
 
 type KnownIoc = { reputation: number | null; threatType: string | null; malwareFamily: string | null } | null;
 
 type CaseRef = { id: string; title: string; caseSeq: number; severity: string; status: string };
 type InvRef = { id: string; title: string; hostname: string | null; status: string };
+type SourceRef = { kind: string; id: string; hostname: string | null; caseId: string | null };
+
+const SOURCE_KIND: Record<string, { label: string; href: (id: string) => string }> = {
+  pcap: { label: "PCAP", href: (id) => `/pcap-analysis/${id}` },
+  ram:  { label: "RAM",  href: (id) => `/ram-analysis/${id}` },
+  log:  { label: "Log",  href: (id) => `/log-analysis/${id}` },
+};
 
 type Correlation = {
   id: string; // `${correlationType}::${value}`
@@ -27,6 +35,8 @@ type Correlation = {
   createdAt: string;
   knownIoc: KnownIoc;
   prevalence: { hosts: number; of: number } | null;
+  /** PCAP / RAM / log analyses involved. */
+  sources?: SourceRef[];
   label: "Multi-Host Pivot" | "Cross-Case Persistence" | null;
   isWhitelisted: boolean;
   significant: boolean;
@@ -183,7 +193,10 @@ export default function CorrelationsPage() {
       });
       const json = await res.json().catch(() => ({}));
       if (res.ok) {
-        setRunMsg(`Found ${json.found ?? 0} correlations across ${json.investigations ?? 0} investigations.`);
+        setRunMsg(
+          `Found ${json.found ?? 0} correlations across ${json.investigations ?? 0} investigations` +
+          (json.sources ? ` and ${json.sources} PCAP/RAM/log analys${json.sources !== 1 ? "es" : "is"}.` : ".")
+        );
         setPage(1);
         await load();
       } else {
@@ -324,8 +337,7 @@ export default function CorrelationsPage() {
             <div className="flex items-center gap-2 shrink-0">
               <button
                 onClick={runCorrelations}
-                disabled={running || caseFilter._count.investigations < 2}
-                title={caseFilter._count.investigations < 2 ? "This case needs at least 2 linked investigations to run correlation" : undefined}
+                disabled={running}
                 className="inline-flex items-center gap-1.5 rounded-md bg-teal-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-teal-500 disabled:opacity-30 disabled:cursor-not-allowed"
               >
                 <Play className="h-3.5 w-3.5" /> {running ? "Running…" : stats && stats.total > 0 ? "Re-run Correlation" : "Run Correlation"}
@@ -388,6 +400,8 @@ export default function CorrelationsPage() {
           </p>
         )}
       </section>
+
+      <CorrelationEnterprisePanel onRunComplete={load} />
 
       {/* Stat tiles */}
       {stats && (
@@ -577,6 +591,7 @@ export default function CorrelationsPage() {
                     <p className="font-mono text-sm text-zinc-200 truncate">{corr.value}</p>
                     <p className="text-xs text-zinc-600 mt-1">
                       Hosts: {hostsShown.join(", ")}{hostsExtra > 0 ? ` +${hostsExtra} more` : ""} · {corr.investigationIds.length} investigation{corr.investigationIds.length !== 1 ? "s" : ""}
+                      {(corr.sources?.length ?? 0) > 0 && ` · ${corr.sources!.length} PCAP/RAM/log analys${corr.sources!.length !== 1 ? "es" : "is"}`}
                       {corr.prevalence && (
                         <span title="Hosts on record where this value occurs. The rarer it is, the higher the confidence.">
                           {" "}· seen on {corr.prevalence.hosts} of {corr.prevalence.of} hosts on record
@@ -688,6 +703,28 @@ export default function CorrelationsPage() {
                               <span className="text-xs text-zinc-600">+{corr.investigationIds.length - corr.investigations.length} more</span>
                             )}
                           </div>
+                          {(corr.sources?.length ?? 0) > 0 && (
+                            <>
+                              <p className="text-xs font-medium text-zinc-500 mt-2 mb-1.5">Analyses ({corr.sources!.length})</p>
+                              <div className="flex flex-wrap gap-1">
+                                {corr.sources!.map((src) => {
+                                  const kind = SOURCE_KIND[src.kind];
+                                  const text = `${kind?.label ?? src.kind}: ${src.hostname ?? src.id.slice(0, 8)}`;
+                                  return kind ? (
+                                    <Link
+                                      key={`${src.kind}:${src.id}`}
+                                      href={kind.href(src.id)}
+                                      className="rounded-full border border-zinc-800 px-2 py-0.5 text-xs text-teal-500 hover:text-teal-300 truncate max-w-[160px]"
+                                    >
+                                      {text}
+                                    </Link>
+                                  ) : (
+                                    <span key={`${src.kind}:${src.id}`} className="rounded-full border border-zinc-800 px-2 py-0.5 text-xs text-zinc-400">{text}</span>
+                                  );
+                                })}
+                              </div>
+                            </>
+                          )}
                         </div>
                         <div>
                           <p className="text-xs font-medium text-zinc-500 mb-1.5">Cases ({corr.cases.length})</p>

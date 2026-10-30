@@ -4,7 +4,7 @@
  * same entity from the same underlying rows.
  */
 import { prisma } from "@/lib/db/prisma";
-import type { Prevalence } from "@/lib/correlation/engine";
+import { hostKey, type Prevalence, type ExtraSourceRef } from "@/lib/correlation/engine";
 
 // Safety cap on raw rows pulled into a grouping pass — well beyond any
 // realistic single-tenant correlation volume, just a backstop.
@@ -62,12 +62,19 @@ export type CorrelationGroup = {
   createdAt: Date;
   /** From the most recently run row; null when it was scored without rarity. */
   prevalence: Prevalence | null;
+  /** Non-investigation sources (e.g. PCAP / RAM / log analyses) involved, from every row. */
+  sources: ExtraSourceRef[];
   rows: RawRow[];
 };
 
 function prevalenceOf(r: RawRow): Prevalence | null {
   const m = r.metadata as { prevalence?: Prevalence | null } | null;
   return m && typeof m === "object" && m.prevalence ? m.prevalence : null;
+}
+
+function sourcesOf(r: RawRow): ExtraSourceRef[] {
+  const m = r.metadata as { sources?: unknown } | null;
+  return m && typeof m === "object" && Array.isArray(m.sources) ? m.sources as ExtraSourceRef[] : [];
 }
 
 export function groupRows(rows: RawRow[]): Map<string, CorrelationGroup> {
@@ -79,17 +86,25 @@ export function groupRows(rows: RawRow[]): Map<string, CorrelationGroup> {
       g = {
         correlationType: r.correlationType, value: r.value, confidence: 0,
         hosts: new Set(), investigationIds: new Set(), evidenceIds: new Set(),
-        cases: new Map(), createdAt: r.createdAt, prevalence: null, rows: [],
+        cases: new Map(), createdAt: r.createdAt, prevalence: null, sources: [], rows: [],
       };
       groups.set(key, g);
     }
     g.confidence = Math.max(g.confidence, r.confidence);
-    for (const h of r.hosts) g.hosts.add(h);
+    // Rows written before the engine kept one name per machine can still
+    // list "WS-11" and "ws-11.corp.local" separately.
+    for (const h of r.hosts) {
+      const k = hostKey(h, h);
+      if (!Array.from(g.hosts).some((x) => hostKey(x, x) === k)) g.hosts.add(h);
+    }
     for (const i of r.investigationIds) g.investigationIds.add(i);
     for (const e of r.evidenceIds) g.evidenceIds.add(e);
     if (r.case) g.cases.set(r.case.id, r.case);
     if (r.createdAt > g.createdAt) g.createdAt = r.createdAt;
     if (g.rows.every((o) => r.updatedAt >= o.updatedAt)) g.prevalence = prevalenceOf(r);
+    for (const src of sourcesOf(r)) {
+      if (!g.sources.some((o) => o.kind === src.kind && o.id === src.id)) g.sources.push(src);
+    }
     g.rows.push(r);
   }
   return groups;

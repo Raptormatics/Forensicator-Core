@@ -13,7 +13,7 @@
 import { prisma } from "@/lib/db/prisma";
 import { generateAiCompletion, AiProviderError } from "@/lib/ai/provider";
 import { getAiConfig } from "@/lib/settings/system";
-import type { Prevalence } from "@/lib/correlation/engine";
+import type { Prevalence, ExtraSourceRef } from "@/lib/correlation/engine";
 
 export type GroupedCorrelationInput = {
   correlationType: string;
@@ -29,7 +29,11 @@ export type GroupedCorrelationInput = {
   // files — a required field here breaks that build until the overlay
   // catches up.
   prevalence?: Prevalence | null;
+  /** PCAP / RAM / log analyses involved. Optional for the same reason as prevalence. */
+  sources?: ExtraSourceRef[];
 };
+
+const SOURCE_LABEL: Record<string, string> = { pcap: "PCAP", ram: "RAM", log: "log" };
 
 export type DeterministicFacts = {
   correlationType: string;
@@ -40,6 +44,8 @@ export type DeterministicFacts = {
   confidence: number;
   knownIoc: GroupedCorrelationInput["knownIoc"];
   prevalence: Prevalence | null;
+  /** Non-investigation sources by kind, e.g. [{ kind: "pcap", count: 1 }]. */
+  analyses: { kind: string; count: number }[];
   // Only populated when the underlying correlation carries evidenceIds
   // (IOC-value correlations: hash/ip/domain/url/process/account) — hostname/
   // username/finding-type correlations have no linked Evidence rows.
@@ -74,6 +80,7 @@ export async function buildDeterministicFacts(g: GroupedCorrelationInput): Promi
     confidence: g.confidence,
     knownIoc: g.knownIoc,
     prevalence: g.prevalence ?? null,
+    analyses: countKinds(g.sources ?? []),
     firstSeen: null,
     lastSeen: null,
     spanMinutes: null,
@@ -124,6 +131,16 @@ export async function buildDeterministicFacts(g: GroupedCorrelationInput): Promi
   return base;
 }
 
+function countKinds(sources: ExtraSourceRef[]): { kind: string; count: number }[] {
+  const byKind = new Map<string, number>();
+  for (const s of sources) byKind.set(s.kind, (byKind.get(s.kind) ?? 0) + 1);
+  return Array.from(byKind.entries()).map(([kind, count]) => ({ kind, count }));
+}
+
+function joinAnd(items: string[]): string {
+  return items.length <= 1 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+}
+
 function formatSpan(minutes: number): string {
   if (minutes < 60) return `${minutes} minute${minutes !== 1 ? "s" : ""}`;
   if (minutes < 1440) return `${Math.round(minutes / 60)} hour(s)`;
@@ -133,11 +150,15 @@ function formatSpan(minutes: number): string {
 /** Pure-fact paragraph — zero interpretation, safe to always show. */
 export function renderFactsNarrative(f: DeterministicFacts): string {
   const parts: string[] = [];
-  parts.push(
-    `This value was observed across ${f.hostCount} host${f.hostCount !== 1 ? "s" : ""} and ` +
-    `${f.investigationCount} investigation${f.investigationCount !== 1 ? "s" : ""}` +
-    (f.caseCount > 1 ? ` spanning ${f.caseCount} cases.` : ".")
-  );
+  const hosts = `${f.hostCount} host${f.hostCount !== 1 ? "s" : ""}`;
+  const investigations = `${f.investigationCount} investigation${f.investigationCount !== 1 ? "s" : ""}`;
+  const where = f.analyses.length === 0
+    ? `${hosts} and ${investigations}`
+    : `${hosts}, in ${joinAnd([
+        ...(f.investigationCount > 0 ? [investigations] : []),
+        ...f.analyses.map((a) => `${a.count} ${SOURCE_LABEL[a.kind] ?? a.kind} analys${a.count !== 1 ? "es" : "is"}`),
+      ])}`;
+  parts.push(`This value was observed across ${where}` + (f.caseCount > 1 ? ` spanning ${f.caseCount} cases.` : "."));
   if (f.firstSeen && f.lastSeen && f.spanMinutes !== null) {
     parts.push(
       f.spanMinutes === 0
@@ -182,6 +203,7 @@ function buildExplainPrompt(f: DeterministicFacts): string {
     `Value: ${f.value}`,
     `Host count: ${f.hostCount}`,
     `Investigation count: ${f.investigationCount}`,
+    ...f.analyses.map((a) => `${SOURCE_LABEL[a.kind] ?? a.kind} analyses: ${a.count}`),
     `Distinct cases: ${f.caseCount}`,
     `Confidence score (deterministic, 0-100): ${f.confidence}`,
   ];

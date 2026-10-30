@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db/prisma";
 import { getActorOrThrow, AuthError, orgWhere } from "@/lib/auth/api-guard";
 import { isSignificant } from "@/lib/correlation/explain";
 import { fetchRawRows, groupRows, lookupKnownIocs, IOC_CORRELATION_TYPES } from "@/lib/correlation/group";
+import type { ExtraSourceRef } from "@/lib/correlation/engine";
 
 const GRAPH_CAP = 150;
 
@@ -99,18 +100,27 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  const hosts = new Map<string, { label: string; caseIds: Set<string> }>();
-  for (const inv of invs) {
-    const key = hostKeyOf(inv);
+  // PCAP / RAM / log analyses are hosts too:
+  // by hostname when they have one, so they merge with that machine's
+  // investigations, otherwise each is its own node.
+  const sourceKeyOf = (s: ExtraSourceRef) => (s.hostname ? s.hostname.toLowerCase() : `${s.kind}:${s.id}`);
+
+  const hosts = new Map<string, { label: string; caseIds: Set<string>; kinds: Set<string> }>();
+  const addHost = (key: string, label: string, kind: string, caseId: string | null) => {
     let h = hosts.get(key);
-    if (!h) { h = { label: inv.hostname ?? inv.id, caseIds: new Set() }; hosts.set(key, h); }
-    if (inv.caseId && cases.has(inv.caseId)) {
-      h.caseIds.add(inv.caseId);
-      addEdge(`case-${inv.caseId}`, `host-${key}`);
+    if (!h) { h = { label, caseIds: new Set(), kinds: new Set() }; hosts.set(key, h); }
+    h.kinds.add(kind);
+    if (caseId && cases.has(caseId)) {
+      h.caseIds.add(caseId);
+      addEdge(`case-${caseId}`, `host-${key}`);
     }
+  };
+  for (const inv of invs) addHost(hostKeyOf(inv), inv.hostname ?? inv.id, "investigation", inv.caseId);
+  for (const { g } of shown) {
+    for (const src of g.sources) addHost(sourceKeyOf(src), src.hostname ?? `${src.kind.toUpperCase()} ${src.id.slice(0, 8)}`, src.kind, src.caseId);
   }
   for (const [key, h] of hosts) {
-    nodes.push({ id: `host-${key}`, type: "host", data: { label: h.label, caseIds: Array.from(h.caseIds) } });
+    nodes.push({ id: `host-${key}`, type: "host", data: { label: h.label, caseIds: Array.from(h.caseIds), kinds: Array.from(h.kinds) } });
   }
 
   for (const { g, knownIoc, significant } of shown) {
@@ -127,6 +137,7 @@ export async function GET(req: NextRequest) {
       const inv = invById.get(invId);
       if (inv) addEdge(`host-${hostKeyOf(inv)}`, corrId);
     }
+    for (const src of g.sources) addEdge(`host-${sourceKeyOf(src)}`, corrId);
   }
 
   return NextResponse.json({

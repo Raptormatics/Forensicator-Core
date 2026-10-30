@@ -1,4 +1,7 @@
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
+import { isSignificant } from "@/lib/correlation/explain";
+import { lookupKnownIocs, IOC_CORRELATION_TYPES, type KnownIoc } from "@/lib/correlation/group";
 
 /**
  * Cross-investigation correlation engine. Runs on every investigation
@@ -10,6 +13,13 @@ import { prisma } from "@/lib/db/prisma";
  * evidence lists into the existing record rather than overwriting it, so
  * repeated runs accumulate evidence instead of losing it. A different case
  * producing the same (type, value) pair gets its own separate record.
+ *
+ * correlateCases() can also run over several cases at once, so a value on a
+ * host in one case and a host in another is found too. Each case involved
+ * in such a link gets (or merges into) its own record carrying the whole
+ * link, with the other cases listed in metadata.linkedCaseIds. Closed and
+ * archived cases are read but never written. Callers may add evidence
+ * sources beyond investigations through a CorrelationSourceProvider.
  *
  * A relationship needs the value on at least two different HOSTS, not two
  * investigations: collecting the same machine twice is the same subject, not
@@ -60,8 +70,41 @@ export function canonicalValue(type: string, raw: string): string {
 }
 
 /** Short, case-folded host name: "WS-01.corp.local" and "ws-01" are one machine. */
-function hostKey(hostname: string | null, fallback: string): string {
+export function hostKey(hostname: string | null, fallback: string): string {
   return hostname ? hostname.trim().toLowerCase().split(".")[0] : fallback;
+}
+
+// ── Sources ─────────────────────────────────────────────────────────────────
+
+/** Where an observed value came from. Investigations are built in; other kinds come from a provider. */
+export type CorrelationSource = {
+  /** Unique across kinds: an investigation's id, or e.g. "pcap:<uploadId>". */
+  id: string;
+  kind: string;
+  caseId: string | null;
+  /** Display name; also the host identity (see hostKey). Null makes the source its own host. */
+  hostname: string | null;
+};
+
+/** A non-investigation source as stored on a correlation, in metadata.sources. */
+export type ExtraSourceRef = { kind: string; id: string; hostname: string | null; caseId: string | null };
+
+export type Observation = { sourceId: string; type: string; raw: string; evidenceId?: string };
+
+export type PrevalenceCandidate = { correlationType: string; value: string; rawValues: string[] };
+
+/**
+ * Extra evidence sources (e.g. PCAP, RAM and log analyses) for correlateCases().
+ * prevalence() reports, for each `type::canonical value` candidate, the host
+ * keys carrying it among this provider's sources in the given organisations,
+ * and every host key it has on record there — both merged with the
+ * investigation counts so rarity covers all sources.
+ */
+export interface CorrelationSourceProvider {
+  collect(caseIds: string[]): Promise<{ sources: CorrelationSource[]; observations: Observation[] }>;
+  prevalence(candidates: PrevalenceCandidate[], orgIds: (string | null)[]): Promise<{ hostsByKey: Map<string, Set<string>>; hosts: Set<string> }>;
+  /** Stored form of one of this provider's sources. */
+  ref(source: CorrelationSource): ExtraSourceRef;
 }
 
 const EVIDENCE_COLUMN: Record<string, "hash" | "ip" | "domain" | "url" | "processName" | "username"> = {
@@ -72,23 +115,39 @@ const FINDING_COLUMN: Record<string, "findingType" | "category"> = {
   shared_finding_type: "findingType", shared_category: "category",
 };
 
-/**
- * Host prevalence for each candidate (type::canonical value), counted over
- * every investigation in the same organisation(s) as the case — never across
- * tenants. Uses GROUP BY (investigation, value) so common values cost one row
- * per host rather than one per evidence row.
- */
-async function hostPrevalence(
-  candidates: { correlationType: string; value: string; rawValues: string[] }[],
-  orgIds: (string | null)[],
-): Promise<{ df: Map<string, number>; N: number }> {
+/** Prisma where-clause for rows in any of the given organisations (null = no organisation). */
+export function orgScopeWhere(orgIds: (string | null)[]) {
   const realOrgIds = orgIds.filter((o): o is string => !!o);
-  const orgScope = {
+  return {
     OR: [
       ...(realOrgIds.length > 0 ? [{ organizationId: { in: realOrgIds } }] : []),
       ...(orgIds.includes(null) ? [{ organizationId: null }] : []),
     ],
   };
+}
+
+/**
+ * Every spelling that canonicalises to a candidate: the case's own raw
+ * spellings, the canonical form, and its trailing-dot variant; meant to be
+ * matched case-insensitively so other hosts' spellings are counted too.
+ */
+export function candidateVariants(candidates: PrevalenceCandidate[]): string[] {
+  return Array.from(new Set(candidates.flatMap((c) => [c.value, `${c.value}.`, ...c.rawValues])));
+}
+
+/**
+ * Host prevalence for each candidate (type::canonical value), counted over
+ * every investigation in the same organisation(s) as the case — never across
+ * tenants — plus the provider's own sources. Uses GROUP BY (investigation,
+ * value) so common values cost one row per host rather than one per evidence
+ * row.
+ */
+async function hostPrevalence(
+  candidates: PrevalenceCandidate[],
+  orgIds: (string | null)[],
+  provider?: CorrelationSourceProvider,
+): Promise<{ df: Map<string, number>; N: number }> {
+  const orgScope = orgScopeWhere(orgIds);
   const scoped = await prisma.investigation.findMany({ where: orgScope, select: { id: true, hostname: true } });
   const hostOf = new Map(scoped.map((i) => [i.id, hostKey(i.hostname, i.id)]));
 
@@ -103,11 +162,7 @@ async function hostPrevalence(
   };
 
   for (const type of new Set(candidates.map((c) => c.correlationType))) {
-    const ofType = candidates.filter((c) => c.correlationType === type);
-    // Every spelling that canonicalises to a candidate: the case's own raw
-    // spellings, the canonical form, and its trailing-dot variant; matched
-    // case-insensitively so other hosts' spellings are counted too.
-    const variants = Array.from(new Set(ofType.flatMap((c) => [c.value, `${c.value}.`, ...c.rawValues])));
+    const variants = candidateVariants(candidates.filter((c) => c.correlationType === type));
     for (let i = 0; i < variants.length; i += 5000) {
       const chunk = variants.slice(i, i + 5000);
       const evCol = EVIDENCE_COLUMN[type];
@@ -128,39 +183,117 @@ async function hostPrevalence(
     }
   }
 
+  const allHosts = new Set(hostOf.values());
+  if (provider) {
+    const extra = await provider.prevalence(candidates, orgIds);
+    for (const h of extra.hosts) allHosts.add(h);
+    for (const [key, hosts] of extra.hostsByKey) {
+      let s = seen.get(key);
+      if (!s) seen.set(key, (s = new Set()));
+      for (const h of hosts) s.add(h);
+    }
+  }
+
   const df = new Map(Array.from(seen.entries()).map(([k, s]) => [k, s.size]));
-  return { df, N: new Set(hostOf.values()).size };
+  return { df, N: allHosts.size };
 }
 
-type Group = { invIds: Set<string>; hosts: Set<string>; hostKeys: Set<string>; evidenceIds: Set<string>; rawValues: Set<string> };
+// ── Run ─────────────────────────────────────────────────────────────────────
 
-function addToGroup(map: Map<string, Group>, key: string, rawValue: string, invId: string, hostname: string, hostKeyValue: string, evidenceId?: string) {
-  if (!map.has(key)) map.set(key, { invIds: new Set(), hosts: new Set(), hostKeys: new Set(), evidenceIds: new Set(), rawValues: new Set() });
-  const g = map.get(key)!;
-  g.invIds.add(invId);
-  g.hosts.add(hostname);
-  g.hostKeys.add(hostKeyValue);
-  g.rawValues.add(rawValue);
-  if (evidenceId) g.evidenceIds.add(evidenceId);
-}
+type Group = {
+  invIds: Set<string>; hosts: Set<string>; hostKeys: Set<string>; evidenceIds: Set<string>;
+  rawValues: Set<string>; caseIds: Set<string>; extraSourceIds: Set<string>;
+};
+
+/** A link that became significant in this run (new, or below the bar before). */
+export type NewlySignificantCorrelation = {
+  correlationType: string;
+  value: string;
+  confidence: number;
+  hosts: string[];
+  caseIds: string[];
+  prevalence: Prevalence | null;
+  knownIoc: KnownIoc | null;
+};
 
 export interface CorrelationRunResult {
   found: number;
   investigations: number;
+  /** Non-investigation sources included (provider runs only). */
+  sources?: number;
+  newlySignificant?: NewlySignificantCorrelation[];
 }
 
+type Investigation = { id: string; hostname: string | null; username: string | null; organizationId: string | null; caseId: string | null };
+const INVESTIGATION_SELECT = { id: true, hostname: true, username: true, organizationId: true, caseId: true } as const;
+
+/** Correlate the given investigations into one case (every record is written with `caseId`). */
 export async function runCorrelation(investigationIds: string[], caseId: string): Promise<CorrelationRunResult> {
   const investigations = await prisma.investigation.findMany({
     where: { id: { in: investigationIds } },
-    select: { id: true, hostname: true, username: true, organizationId: true },
+    select: INVESTIGATION_SELECT,
   });
   if (investigations.length < 2) {
     throw new Error("Need at least 2 investigations to correlate");
   }
+  return correlate(investigations, { sources: [], observations: [] }, undefined, () => [caseId]);
+}
 
-  const invIds  = investigations.map((i) => i.id);
-  const hostMap = Object.fromEntries(investigations.map((i) => [i.id, i.hostname ?? i.id]));
-  const hostKeyMap = Object.fromEntries(investigations.map((i) => [i.id, hostKey(i.hostname, i.id)]));
+/**
+ * Correlate everything in the given cases together — their investigations
+ * and, with a provider, its sources. Links are written to every open case
+ * they involve.
+ */
+export async function correlateCases(caseIds: string[], provider?: CorrelationSourceProvider): Promise<CorrelationRunResult> {
+  const [cases, investigations, extra] = await Promise.all([
+    prisma.case.findMany({ where: { id: { in: caseIds } }, select: { id: true, status: true, archivedAt: true } }),
+    prisma.investigation.findMany({ where: { caseId: { in: caseIds } }, select: INVESTIGATION_SELECT }),
+    provider ? provider.collect(caseIds) : Promise.resolve({ sources: [], observations: [] }),
+  ]);
+  const writable = new Set(cases.filter((c) => c.status !== "closed" && !c.archivedAt).map((c) => c.id));
+  const hostCount = new Set([
+    ...investigations.map((i) => hostKey(i.hostname, i.id)),
+    ...extra.sources.map((s) => hostKey(s.hostname, s.id)),
+  ]).size;
+  if (hostCount < 2) {
+    throw new Error("Need evidence from at least 2 hosts to correlate");
+  }
+  return correlate(investigations, extra, provider, (g) => Array.from(g.caseIds).filter((c) => writable.has(c)));
+}
+
+async function correlate(
+  investigations: Investigation[],
+  extra: { sources: CorrelationSource[]; observations: Observation[] },
+  provider: CorrelationSourceProvider | undefined,
+  targetCases: (g: Group) => string[],
+): Promise<CorrelationRunResult> {
+  const invIds = investigations.map((i) => i.id);
+  const invIdSet = new Set(invIds);
+  const sourceById = new Map<string, CorrelationSource>([
+    ...investigations.map((i) => [i.id, { id: i.id, kind: "investigation", caseId: i.caseId, hostname: i.hostname }] as const),
+    ...extra.sources.map((s) => [s.id, s] as const),
+  ]);
+
+  const groupsByType = new Map<string, Map<string, Group>>();
+  function observe(type: string, raw: string, sourceId: string, evidenceId?: string) {
+    const src = sourceById.get(sourceId);
+    if (!src) return;
+    let byValue = groupsByType.get(type);
+    if (!byValue) groupsByType.set(type, (byValue = new Map()));
+    const value = canonicalValue(type, raw);
+    let g = byValue.get(value);
+    if (!g) {
+      g = { invIds: new Set(), hosts: new Set(), hostKeys: new Set(), evidenceIds: new Set(), rawValues: new Set(), caseIds: new Set(), extraSourceIds: new Set() };
+      byValue.set(value, g);
+    }
+    if (invIdSet.has(sourceId)) g.invIds.add(sourceId);
+    else g.extraSourceIds.add(sourceId);
+    g.hosts.add(src.hostname ?? src.id);
+    g.hostKeys.add(hostKey(src.hostname, src.id));
+    g.rawValues.add(raw);
+    if (src.caseId) g.caseIds.add(src.caseId);
+    if (evidenceId) g.evidenceIds.add(evidenceId);
+  }
 
   // Investigation.username is the account the collector ran under — on a
   // remote collection that is the responder's own account, present on every
@@ -171,20 +304,17 @@ export async function runCorrelation(investigationIds: string[], caseId: string)
   );
 
   // ── 1. Shared finding types (same attack technique) ─────────────────────
-  const findings = await prisma.finding.findMany({
+  const findings = invIds.length > 0 ? await prisma.finding.findMany({
     where: { investigationId: { in: invIds } },
     select: { investigationId: true, findingType: true, category: true },
-  });
-  const findingTypeGroups = new Map<string, Group>();
-  const categoryGroups    = new Map<string, Group>();
+  }) : [];
   for (const f of findings) {
-    const host = hostMap[f.investigationId], key = hostKeyMap[f.investigationId];
-    addToGroup(findingTypeGroups, canonicalValue("shared_finding_type", f.findingType), f.findingType, f.investigationId, host, key);
-    addToGroup(categoryGroups,    canonicalValue("shared_category", f.category),        f.category,    f.investigationId, host, key);
+    observe("shared_finding_type", f.findingType, f.investigationId);
+    observe("shared_category", f.category, f.investigationId);
   }
 
   // ── 2. Shared evidence IOC values ───────────────────────────────────────
-  const evidence = await prisma.evidence.findMany({
+  const evidence = invIds.length > 0 ? await prisma.evidence.findMany({
     where: {
       investigationId: { in: invIds },
       OR: [
@@ -197,61 +327,42 @@ export async function runCorrelation(investigationIds: string[], caseId: string)
       ],
     },
     select: { id: true, investigationId: true, domain: true, ip: true, hash: true, url: true, processName: true, username: true },
-  });
-  const domainGroups      = new Map<string, Group>();
-  const ipGroups          = new Map<string, Group>();
-  const hashGroups        = new Map<string, Group>();
-  const urlGroups         = new Map<string, Group>();
-  const processNameGroups = new Map<string, Group>();
-  const evUsernameGroups  = new Map<string, Group>();
-
+  }) : [];
   for (const e of evidence) {
-    const host = hostMap[e.investigationId], key = hostKeyMap[e.investigationId];
-    const add = (map: Map<string, Group>, type: string, raw: string) =>
-      addToGroup(map, canonicalValue(type, raw), raw, e.investigationId, host, key, e.id);
-    if (e.domain)      add(domainGroups,      "shared_domain",  e.domain);
-    if (e.ip)          add(ipGroups,          "shared_ip",      e.ip);
-    if (e.hash)        add(hashGroups,        "shared_hash",    e.hash);
-    if (e.url)         add(urlGroups,         "shared_url",     e.url);
-    if (e.processName) add(processNameGroups, "shared_process", e.processName);
+    if (e.domain)      observe("shared_domain",  e.domain,      e.investigationId, e.id);
+    if (e.ip)          observe("shared_ip",      e.ip,          e.investigationId, e.id);
+    if (e.hash)        observe("shared_hash",    e.hash,        e.investigationId, e.id);
+    if (e.url)         observe("shared_url",     e.url,         e.investigationId, e.id);
+    if (e.processName) observe("shared_process", e.processName, e.investigationId, e.id);
     if (e.username && !collectionAccounts.has(e.username.trim().toLowerCase())) {
-      add(evUsernameGroups, "shared_account", e.username);
+      observe("shared_account", e.username, e.investigationId, e.id);
     }
   }
 
-  // ── Build correlations ──────────────────────────────────────────────────
-  const newCorrelations: {
-    caseId: string; correlationType: string; value: string; rawValues: string[];
-    hosts: string[]; hostCount: number; investigationIds: string[]; evidenceIds: string[];
-  }[] = [];
+  // ── 3. Provider sources (e.g. PCAP / RAM / log analyses) ────────────────
+  // The responder's account shows up in a DC's logon log as well; same rule.
+  for (const o of extra.observations) {
+    if (o.type === "shared_account" && collectionAccounts.has(o.raw.trim().toLowerCase())) continue;
+    observe(o.type, o.raw, o.sourceId, o.evidenceId);
+  }
 
-  function pushIfMulti(map: Map<string, Group>, type: string) {
-    for (const [value, group] of map) {
+  // ── Build correlations ──────────────────────────────────────────────────
+  const newCorrelations: { correlationType: string; value: string; rawValues: string[]; group: Group }[] = [];
+  for (const type of Object.keys(TYPE_BASE_CONFIDENCE)) {
+    for (const [value, group] of groupsByType.get(type) ?? []) {
       if (group.hostKeys.size >= 2) {
-        newCorrelations.push({
-          caseId,
-          correlationType: type,
-          value,
-          rawValues: Array.from(group.rawValues),
-          hosts: Array.from(group.hosts),
-          hostCount: group.hostKeys.size,
-          investigationIds: Array.from(group.invIds),
-          evidenceIds: Array.from(group.evidenceIds),
-        });
+        newCorrelations.push({ correlationType: type, value, rawValues: Array.from(group.rawValues), group });
       }
     }
   }
 
-  pushIfMulti(hashGroups,        "shared_hash");
-  pushIfMulti(ipGroups,          "shared_ip");
-  pushIfMulti(domainGroups,      "shared_domain");
-  pushIfMulti(urlGroups,         "shared_url");
-  pushIfMulti(processNameGroups, "shared_process");
-  pushIfMulti(evUsernameGroups,  "shared_account");
-  pushIfMulti(findingTypeGroups, "shared_finding_type");
-  pushIfMulti(categoryGroups,    "shared_category");
-
-  const { df, N } = await hostPrevalence(newCorrelations, Array.from(new Set(investigations.map((i) => i.organizationId ?? null))));
+  const orgIds = new Set<string | null>(investigations.map((i) => i.organizationId ?? null));
+  const extraCaseIds = Array.from(new Set(extra.sources.map((s) => s.caseId).filter((c): c is string => !!c)));
+  if (extraCaseIds.length > 0) {
+    const caseOrgs = await prisma.case.findMany({ where: { id: { in: extraCaseIds } }, select: { organizationId: true } });
+    for (const c of caseOrgs) orgIds.add(c.organizationId ?? null);
+  }
+  const { df, N } = await hostPrevalence(newCorrelations, Array.from(orgIds), provider);
   const useRarity = N >= RARITY_MIN_HOSTS;
 
   function prevalenceFor(type: string, value: string, hostCount: number): Prevalence | null {
@@ -270,49 +381,98 @@ export async function runCorrelation(investigationIds: string[], caseId: string)
     return Math.round(0.4 * base + 60 * rarity);
   }
 
+  // Significance needs the IOC verdict; it is what decides whether a link
+  // is newly worth an analyst's attention (reported back to the caller).
+  const iocByValue = await lookupKnownIocs(Array.from(new Set(
+    newCorrelations.filter((c) => IOC_CORRELATION_TYPES.has(c.correlationType)).map((c) => c.value),
+  )));
+  const newlySignificant: NewlySignificantCorrelation[] = [];
+
   let created = 0;
   for (const corr of newCorrelations) {
-    // Earlier runs stored values as the source spelled them; match those too
-    // so a re-run merges into (and canonicalises) the existing record rather
-    // than creating a duplicate next to it.
-    const existing = await prisma.correlation.findFirst({
-      where: { caseId, correlationType: corr.correlationType, value: { in: Array.from(new Set([corr.value, ...corr.rawValues])) } },
-    });
-    if (existing) {
-      const mergedInvIds      = Array.from(new Set([...existing.investigationIds, ...corr.investigationIds]));
-      const mergedHosts       = Array.from(new Set([...existing.hosts, ...corr.hosts]));
-      const mergedEvidenceIds = Array.from(new Set([...existing.evidenceIds, ...corr.evidenceIds]));
-      const mergedHostCount   = new Set(mergedHosts.map((h) => hostKey(h, h))).size;
-      const prevalence        = prevalenceFor(corr.correlationType, corr.value, mergedHostCount);
-      const metadata = existing.metadata && typeof existing.metadata === "object" && !Array.isArray(existing.metadata) ? existing.metadata : {};
-      await prisma.correlation.update({
-        where: { id: existing.id },
-        data: {
-          value: corr.value,
-          confidence: confidenceFor(corr.correlationType, mergedHostCount, prevalence),
-          metadata: { ...metadata, prevalence },
-          hosts: mergedHosts,
-          investigationIds: mergedInvIds,
-          evidenceIds: mergedEvidenceIds,
-        },
+    const { group } = corr;
+    const targets = targetCases(group);
+    if (targets.length === 0) continue;
+    const knownIoc = IOC_CORRELATION_TYPES.has(corr.correlationType) ? iocByValue.get(corr.value.toLowerCase()) ?? null : null;
+    const extraRefs = provider ? Array.from(group.extraSourceIds).map((id) => provider.ref(sourceById.get(id)!)) : [];
+    const linkedCaseIds = group.caseIds.size > 1 ? Array.from(group.caseIds) : [];
+
+    let wasSignificant = false;
+    let best: { confidence: number; hosts: string[]; prevalence: Prevalence | null; caseCount: number } | null = null;
+
+    for (const caseId of targets) {
+      // Earlier runs stored values as the source spelled them; match those too
+      // so a re-run merges into (and canonicalises) the existing record rather
+      // than creating a duplicate next to it.
+      const existing = await prisma.correlation.findFirst({
+        where: { caseId, correlationType: corr.correlationType, value: { in: Array.from(new Set([corr.value, ...corr.rawValues])) } },
       });
-    } else {
-      const prevalence = prevalenceFor(corr.correlationType, corr.value, corr.hostCount);
-      await prisma.correlation.create({
-        data: {
-          caseId: corr.caseId,
-          correlationType: corr.correlationType,
-          value: corr.value,
-          confidence: confidenceFor(corr.correlationType, corr.hostCount, prevalence),
-          metadata: { prevalence },
-          hosts: corr.hosts,
-          investigationIds: corr.investigationIds,
-          evidenceIds: corr.evidenceIds,
-        },
+      const meta: Record<string, unknown> = existing?.metadata && typeof existing.metadata === "object" && !Array.isArray(existing.metadata)
+        ? existing.metadata as Record<string, unknown> : {};
+      const oldSources = Array.isArray(meta.sources) ? meta.sources as ExtraSourceRef[] : [];
+      const oldLinked = Array.isArray(meta.linkedCaseIds) ? meta.linkedCaseIds as string[] : [];
+
+      if (existing) {
+        wasSignificant ||= isSignificant({
+          correlationType: corr.correlationType, value: corr.value, hosts: existing.hosts,
+          investigationIds: existing.investigationIds, evidenceIds: [], confidence: existing.confidence,
+          distinctCaseCount: Math.max(1, oldLinked.length), knownIoc,
+          prevalence: (meta.prevalence as Prevalence | null | undefined) ?? null,
+        });
+      }
+
+      // One name per machine: "WS-11" and a log's "ws-11.corp.local" are one host.
+      const byHostKey  = new Map<string, string>();
+      for (const h of [...(existing?.hosts ?? []), ...group.hosts]) if (!byHostKey.has(hostKey(h, h))) byHostKey.set(hostKey(h, h), h);
+      const hosts      = Array.from(byHostKey.values());
+      const hostCount  = hosts.length;
+      const prevalence = prevalenceFor(corr.correlationType, corr.value, hostCount);
+      const confidence = confidenceFor(corr.correlationType, hostCount, prevalence);
+      const sources    = mergeSources(oldSources, extraRefs);
+      const linked     = Array.from(new Set([...oldLinked, ...linkedCaseIds]));
+      const metadata   = {
+        ...meta, prevalence,
+        ...(sources.length > 0 ? { sources } : {}),
+        ...(linked.length > 0 ? { linkedCaseIds: linked } : {}),
+      } as Prisma.InputJsonObject;
+      const data = {
+        value: corr.value, confidence, metadata, hosts,
+        investigationIds: Array.from(new Set([...(existing?.investigationIds ?? []), ...group.invIds])),
+        evidenceIds: Array.from(new Set([...(existing?.evidenceIds ?? []), ...group.evidenceIds])),
+      };
+      if (existing) {
+        await prisma.correlation.update({ where: { id: existing.id }, data });
+      } else {
+        await prisma.correlation.create({ data: { ...data, caseId, correlationType: corr.correlationType } });
+      }
+      if (!best || confidence > best.confidence) {
+        best = { confidence, hosts, prevalence, caseCount: Math.max(1, linked.length) };
+      }
+    }
+
+    if (best && !wasSignificant && isSignificant({
+      correlationType: corr.correlationType, value: corr.value, hosts: best.hosts,
+      investigationIds: Array.from(group.invIds), evidenceIds: [], confidence: best.confidence,
+      distinctCaseCount: best.caseCount, knownIoc, prevalence: best.prevalence,
+    })) {
+      newlySignificant.push({
+        correlationType: corr.correlationType, value: corr.value, confidence: best.confidence,
+        hosts: best.hosts, caseIds: Array.from(group.caseIds), prevalence: best.prevalence, knownIoc,
       });
     }
     created++;
   }
 
-  return { found: created, investigations: invIds.length };
+  return {
+    found: created,
+    investigations: invIds.length,
+    ...(provider ? { sources: extra.sources.length } : {}),
+    newlySignificant,
+  };
+}
+
+function mergeSources(a: ExtraSourceRef[], b: ExtraSourceRef[]): ExtraSourceRef[] {
+  const out = new Map<string, ExtraSourceRef>();
+  for (const s of [...a, ...b]) out.set(`${s.kind}:${s.id}`, s);
+  return Array.from(out.values());
 }
