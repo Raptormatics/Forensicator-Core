@@ -1,13 +1,13 @@
 /**
- * Local cache of the URLhaus "recent" bulk feed. Unlike URLHausProvider
+ * Local cache of the URLhaus "recent" bulk feed (v2 export, needs an
+ * abuse.ch Auth-Key — see abuse-ch-export.ts). Unlike URLHausProvider
  * (per-value API lookup, rate-limited), matching against this local table is
  * a plain indexed query — safe to run automatically against every extracted
  * URL from every upload, with no external call and no rate-limit risk.
  */
 import { prisma } from "@/lib/db/prisma";
 import { parseCsvLine } from "./abuse-ch-csv";
-
-const FEED_URL = "https://urlhaus.abuse.ch/downloads/csv_recent/";
+import { fetchAbuseChExport, chunk } from "./abuse-ch-export";
 
 export type UrlhausFeedRow = {
   urlhausId: string;
@@ -20,7 +20,7 @@ export type UrlhausFeedRow = {
   dateAdded: Date | null;
 };
 
-/** Parses URLhaus's csv_recent format: id,dateadded,url,url_status,last_online,threat,tags,urlhaus_link,reporter */
+/** Parses URLhaus's recent.csv format (same columns as the retired csv_recent): id,dateadded,url,url_status,last_online,threat,tags,urlhaus_link,reporter */
 export function parseUrlhausCsv(text: string): UrlhausFeedRow[] {
   const rows: UrlhausFeedRow[] = [];
   for (const line of text.split("\n")) {
@@ -45,24 +45,28 @@ export function parseUrlhausCsv(text: string): UrlhausFeedRow[] {
   return rows;
 }
 
-/** Downloads the feed and inserts any rows not already cached. Existing rows are left as-is. */
-export async function syncUrlhausFeed(): Promise<{ total: number; added: number }> {
-  const res = await fetch(FEED_URL, { headers: { "User-Agent": "Forensicator-Enterprise" } });
-  if (!res.ok) throw new Error(`URLhaus feed fetch failed: ${res.status} ${res.statusText}`);
-  const text = await res.text();
+/**
+ * Downloads the feed and inserts any rows not already cached. Existing rows
+ * are left as-is. organizationId picks whose abuse.ch Auth-Key to use; without
+ * one (scheduled syncs) only the env-var keys are tried. Throws
+ * AbuseChFeedError when there's no usable key or the download fails.
+ */
+export async function syncUrlhausFeed(organizationId?: string): Promise<{ total: number; added: number }> {
+  const text = await fetchAbuseChExport("urlhaus", "recent.csv", organizationId);
   const rows = parseUrlhausCsv(text);
   if (rows.length === 0) return { total: 0, added: 0 };
 
-  const existingIds = new Set(
-    (await prisma.urlhausFeedEntry.findMany({
-      where: { urlhausId: { in: rows.map((r) => r.urlhausId) } },
-      select: { urlhausId: true },
-    })).map((r) => r.urlhausId)
-  );
+  // ~100k+ rows per export: batched, since one `in` list or createMany that
+  // size would exceed Postgres's 32,767 bind-parameter limit.
+  const existingIds = new Set<string>();
+  for (const ids of chunk(rows.map((r) => r.urlhausId), 10_000)) {
+    const found = await prisma.urlhausFeedEntry.findMany({ where: { urlhausId: { in: ids } }, select: { urlhausId: true } });
+    for (const r of found) existingIds.add(r.urlhausId);
+  }
   const newRows = rows.filter((r) => !existingIds.has(r.urlhausId));
 
-  if (newRows.length > 0) {
-    await prisma.urlhausFeedEntry.createMany({ data: newRows, skipDuplicates: true });
+  for (const batch of chunk(newRows, 2_000)) {
+    await prisma.urlhausFeedEntry.createMany({ data: batch, skipDuplicates: true });
   }
 
   return { total: rows.length, added: newRows.length };

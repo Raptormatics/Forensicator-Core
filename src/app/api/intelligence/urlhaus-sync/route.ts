@@ -6,6 +6,7 @@ import { prisma } from "@/lib/db/prisma";
 import { getActorOrThrow, AuthError, isInstanceAdminActor } from "@/lib/auth/api-guard";
 import { syncUrlhausFeed } from "@/lib/intelligence/urlhaus-feed";
 import { instanceAdminRequired } from "@/lib/auth/org-access";
+import { abuseChFeedErrorStatus } from "@/lib/intelligence/abuse-ch-export";
 
 /** GET /api/intelligence/urlhaus-sync — when the local feed cache was last refreshed. */
 export async function GET(req: NextRequest) {
@@ -32,9 +33,10 @@ export async function POST(req: NextRequest) {
   if (!isInstanceAdminActor(actor)) return instanceAdminRequired();
 
   try {
-    const result = await syncUrlhausFeed();
+    // The acting user's org supplies the abuse.ch Auth-Key (env vars as fallback).
+    const result = await syncUrlhausFeed(actor.organizationIds[0]);
     return NextResponse.json(result);
   } catch (err) {
-    return NextResponse.json({ error: "sync_failed", message: err instanceof Error ? err.message : "Unknown error" }, { status: 502 });
+    return NextResponse.json({ error: "sync_failed", message: err instanceof Error ? err.message : "Unknown error" }, { status: abuseChFeedErrorStatus(err) });
   }
 }
