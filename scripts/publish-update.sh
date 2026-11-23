@@ -86,18 +86,29 @@ VERSION="$VERSION" SHA256="$SHA256" SIZE="$SIZE" RELEASE_NOTES="$RELEASE_NOTES" 
     fs.writeFileSync(process.env.LATEST_JSON, JSON.stringify(manifest, null, 2) + "\n");
   '
 
+# Runs tsx. node_modules/.bin is usually empty when this checkout lives on the
+# VMware shared folder (it can't hold the symlinks npm puts there), and npx then
+# fails with "tsx: not found" instead of falling back — so call tsx's CLI directly.
+if [[ -x "${HERE}/node_modules/.bin/tsx" ]]; then
+  TSX=("${HERE}/node_modules/.bin/tsx")
+elif [[ -f "${HERE}/node_modules/tsx/dist/cli.mjs" ]]; then
+  TSX=(node "${HERE}/node_modules/tsx/dist/cli.mjs")
+else
+  TSX=(npx --yes tsx)
+fi
+
 echo ""
 echo "==> Uploading to R2 (core/ prefix — shares the Enterprise update bucket)"
 # The .fpk goes up FIRST, latest.json LAST — an appliance that checks for
 # updates between the two uploads must never see a latest.json pointing at
 # a package that isn't there yet.
 set +e
-UPLOAD_OUTPUT="$(npx tsx "${HERE}/scripts/upload-to-r2.ts" "$FPK_PATH" "core/dist/${FPK_NAME}" "application/octet-stream" 2>&1)"
+UPLOAD_OUTPUT="$("${TSX[@]}" "${HERE}/scripts/upload-to-r2.ts" "$FPK_PATH" "core/dist/${FPK_NAME}" "application/octet-stream" 2>&1)"
 FPK_UPLOAD_STATUS=$?
 echo "$UPLOAD_OUTPUT"
 
 if [[ "$FPK_UPLOAD_STATUS" -eq 0 ]]; then
-  UPLOAD_OUTPUT="$(npx tsx "${HERE}/scripts/upload-to-r2.ts" "$LATEST_JSON" "core/${CHANNEL}/latest.json" "application/json" 2>&1)"
+  UPLOAD_OUTPUT="$("${TSX[@]}" "${HERE}/scripts/upload-to-r2.ts" "$LATEST_JSON" "core/${CHANNEL}/latest.json" "application/json" 2>&1)"
   LATEST_UPLOAD_STATUS=$?
   echo "$UPLOAD_OUTPUT"
 else
